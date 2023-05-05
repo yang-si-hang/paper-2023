@@ -1,5 +1,6 @@
 """
-This file simulate the object deformation with Mass Spring Method
+This file simulate the object deformation with Mass Spring Method.
+The solver uses Sparse Matrix Solver in taichi.
 """
 
 import taichi as ti
@@ -20,19 +21,96 @@ def compute_force():
 
     # No gravity in this case!
 
+    # f = -k * (||x_ij||-r_ij) * x_ij/||x_ij||
     for i in range(EDGE_NUM):
         idx1, idx2 = edge[i][0], edge[i][1]
-        
+        delta_dist = (particle_pos[idx1] - particle_pos[idx2]).norm() - rest_edge[i]
+        direction = (particle_pos[idx1] - particle_pos[idx2]).normalized()
+        force[idx1] += - edge_stiff[i] * delta_dist * direction
+        force[idx2] += edge_stiff[i] * delta_dist * direction
+
+    # fix particles' constraint
 
 
+@ti.kernel
+def update_pos(dv:ti.types.ndarray(), dt:float):
+    for i in range(PARTICLE_NUM):
+        vel[i] += ti.Vector([dv[3*i], dv[3*i+1], dv[3*i+2]])
+        particle_pos[i] += dt * vel[i]
 
-def substep():
+
+@ti.kernel
+def compute_Jacobian_x():
+    """
+    Compute the Jacobian matrix of the edge force, then assemble to the particle.
+    Jx = -k * (I - r_ij/||x_ij|| * (I - x_ij*x_ij/||x_ij||^2))
+    Jv = -d * I
+    \parital f / \parital x_i = \parital f / \parital x_j = Jx
+    """
+    I = ti.Matrix([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]])
+    for i in range(EDGE_NUM):
+        idx1, idx2 = edge[i][0], edge[i][1]
+        dist = particle_pos[idx1] - particle_pos[idx2]
+        jx[i] = - edge_stiff[i] * (I - rest_edge[i]/dist.norm() *
+                                   (I - dist.outer_product(dist)/dist.norm()**2))
+        jv[i] = - edge_damp[i] * I
+
+    # fix particles' constraint
+
+
+@ti.kernel
+def assemble_K(K:ti.types.sparse_matrix_builder()):
+    """
+    \partial f_i / \partial x_j = - \partial f_j / \partial x_j
+    """
+    for i in range(EDGE_NUM):
+        idx1, idx2 = edge[i][0], edge[i][1]
+        for m, n in ti.static(ti.ndrange(3, 3)):
+            K[3*idx1+m, 3*idx1+n] += jx[i][m, n]
+            K[3*idx2+m, 3*idx2+n] += jx[i][m, n]
+            K[3*idx1+m, 3*idx2+n] += -jx[i][m, n]
+            K[3*idx2+m, 3*idx1+n] += -jx[i][m, n]
+
+
+@ti.kernel
+def assemble_D(D:ti.types.sparse_matrix_builder()):
+    for i in range(EDGE_NUM):
+        idx1, idx2 = edge[i][0], edge[i][1]
+        for m, n in ti.static(ti.ndrange(3, 3)):
+            D[3*idx1+m, 3*idx1+n] += jv[i][m, n]
+            D[3*idx2+m, 3*idx2+n] += jv[i][m, n]
+            D[3*idx1+m, 3*idx2+n] += -jv[i][m, n]
+            D[3*idx2+m, 3*idx1+n] += -jv[i][m, n]
+
+
+@ti.kernel
+def compute_b(b:ti.types.ndarray(), f:ti.types.ndarray(), Kv:ti.types.ndarray(), dt:float):
+    for i in range(3*PARTICLE_NUM):
+        b[i] = (f[i] + Kv[i]*dt)
+
+
+def substep(dt:float=0.01):
     compute_force()
     compute_Jacobian_x()
-    compute_Jacobian_v()
+    assemble_D(DBuiler)
+    assemble_K(KBuilder)
 
+    D = DBuiler.build()
+    K = KBuilder.build()
 
+    A = M - dt*D - dt**2*K
 
+    copy_to()
+
+    Kv = K @ vel_1d
+    compute_b(b,force_1d, Kv, dt)
+
+    solver = ti.linalg.SparseSolver(solver_type='LDLT')
+    solver.analyze_pattern(A)
+    solver.factorize(A)
+    dv = solver.solve(b)
+
+    update_pos(dv, dt)
 
 
 def gui_set(pos, target, FOV=60):
@@ -64,7 +142,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     if SHOW_FLAG is False:
         return
     # the conversion of object particles, etc. the ggui of the taichi only support float32
-    particle_show.from_numpy(particle.to_numpy(dtype=np.float32))
+    particle_show.from_numpy(particle_pos.to_numpy(dtype=np.float32))
 
     scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.002, color=(0, 1, 1))
@@ -77,10 +155,13 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
 def main():
     window, camera, scene = gui_set([0., 0.4, 0.], [0.1, 0., 0.])
     canvas = window.get_canvas()
+    # print('code running here!')
 
     while window.running:
         # show the GUI
         gui_show(window, canvas, scene)
+        substep(0.01)
+        print('loop end')
 
 
 
