@@ -4,24 +4,26 @@ The solver uses Sparse Matrix Solver in taichi.
 """
 
 import taichi as ti
-ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
+ti.init(arch=ti.gpu, debug=True, default_fp=ti.f32)
 import numpy as np
 
 from MeshLoad import *
 
 
 """-----------Initialization-----------"""
-
+constraint_stiff = 1.e7
+Gravity = ti.Vector([0., -9.8, 0.])
 
 
 @ti.kernel
 def compute_force():
+    # Gravity for test!
     for i in range(PARTICLE_NUM):
         force[i] = ti.Vector([0., 0., 0.])
+        force[i] += Gravity * particle_mass[i]
+        # print(particle_mass[i])
 
-    # No gravity in this case!
-
-    # f = -k * (||x_ij||-r_ij) * x_ij/||x_ij||
+    # f = -k * (||x_ij||-r_ij) * x_ij / ||x_ij||
     for i in range(EDGE_NUM):
         idx1, idx2 = edge[i][0], edge[i][1]
         delta_dist = (particle_pos[idx1] - particle_pos[idx2]).norm() - rest_edge[i]
@@ -30,6 +32,8 @@ def compute_force():
         force[idx2] += edge_stiff[i] * delta_dist * direction
 
     # fix particles' constraint
+    for i in ti.static(fix_particle_list):
+        force[i] += constraint_stiff * (particle_init_pos[i] - particle_pos[i])
 
 
 @ti.kernel
@@ -38,9 +42,11 @@ def update_pos(dv:ti.types.ndarray(), dt:float):
         vel[i] += ti.Vector([dv[3*i], dv[3*i+1], dv[3*i+2]])
         particle_pos[i] += dt * vel[i]
 
+    # fix constraint
+
 
 @ti.kernel
-def compute_Jacobian_x():
+def compute_Jacobian():
     """
     Compute the Jacobian matrix of the edge force, then assemble to the particle.
     Jx = -k * (I - r_ij/||x_ij|| * (I - x_ij*x_ij/||x_ij||^2))
@@ -56,6 +62,8 @@ def compute_Jacobian_x():
         jv[i] = - edge_damp[i] * I
 
     # fix particles' constraint
+    for i in ti.static(range(len(fix_particle_list))):
+        jf[i] = ti.Matrix([[-constraint_stiff, 0, 0], [0, -constraint_stiff, 0], [0, 0, -constraint_stiff]])
 
 
 @ti.kernel
@@ -70,6 +78,14 @@ def assemble_K(K:ti.types.sparse_matrix_builder()):
             K[3*idx2+m, 3*idx2+n] += jx[i][m, n]
             K[3*idx1+m, 3*idx2+n] += -jx[i][m, n]
             K[3*idx2+m, 3*idx1+n] += -jx[i][m, n]
+
+    # fix constraint
+    j = int(0)
+    ti.loop_config(serialize=True)
+    for i in ti.static(fix_particle_list):
+        for m, n in ti.static(ti.ndrange(3, 3)):
+            K[3*i+m, 3*i+n] += jf[j][m, n]
+        j += 1
 
 
 @ti.kernel
@@ -86,21 +102,25 @@ def assemble_D(D:ti.types.sparse_matrix_builder()):
 @ti.kernel
 def compute_b(b:ti.types.ndarray(), f:ti.types.ndarray(), Kv:ti.types.ndarray(), dt:float):
     for i in range(3*PARTICLE_NUM):
-        b[i] = (f[i] + Kv[i]*dt)
+        b[i] = (f[i] + Kv[i]*dt)*dt
+        # print(f[i])
 
 
 def substep(dt:float=0.01):
     compute_force()
-    compute_Jacobian_x()
+    compute_Jacobian()
     assemble_D(DBuiler)
     assemble_K(KBuilder)
 
     D = DBuiler.build()
     K = KBuilder.build()
+    # DBuiler.print_triplets()
+    # KBuilder.print_triplets()
 
     A = M - dt*D - dt**2*K
 
-    copy_to()
+    copy_to(vel_1d, vel)
+    copy_to(force_1d, force)
 
     Kv = K @ vel_1d
     compute_b(b,force_1d, Kv, dt)
@@ -109,6 +129,7 @@ def substep(dt:float=0.01):
     solver.analyze_pattern(A)
     solver.factorize(A)
     dv = solver.solve(b)
+    # print(dv[2])
 
     update_pos(dv, dt)
 
@@ -153,15 +174,15 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
 
 
 def main():
-    window, camera, scene = gui_set([0., 0.4, 0.], [0.1, 0., 0.])
+    window, camera, scene = gui_set([0., 0.2, 0.], [0.1, 0., 0.])
     canvas = window.get_canvas()
     # print('code running here!')
 
     while window.running:
         # show the GUI
         gui_show(window, canvas, scene)
-        substep(0.01)
-        print('loop end')
+        substep(0.001)
+        print('particle pos', particle_pos[0])
 
 
 
