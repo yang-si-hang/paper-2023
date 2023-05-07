@@ -32,8 +32,8 @@ def compute_force():
         force[idx2] += edge_stiff[i] * delta_dist * direction
 
     # fix particles' constraint
-    for i in ti.static(fix_particle_list):
-        force[i] += constraint_stiff * (particle_init_pos[i] - particle_pos[i])
+    # for i in ti.static(fix_particle_list):
+    #     force[i] += constraint_stiff * (particle_init_pos[i] - particle_pos[i])
 
 
 @ti.kernel
@@ -43,7 +43,8 @@ def update_pos(dv:ti.types.ndarray(), dt:float):
         particle_pos[i] += dt * vel[i]
 
     # fix constraint
-
+    for i in ti.static(fix_particle_list):
+        particle_pos[i] = particle_init_pos[i]
 
 @ti.kernel
 def compute_Jacobian():
@@ -62,8 +63,8 @@ def compute_Jacobian():
         jv[i] = - edge_damp[i] * I
 
     # fix particles' constraint
-    for i in ti.static(range(len(fix_particle_list))):
-        jf[i] = ti.Matrix([[-constraint_stiff, 0, 0], [0, -constraint_stiff, 0], [0, 0, -constraint_stiff]])
+    # for i in ti.static(range(len(fix_particle_list))):
+    #     jf[i] = ti.Matrix([[-constraint_stiff, 0, 0], [0, -constraint_stiff, 0], [0, 0, -constraint_stiff]])
 
 
 @ti.kernel
@@ -80,12 +81,12 @@ def assemble_K(K:ti.types.sparse_matrix_builder()):
             K[3*idx2+m, 3*idx1+n] += -jx[i][m, n]
 
     # fix constraint
-    j = int(0)
-    ti.loop_config(serialize=True)
-    for i in ti.static(fix_particle_list):
-        for m, n in ti.static(ti.ndrange(3, 3)):
-            K[3*i+m, 3*i+n] += jf[j][m, n]
-        j += 1
+    # j = int(0)
+    # ti.loop_config(serialize=True)
+    # for i in ti.static(fix_particle_list):
+    #     for m, n in ti.static(ti.ndrange(3, 3)):
+    #         K[3*i+m, 3*i+n] += jf[j][m, n]
+    #     j += 1
 
 
 @ti.kernel
@@ -129,7 +130,7 @@ def substep(dt:float=0.01):
     solver.analyze_pattern(A)
     solver.factorize(A)
     dv = solver.solve(b)
-    # print(dv[2])
+    # print(dv[0])
 
     update_pos(dv, dt)
 
@@ -183,6 +184,7 @@ def main():
         gui_show(window, canvas, scene)
         substep(0.001)
         print('particle pos', particle_pos[0])
+        print('force', force[0])
 
 
 

@@ -8,6 +8,9 @@ import numpy as np
 from scipy.spatial import Delaunay
 import matplotlib.pyplot as plt
 
+global_E = 1e6
+global_damp = 0.1
+
 
 def mesh_object(L, W, seed_size=0.005):
     LN = int(np.ceil(L / seed_size))
@@ -128,10 +131,13 @@ def edge_in_tri():
 
 
 @ti.kernel
-def init_stiffness(E:float, ele_edge:ti.types.ndarray()):
+def init_stiff_damp(E:float, gamma: float, ele_edge:ti.types.ndarray()):
     for i in range(ELEMENT_NUM):
         for j in ti.static(range(3)):
             edge_stiff[ele_edge[i,j]] += E * rest_ele_size[i] / rest_edge[ele_edge[i,j]]
+
+    for i in range(EDGE_NUM):
+        edge_damp[i] = gamma
 
 
 fix_particle_list = fix_particle_No(LL, WW, global_size)
@@ -184,7 +190,7 @@ M = MassBuilder.build()
 # MassBuilder.print_triplets()
 
 # np.savetxt('rest_ele_size.csv', rest_ele_size.to_numpy(), fmt='%.8f', delimiter=',')
-init_stiffness(E=1e5, ele_edge=ele_edge_np)
+init_stiff_damp(E=global_E, gamma=global_damp,  ele_edge=ele_edge_np)
 # np.savetxt('edge_stiffness.csv', edge_stiff.to_numpy(), fmt='%.8f', delimiter=',')
 
 jx = ti.Matrix.field(3, 3, dtype=ti.f32, shape=EDGE_NUM)
