@@ -13,6 +13,7 @@ from MeshLoad import *
 """-----------Initialization-----------"""
 constraint_stiff = 1.e7
 Gravity = ti.Vector([0., -9.8, 0.])
+GRASP_VEL = ti.Vector([0.005, 0., 0.005])
 
 
 @ti.kernel
@@ -20,7 +21,7 @@ def compute_force():
     # Gravity for test!
     for i in range(PARTICLE_NUM):
         force[i] = ti.Vector([0., 0., 0.])
-        force[i] += Gravity * particle_mass[i]
+        # force[i] += Gravity * particle_mass[i]
         # print(particle_mass[i])
 
     # f = -k * (||x_ij||-r_ij) * x_ij / ||x_ij||
@@ -39,12 +40,18 @@ def compute_force():
 @ti.kernel
 def update_pos(dv:ti.types.ndarray(), dt:float):
     for i in range(PARTICLE_NUM):
+        particle_latest_pos[i] = particle_pos[i]
         vel[i] += ti.Vector([dv[3*i], dv[3*i+1], dv[3*i+2]])
         particle_pos[i] += dt * vel[i]
+        particle_pos[i].y = 0.
 
     # fix constraint
     for i in ti.static(fix_particle_list):
         particle_pos[i] = particle_init_pos[i]
+
+    for i in ti.static(grasp_particle_list):
+        particle_pos[i] = particle_latest_pos[i] + dt*GRASP_VEL
+
 
 @ti.kernel
 def compute_Jacobian():
@@ -151,8 +158,8 @@ def gui_set(pos, target, FOV=60):
     scene.set_camera(camera)
 
     # set the light
-    scene.point_light(pos=(0, 1, 3), color=(1., 1., 1.))
-    scene.point_light(pos=(0, 0, 3), color=(1., 1., 1.))
+    scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+    scene.point_light(pos=(0.01, 0, 3), color=(1., 1., 1.))
     scene.ambient_light((0.7, 0.7, 0.7))
     return window, camera, scene
 
@@ -166,16 +173,23 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     # the conversion of object particles, etc. the ggui of the taichi only support float32
     particle_show.from_numpy(particle_pos.to_numpy(dtype=np.float32))
 
-    scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
-    scene.particles(particle_show, radius=0.002, color=(0, 1, 1))
+    # particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
+    # particle_test[0] = ti.Vector([0.0, 0., -0.0])
+
+    # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
+    scene.particles(particle_show, radius=0.001, color=(1., 1., 1.))
+    # scene.lines(particle_show, width=0.0005, indices=edge_show, color=(1. ,1. ,1.))
+    # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
-    # window.save_image(f'png/{n}.png')
+    if particle_pos[399].x > 0.14:
+        window.save_image(f'{global_E}.png')
+        exit(0)
     window.show()
 
 
 
 def main():
-    window, camera, scene = gui_set([0., 0.2, 0.], [0.1, 0., 0.])
+    window, camera, scene = gui_set(pos=[0.04, 0.3, 0.], target=[0.05, 0., 0.])
     canvas = window.get_canvas()
     # print('code running here!')
 
@@ -183,18 +197,8 @@ def main():
         # show the GUI
         gui_show(window, canvas, scene)
         substep(0.001)
-        print('particle pos', particle_pos[0])
-        print('force', force[0])
-
-
-
-        # # update the GUI
-        # window.GUI.begin("MSS")
-        # window.GUI.slider_float("FOV", 0, 180, 60)
-        # window.GUI.end()
-        #
-        # # update the window
-        # window.show()
+        print('particle pos', particle_pos[399])
+        # print('force', force[0])
 
 
 if __name__ == '__main__':

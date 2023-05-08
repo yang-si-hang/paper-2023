@@ -8,8 +8,8 @@ import numpy as np
 from scipy.spatial import Delaunay
 import matplotlib.pyplot as plt
 
-global_E = 1e6
-global_damp = 0.1
+global_E = 1e5
+global_damp = 0.
 
 
 def mesh_object(L, W, seed_size=0.005):
@@ -35,10 +35,12 @@ def mesh_object(L, W, seed_size=0.005):
 
     edge = np.array(list(edge_set))
 
-    # show the mesh
+    # # show the mesh
+    # plt.axis('equal')
     # plt.triplot(xx_pad, yy_pad, element)
     # plt.plot(xx_pad, yy_pad, 'o')
     # plt.show()
+    # exit(0)
 
     return node, edge, element
 
@@ -52,6 +54,7 @@ node_np, edge_np, element_np = mesh_object(LL, WW, seed_size=0.005)
 # print(edge_np.shape)
 # np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
 node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
+np.savetxt('particle_pos.csv', node_np, fmt='%.5f', delimiter=',')
 
 PARTICLE_NUM = node_np.shape[0]
 EDGE_NUM = edge_np.shape[0]
@@ -59,6 +62,7 @@ ELEMENT_NUM = element_np.shape[0]
 
 particle_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
 particle_init_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
+particle_latest_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
 particle_mass = ti.field(dtype=ti.f32, shape=PARTICLE_NUM)
 vel = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
 force = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
@@ -82,6 +86,8 @@ element.from_numpy(element_np)
 particle_show = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_NUM)
 surf_show = ti.field(dtype=ti.i32, shape=int(ELEMENT_NUM*3))
 surf_show.from_numpy(element_np.flatten('C'))
+edge_show = ti.field(dtype=ti.i32, shape=int(EDGE_NUM*2))
+edge_show.from_numpy(edge_np.flatten('C'))
 
 MassBuilder = ti.linalg.SparseMatrixBuilder(3*PARTICLE_NUM, 3*PARTICLE_NUM, max_num_triplets=10000)
 DBuiler = ti.linalg.SparseMatrixBuilder(3*PARTICLE_NUM, 3*PARTICLE_NUM, max_num_triplets=10000)
@@ -89,7 +95,11 @@ KBuilder = ti.linalg.SparseMatrixBuilder(3*PARTICLE_NUM, 3*PARTICLE_NUM, max_num
 
 
 def fix_particle_No(L: float, W: float, seed_size: float):
-    flag = ti.field(dtype=ti.i32, shape=PARTICLE_NUM)
+    """
+    Find the particle No. of fix constraint and grasping constraint
+    """
+    fix_flag = ti.field(dtype=ti.i32, shape=PARTICLE_NUM)
+    grasp_flag = ti.field(dtype=ti.i32, shape=PARTICLE_NUM)
 
     @ti.kernel
     def cal_fix_constraint(L: float, W: float, seed_size: float):
@@ -98,17 +108,24 @@ def fix_particle_No(L: float, W: float, seed_size: float):
         for idx in range(PARTICLE_NUM):
             x_temp = particle_pos[idx].x
             z_temp = particle_pos[idx].z
-            flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-            flag[idx] = flag_temp
+            # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
+            fix_flag_temp = (x_temp < 0. + EPS)
+            grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W/2 -EPS)
+            fix_flag[idx] = fix_flag_temp
+            grasp_flag[idx] = grasp_flag_temp
 
     cal_fix_constraint(L, W, seed_size)
     fix_particle_set = set()
+    grasp_particle_set = set()
     for i in range(PARTICLE_NUM):
-        if flag[i]:
+        if fix_flag[i]:
             fix_particle_set.add(i)
+        if grasp_flag[i]:
+            grasp_particle_set.add(i)
     fix_particle_list = list(fix_particle_set)
+    grasp_particle_list = list(grasp_particle_set)
 
-    return fix_particle_list
+    return fix_particle_list, grasp_particle_list
 
 
 @ti.kernel
@@ -140,8 +157,9 @@ def init_stiff_damp(E:float, gamma: float, ele_edge:ti.types.ndarray()):
         edge_damp[i] = gamma
 
 
-fix_particle_list = fix_particle_No(LL, WW, global_size)
-print(fix_particle_list)
+fix_particle_list, grasp_particle_list = fix_particle_No(LL, WW, global_size)
+print('fix constraint particles', fix_particle_list)
+print('grasp constraint particles', grasp_particle_list)
 
 cal_rest_len()
 ele_edge_np = edge_in_tri()
@@ -192,6 +210,7 @@ M = MassBuilder.build()
 # np.savetxt('rest_ele_size.csv', rest_ele_size.to_numpy(), fmt='%.8f', delimiter=',')
 init_stiff_damp(E=global_E, gamma=global_damp,  ele_edge=ele_edge_np)
 # np.savetxt('edge_stiffness.csv', edge_stiff.to_numpy(), fmt='%.8f', delimiter=',')
+np.savetxt('edge_damping.csv', edge_damp.to_numpy(), fmt='%.8f', delimiter=',')
 
 jx = ti.Matrix.field(3, 3, dtype=ti.f32, shape=EDGE_NUM)
 jv = ti.Matrix.field(3, 3, dtype=ti.f32, shape=EDGE_NUM)
