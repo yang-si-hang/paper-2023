@@ -8,7 +8,7 @@ import numpy as np
 from scipy.spatial import Delaunay
 import matplotlib.pyplot as plt
 
-global_E = 1e5
+global_E = 1e3
 global_damp = 0.
 
 
@@ -54,7 +54,7 @@ node_np, edge_np, element_np = mesh_object(LL, WW, seed_size=0.005)
 # print(edge_np.shape)
 # np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
 node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-np.savetxt('particle_pos.csv', node_np, fmt='%.5f', delimiter=',')
+# np.savetxt('ModelData/particle_pos.csv', node_np, fmt='%.5f', delimiter=',')
 
 PARTICLE_NUM = node_np.shape[0]
 EDGE_NUM = edge_np.shape[0]
@@ -209,8 +209,8 @@ M = MassBuilder.build()
 
 # np.savetxt('rest_ele_size.csv', rest_ele_size.to_numpy(), fmt='%.8f', delimiter=',')
 init_stiff_damp(E=global_E, gamma=global_damp,  ele_edge=ele_edge_np)
-# np.savetxt('edge_stiffness.csv', edge_stiff.to_numpy(), fmt='%.8f', delimiter=',')
-np.savetxt('edge_damping.csv', edge_damp.to_numpy(), fmt='%.8f', delimiter=',')
+# np.savetxt('ModelData/edge_stiffness.csv', edge_stiff.to_numpy(), fmt='%.8f', delimiter=',')
+# np.savetxt('ModelData/edge_damping.csv', edge_damp.to_numpy(), fmt='%.8f', delimiter=',')
 
 jx = ti.Matrix.field(3, 3, dtype=ti.f32, shape=EDGE_NUM)
 jv = ti.Matrix.field(3, 3, dtype=ti.f32, shape=EDGE_NUM)

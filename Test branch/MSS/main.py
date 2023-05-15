@@ -11,7 +11,7 @@ from MeshLoad import *
 
 
 """-----------Initialization-----------"""
-constraint_stiff = 1.e7
+constraint_stiff = 5.e6
 Gravity = ti.Vector([0., -9.8, 0.])
 GRASP_VEL = ti.Vector([0.005, 0., 0.005])
 
@@ -182,10 +182,9 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     if particle_pos[399].x > 0.14:
-        window.save_image(f'{global_E}.png')
+        window.save_image(f'Figure/{global_E}.png')
         exit(0)
     window.show()
-
 
 
 def main():
