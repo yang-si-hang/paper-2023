@@ -115,6 +115,8 @@ def precomputation():
             c = Dm_inv_i[1, 0]
             d = Dm_inv_i[1, 1]
             # Construct A_i:
+            # - Why the dimension of A_i is 4*6?
+            # - Because the dimension of X_f*X_g^{-1}=Aq is 2*2, and flatten to 4*1
             A[t*NF+i][0, 0] = -a-c
             A[t*NF+i][0, 2] = a
             A[t*NF+i][0, 4] = c
@@ -240,6 +242,7 @@ def build_rhs(rhs: ti.types.ndarray()):
         for ele_idx in range(NF):
             ia, ib, ic = f2v[ele_idx]
             Bp_i = Bp[t*NF+ele_idx]  # It is a 2x2 matrix now. We want it be a 4x1 vector.
+            # 注意这里的Bp_i是一个2x2的矩阵，转换成4x1的向量时的顺序，于对A向量化的顺序是一致的
             Bp_i_vec = ti.Vector([Bp_i[0, 0], Bp_i[0, 1], Bp_i[1, 0], Bp_i[1, 1]])
             A_i = A[ele_idx]
             AT_Bp = A_i.transpose() @ Bp_i_vec  # AT_Bp is a 6x1 vector now.
@@ -433,7 +436,7 @@ gui = ti.GUI('Projective Dynamics Demo3 v0.2')
 # wait = input("PRESS ENTER TO CONTINUE.")
 
 gui.circles(pos.to_numpy(), radius=2, color=0xffaa33)
-filename = f'figure_demo/frame_rest.png'
+filename = f'FigureDemo/frame_rest.png'
 gui.show(filename)
 
 frame_counter = 0
@@ -499,7 +502,7 @@ while frame_counter < 500:
     paint_phi(gui)
     gui.circles(pos.to_numpy(), radius=2, color=0xd1d1d1)
     frame_counter += 1
-    filename = f'figure_demo/frame_{frame_counter:05d}.png'
+    filename = f'FigureDemo/frame_{frame_counter:05d}.png'
     gui.show(filename)
     # print("\n")
 
