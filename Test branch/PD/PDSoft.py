@@ -441,6 +441,8 @@ print("sparse lhs matrix:\n", s_lhs_matrix_np)
 initinfo()
 
 """-------------GGUI setting---------------"""
+particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
+particle_test[0] = ti.Vector([0.5, 0., 0.])
 def gui_set(pos, target, FOV=60):
     # init the window, canvas, scene and camerea
     window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
@@ -450,8 +452,9 @@ def gui_set(pos, target, FOV=60):
     # initialize camera position
     camera.position(pos[0], pos[1], pos[2])
     camera.lookat(target[0], target[1], target[2])
-    camera.projection_mode(ti.ui.ProjectionMode.Perspective)
-    # camera.up()
+    camera.projection_mode(ti.ui.ProjectionMode.Orthogonal)
+    # 设置相机的向上轴的方向，在相机模型中是-Y轴
+    camera.up(0., 0., -1.)
     camera.z_near(0.01)
     camera.fov(FOV)
 
@@ -473,7 +476,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     if SHOW_FLAG is False:
         return
     scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
-    scene.ambient_light((1., 1., 1.))
+    scene.ambient_light((0.8, 0.8, 0.8))
     # the conversion of object particles, etc. the ggui of the taichi only support float32
     particle_show.from_numpy(np.insert(pos.to_numpy(dtype=np.float32), 1, np.zeros(NV), axis=1))
 
@@ -481,40 +484,27 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     # particle_test[0] = ti.Vector([0.0, 0., -0.0])
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
-    scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
+    scene.particles(particle_show, radius=0.003, color=(0., 0., 0.))
+    # scene.particles(particle_test, radius=0.01, color=(0., 0., 0.))
     # scene.lines(particle_show, width=0.0005, indices=edge_show, color=(1. ,1. ,1.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
+    canvas.set_background_color((1.0, 1.0, 1.0))
     # if particle_pos[399].x > 0.14:
     #     window.save_image(f'Figure/{global_E}.png')
     #     exit(0)
     window.show()
 
-
-# window = ti.ui.Window(name='Projective Dynamics', res=(1080, 720), vsync=True)
-# scene = ti.ui.Scene()
-# camera = ti.ui.Camera()
-# camera.position(0.0, 0.0, 1.0)
-# canvas.set_background_color((1., 1., 1.))
-# canvas.circles(pos, radius=0.002, color=(0.5, 0.5, 0.5))
-# window.show()
-
-# gui = ti.GUI('Projective Dynamics Demo3 v0.2')
-# # wait = input("PRESS ENTER TO CONTINUE.")
-#
-# gui.circles(pos.to_numpy(), radius=0.002, color=0xffaa33)
-# filename = f'FigureDemo/frame_rest.png'
-# gui.show(filename)
-
 frame_counter = 0
 sim_t = 0.0
 plot_array = []
 
-while frame_counter < 500:
-    window, camera, scene = gui_set(pos=[0.04, 0.3, 0.], target=[0.05, 0., 0.])
-    canvas = window.get_canvas()
+window, camera, scene = gui_set(pos=[0.2, 0.8, 0.4], target=[0.2, 0., 0.4])
+canvas = window.get_canvas()
 
+while frame_counter < 500:
     gui_show(window, canvas, scene, SHOW_FLAG=True)
+    # time.sleep(20)
 
     build_sn()
     # Warm up:
