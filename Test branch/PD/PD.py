@@ -8,10 +8,14 @@ from scipy.spatial import Delaunay
 
 
 """-----------Initialization-----------"""
+dim = 2         # dimension
 dt = 1./60
 E = 5.e2
 Poisson = 0.25
 mu, labda = E / (2 * (1 + Poisson)), E * Poisson / ((1 + Poisson) * (1 - 2 * Poisson))
+# 需要完整的推导过程
+w_strain = 2 * mu
+w_volume = dim * labda
 
 
 def mesh_object(L, W, seed_size=0.005):
@@ -202,8 +206,6 @@ def init_mass(density: float):
             particle_mass[idx[j]] += total_mas / 3
 
 
-
-
 @ti.kernel
 def precompute():
     # Strain constraint
@@ -240,8 +242,9 @@ def precompute():
             for col in ti.static(range(6)):
                 lhs_row = q_idx_vec[row]
                 lhs_col = q_idx_vec[col]
-                lhs_matrix[lhs_row, lhs_col] += w_strain * ATA_strain[row, col] + \
-                                                w_volume * ATA_volume[row, col]
+                lhs_matrix[lhs_row, lhs_col] += \
+                    w_strain * rest_ele_size[ele_idx] * ATA_strain[row, col] + \
+                    w_volume * rest_ele_size[ele_idx] * ATA_volume[row, col]
 
 
 
