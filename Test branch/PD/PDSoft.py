@@ -14,19 +14,20 @@ ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
 
 dim = 2
 N = 20  # internal of one edge
-W = 10
+W = 20
 dt = 1.0/480
 dx = 1 / N  # 0.05
 rho = 1e1           # density
 NF = 2 * N * W # 2 * N ** 2   # number of faces
 NV = (N+1)*(W+1) # (N + 1) ** 2 # number of vertices
-E, nu = 5e2, 0.1  # Young's modulus and Poisson's ratio
+E, nu = 5e4, 0.1  # Young's modulus and Poisson's ratio
 mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
 gravity = ti.Vector([0.0, 0.0])
+GRASP_VEL = ti.Vector([0.005, 0.005])
 # Area: 0.000061 0.02*0.02*sin90*0.5
-volume = 0.0002
+volume = 0.0000125
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
 m_weight_positional = 10000.0
@@ -37,6 +38,7 @@ mass = ti.field(ti.f64, NV)
 pos = ti.Vector.field(2, ti.f64, NV)
 pos_new = ti.Vector.field(2, ti.f64, NV)
 pos_init = ti.Vector.field(2, ti.f64, NV)
+pos_latest = ti.Vector.field(2, ti.f64, NV)
 last_pos_new = ti.Vector.field(2, ti.f64, NV)
 particle_show = ti.Vector.field(3, ti.f32, NV)
 boundary_labels = ti.field(int, NV)         # 固定约束定义的边
@@ -72,7 +74,7 @@ def init_pos():
     # 初始化节点位置
     for i, j in ti.ndrange(N + 1, W + 1):
         k = i*(W+1)+j
-        pos[k] = ti.Vector([i/N*0.4, j/W*0.2]) + ti.Vector([0.2, 0.4]) # 0.2, 0.4 - 0.6,
+        pos[k] = ti.Vector([i/N*0.1, j/W*0.1]) + ti.Vector([0.0, -0.05]) # 0.2, 0.4 - 0.6,
         # 0.6  0.02*0.02
         pos_init[k] = pos[k]
         vel[k] = ti.Vector([0, 0])
@@ -98,6 +100,40 @@ def init_mesh():  # generate two triangles
         d = a + W + 1  # 11
         f2v[k + 0] = [a, d, c]
         f2v[k + 1] = [a, c, b]
+
+
+def fix_particle_No(L: float, W: float, seed_size: float):
+    """
+    Find the particle No. of fix constraint and grasping constraint
+    """
+    fix_flag = ti.field(dtype=ti.i32, shape=NV)
+    grasp_flag = ti.field(dtype=ti.i32, shape=NV)
+
+    @ti.kernel
+    def cal_fix_constraint(L: float, W: float, seed_size: float):
+        EPS = seed_size / 3
+        # flag = np.array(PARTICLE_NUM, dtype=int)
+        for idx in range(NV):
+            x_temp = pos_init[idx].x
+            z_temp = pos_init[idx].y        # 2D dimension
+            # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
+            fix_flag_temp = (x_temp < 0. + EPS)
+            grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W/2 -EPS)
+            fix_flag[idx] = fix_flag_temp
+            grasp_flag[idx] = grasp_flag_temp
+
+    cal_fix_constraint(L, W, seed_size)
+    fix_particle_set = set()
+    grasp_particle_set = set()
+    for i in range(NV):
+        if fix_flag[i]:
+            fix_particle_set.add(i)
+        if grasp_flag[i]:
+            grasp_particle_set.add(i)
+    fix_particle_list = list(fix_particle_set)
+    grasp_particle_list = list(grasp_particle_set)
+
+    return fix_particle_list, grasp_particle_list
 
 
 @ti.kernel
@@ -229,6 +265,15 @@ def build_sn():
         Sn[Sn_idx1] = pos_i[0] + dt * vel_i[0]  # x-direction;
         Sn[Sn_idx2] = pos_i[1] + dt * vel_i[1] + dt * dt * gravity[1]  # y-direction;
 
+    for i in ti.static(grasp_particle_list):
+        pos_i = pos[i]  # pos = m_x
+        vel_i = vel[i]
+        idx0 = i*2
+        idx1 = i*2 + 1
+        print('Pos i', pos_i[0], pos_i[1])
+        print('Vel i', vel_i[0], vel_i[1])
+        print('Sn', Sn[idx0], Sn[idx1])
+
 
 @ti.kernel
 def build_rhs(rhs: ti.types.ndarray()):
@@ -288,8 +333,19 @@ def build_rhs(rhs: ti.types.ndarray()):
 @ti.kernel
 def update_velocity_pos():
     for i in range(NV):
+        pos_latest[i] = pos[i]
         vel[i] = (pos_new[i] - pos[i]) / dt
-        pos[i] = pos_new[i]
+        pos[i] = pos_new[i]    # time.sleep(20)
+
+    for i in ti.static(grasp_particle_list):
+        print('Vel of grasp particle', vel[i])
+        print('Pos new', pos_new[i])
+        pos[i] = pos_latest[i] + dt * GRASP_VEL
+        """
+        Still have problem!!!
+        """
+        vel[i] = GRASP_VEL
+        print('Pos', pos[i])
 
 
 @ti.kernel
@@ -302,10 +358,11 @@ def warm_up():
 
 @ti.kernel
 def initinfo():
+    EPS = 0.1/20/2
     for i in range(NV):
-        if (pos[i][0] > 0.401):
-            vel[i][0] = 5
-        elif (pos[i][0] < 0.399):
+        if (pos[i][0] > 0.1-EPS):
+            vel[i][0] = 50
+        elif (pos[i][0] < 0.1-EPS):
             vel[i][0] = 0
         else:
             vel[i][0] = 0
@@ -431,6 +488,8 @@ def paint_phi(canvas):
 frame_counter = 0
 init_mesh()
 init_pos()
+fix_particle_list, grasp_particle_list = fix_particle_No(0.1, 0.1, 0.1/20)
+print('Grasp particle index', grasp_particle_list)
 precomputation()
 lhs_matrix_np = lhs_matrix.to_numpy()
 s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
@@ -438,7 +497,7 @@ pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
 print("sparse lhs matrix:\n", s_lhs_matrix_np)
 
-initinfo()
+# initinfo()
 
 """-------------GGUI setting---------------"""
 particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
@@ -452,7 +511,7 @@ def gui_set(pos, target, FOV=60):
     # initialize camera position
     camera.position(pos[0], pos[1], pos[2])
     camera.lookat(target[0], target[1], target[2])
-    camera.projection_mode(ti.ui.ProjectionMode.Orthogonal)
+    camera.projection_mode(ti.ui.ProjectionMode.Perspective)
     # 设置相机的向上轴的方向，在相机模型中是-Y轴
     camera.up(0., 0., -1.)
     camera.z_near(0.01)
@@ -484,8 +543,8 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     # particle_test[0] = ti.Vector([0.0, 0., -0.0])
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
-    scene.particles(particle_show, radius=0.003, color=(0., 0., 0.))
-    # scene.particles(particle_test, radius=0.01, color=(0., 0., 0.))
+    scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
+    scene.particles(particle_test, radius=0.001, color=(0., 0., 0.))
     # scene.lines(particle_show, width=0.0005, indices=edge_show, color=(1. ,1. ,1.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
@@ -495,21 +554,20 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
     #     exit(0)
     window.show()
 
-frame_counter = 0
+# frame_counter = 0
 sim_t = 0.0
 plot_array = []
 
-window, camera, scene = gui_set(pos=[0.2, 0.8, 0.4], target=[0.2, 0., 0.4])
+window, camera, scene = gui_set(pos=[0.1, 0.3, 0.], target=[0.1, 0., 0.])
 canvas = window.get_canvas()
 
-while frame_counter < 500:
+while window.running:
     gui_show(window, canvas, scene, SHOW_FLAG=True)
-    # time.sleep(20)
 
     build_sn()
     # Warm up:
     warm_up()
-    print("Frame ", frame_counter)
+    # print("Frame ", frame_counter)
     last_record_energy = 1000000.0
     for itr in range(solver_max_iteration):
 
@@ -564,33 +622,7 @@ while frame_counter < 500:
     gui_show(window, canvas, scene, SHOW_FLAG=True)
     # paint_phi(canvas)
     # canvas.circles(pos, radius=0.001, color=(0.5, 0.5, 0.5))
-    frame_counter += 1
+    # frame_counter += 1
     # filename = f'FigureDemo/frame_{frame_counter:05d}.png'
     # window.show()
     # print("\n")
-
-
-# Energy Error note (under first 150 frames):
-# 5 fixed iterations: 76; Local: 0; Global: 76; (5%)
-# 10 fixed iterations: 421; Local: 0; Global: 420; (14%)
-# 100 fixed iterations: 6584; Local: 2931; 3654; (21%)
-
-
-# Performance note (unit: ns):
-# # solve constraints time elapsed: 54000
-# # build rhs time elapsed: 324600
-# # linear solve time elapsed: 35200
-# # check residual elapsed: 502900
-# update pos new elapsed: 189100
-
-# solve constraints time elapsed: 57900
-# build rhs time elapsed: 291500
-# linear solve time elapsed: 2013200
-# check residual elapsed: 501900
-# update pos new elapsed: 173600
-
-# solve time elapsed: 16916100
-# check residual elapsed: 689100
-# update pos new elapsed: 334500
-# solve constraints time elapsed: 63200
-# build rhs time elapsed: 398600
