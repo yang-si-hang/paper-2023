@@ -227,6 +227,12 @@ def precomputation():
             lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_positional  # This is the weight of positional constraints
             lhs_matrix[q_i_y_idx, q_i_y_idx] += m_weight_positional
 
+    for i in ti.static(grasp_particle_list):
+        q_i_x_idx = i * 2
+        q_i_y_idx = i * 2 + 1
+        lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_positional
+        lhs_matrix[q_i_y_idx, q_i_y_idx] += m_weight_positional
+
 
 # NOTE: This function doesn't build all constraints
 # It just builds strain constraints and area/volume constraints
@@ -243,6 +249,9 @@ def local_solve_build_bp_for_all_constraints():
 
         if i == grasp_ele_list[0]:
             print('Deformation gradient F', F[i])
+
+        if i == 300:
+            print('Deformation gradient F--300', F[i])
 
         # Use current F_i construct current 'B * p' or Ri
         U, sigma, V = ti.svd(F_i, ti.f64)
@@ -356,9 +365,19 @@ def build_rhs(rhs: ti.types.ndarray()):
             rhs[q_i_x_idx] += (pos_init_i[0] * m_weight_positional)
             rhs[q_i_y_idx] += (pos_init_i[1] * m_weight_positional)
 
+    for i in ti.static(grasp_particle_list):
+        pos_new_i = pos_new[i]
+        q_i_x_idx = i * 2
+        q_i_y_idx = i * 2 + 1
+        rhs[q_i_x_idx] += (pos_new_i[0] * m_weight_positional)
+        rhs[q_i_y_idx] += (pos_new_i[1] * m_weight_positional)
+
 
 @ti.kernel
 def update_velocity_pos():
+    for i in ti.static(grasp_particle_list):
+        pos_new[i] =
+
     for i in range(NV):
         pos_latest[i] = pos[i]
         vel[i] = (pos_new[i] - pos[i]) / dt
@@ -367,7 +386,7 @@ def update_velocity_pos():
     # for i in ti.static(grasp_particle_list):
     #     print('Vel of grasp particle', vel[i])
     #     print('Pos new', pos_new[i])
-    #     pos[i] = pos_latest[i] + dt * GRASP_VEL
+    #     pos[i] = ti.Vector[0.102, 0.052]
     #     vel[i] = GRASP_VEL
     #     print('Pos', pos[i])
 
@@ -394,8 +413,8 @@ def initinfo():
         else:
             vel[i][0] = 0
 
-    for i in ti.static(grasp_particle_list):
-        pos[i] += ti.Vector([0.105, 0.105])
+    # for i in ti.static(grasp_particle_list):
+    #     pos[i] = ti.Vector([0.102, 0.052])
 
 
 @ti.kernel
@@ -446,7 +465,7 @@ def global_compute_T2_energy() -> ti.f64:
     # Calculate the energy contributed by positional constraints
     # total_energy3 = 0.0
     for i in range(NV):
-        if boundary_labels[i] == 1:
+        if boundary_labels[i] == 1 or i == grasp_particle_list[0]:
             pos_init_i = pos_init[i]
             pos_curr_i = pos_new[i]
             energy3 = m_weight_positional * ((pos_curr_i - pos_init_i).norm() ** 2) / ti.cast(2.0, ti.f64)
@@ -524,7 +543,9 @@ edge = ti.Vector.field(2, dtype=ti.i32, shape=NE)
 edge.from_numpy(edge_np)
 # print(edge.to_numpy())
 fix_particle_list, grasp_particle_list, grasp_ele_list = fix_particle_No(0.1, 0.1, 0.1/20)
+print('Particle number', NV)
 print('Grasp particle index', grasp_particle_list)
+print('Grasp element index', grasp_ele_list)
 
 precomputation()
 lhs_matrix_np = lhs_matrix.to_numpy()
@@ -600,8 +621,8 @@ canvas = window.get_canvas()
 while window.running:
     gui_show(window, canvas, scene, SHOW_FLAG=True)
 
-    for i in ti.static(grasp_particle_list):
-        pos[i] = ti.Vector([0.105, 0.105])
+    # for i in ti.static(grasp_particle_list):
+    #     pos[i] = ti.Vector([0.102, 0.052])
 
     build_sn()
     # Warm up:
