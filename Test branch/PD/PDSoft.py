@@ -17,10 +17,10 @@ N = 20  # internal of one edge
 W = 20
 dt = 1.0/480
 dx = 1 / N  # 0.05
-rho = 1e1           # density
+rho = 1.e3           # density
 NF = 2 * N * W # 2 * N ** 2   # number of faces
 NV = (N+1)*(W+1) # (N + 1) ** 2 # number of vertices
-E, nu = 5e4, 0.1  # Young's modulus and Poisson's ratio
+E, nu = 5.e4, 0.25  # Young's modulus and Poisson's ratio
 mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
@@ -30,7 +30,7 @@ GRASP_VEL = ti.Vector([0.005, 0.005])
 volume = 0.0000125
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
-m_weight_positional = 10000.0
+m_weight_positional = 1.e8
 print("m_weight_strain/volume", m_weight_strain/volume, "  m_weight_volume/volume", m_weight_volume/volume)
 
 mass = ti.field(ti.f64, NV)
@@ -44,7 +44,7 @@ particle_show = ti.Vector.field(3, ti.f32, NV)
 boundary_labels = ti.field(int, NV)         # 固定约束定义的边
 
 vel = ti.Vector.field(2, ti.f64, NV)
-f2v = ti.Vector.field(3, int, NF)  # ids of three vertices of each face
+f2v = ti.Vector.field(3, ti.i32, NF)  # ids of three vertices of each face
 B = ti.Matrix.field(2, 2, ti.f64, NF)  # The inverse of the init elements -- Dm
 F = ti.Matrix.field(2, 2, ti.f64, NF)
 A = ti.Matrix.field(4, 6, ti.f64, NF * 2)
@@ -102,6 +102,19 @@ def init_mesh():  # generate two triangles
         f2v[k + 1] = [a, c, b]
 
 
+def init_edge():
+    edge_set = set()
+    for ele_idx in range(NF):
+        ele_temp = f2v[ele_idx].to_numpy()
+        for i in range(3):
+            edge_temp = tuple(sorted(ele_temp[[i, (i+1)%3]]))
+            edge_set.add(edge_temp)
+
+    edge = np.array(list(edge_set))
+
+    return edge
+
+
 def fix_particle_No(L: float, W: float, seed_size: float):
     """
     Find the particle No. of fix constraint and grasping constraint
@@ -133,7 +146,14 @@ def fix_particle_No(L: float, W: float, seed_size: float):
     fix_particle_list = list(fix_particle_set)
     grasp_particle_list = list(grasp_particle_set)
 
-    return fix_particle_list, grasp_particle_list
+    grasp_idx = grasp_particle_list[0]
+    grasp_ele_list = []
+    for i in range(NF):
+        ele_temp = f2v[i].to_numpy()
+        if grasp_idx in ele_temp:
+            grasp_ele_list.append(i)
+
+    return fix_particle_list, grasp_particle_list, grasp_ele_list
 
 
 @ti.kernel
@@ -220,8 +240,13 @@ def local_solve_build_bp_for_all_constraints():
         D_i = ti.Matrix.cols([b - a, c - a])
         F_i = ti.cast(D_i @ B[i], ti.f64)
         F[i] = F_i
+
+        if i == grasp_ele_list[0]:
+            print('Deformation gradient F', F[i])
+
         # Use current F_i construct current 'B * p' or Ri
         U, sigma, V = ti.svd(F_i, ti.f64)
+        # 只有旋转量
         Bp[i] = U @ V.transpose()
 
         # Construct volume preservation constraints:
@@ -270,6 +295,8 @@ def build_sn():
         vel_i = vel[i]
         idx0 = i*2
         idx1 = i*2 + 1
+        Sn[idx0] = pos_i[0] + dt * vel_i[0]  # x-direction;
+        Sn[idx1] = pos_i[1] + dt * vel_i[1] + dt * dt * gravity[1]  # y-direction;
         print('Pos i', pos_i[0], pos_i[1])
         print('Vel i', vel_i[0], vel_i[1])
         print('Sn', Sn[idx0], Sn[idx1])
@@ -337,15 +364,12 @@ def update_velocity_pos():
         vel[i] = (pos_new[i] - pos[i]) / dt
         pos[i] = pos_new[i]    # time.sleep(20)
 
-    for i in ti.static(grasp_particle_list):
-        print('Vel of grasp particle', vel[i])
-        print('Pos new', pos_new[i])
-        pos[i] = pos_latest[i] + dt * GRASP_VEL
-        """
-        Still have problem!!!
-        """
-        vel[i] = GRASP_VEL
-        print('Pos', pos[i])
+    # for i in ti.static(grasp_particle_list):
+    #     print('Vel of grasp particle', vel[i])
+    #     print('Pos new', pos_new[i])
+    #     pos[i] = pos_latest[i] + dt * GRASP_VEL
+    #     vel[i] = GRASP_VEL
+    #     print('Pos', pos[i])
 
 
 @ti.kernel
@@ -355,17 +379,23 @@ def warm_up():
         pos_new[pos_idx][0] = Sn[sn_idx1]
         pos_new[pos_idx][1] = Sn[sn_idx2]
 
+    for i in ti.static(grasp_particle_list):
+        print('Pos New', pos_new[i])
+
 
 @ti.kernel
 def initinfo():
     EPS = 0.1/20/2
     for i in range(NV):
         if (pos[i][0] > 0.1-EPS):
-            vel[i][0] = 50
+            vel[i][0] = 0
         elif (pos[i][0] < 0.1-EPS):
             vel[i][0] = 0
         else:
             vel[i][0] = 0
+
+    for i in ti.static(grasp_particle_list):
+        pos[i] += ti.Vector([0.105, 0.105])
 
 
 @ti.kernel
@@ -488,8 +518,14 @@ def paint_phi(canvas):
 frame_counter = 0
 init_mesh()
 init_pos()
-fix_particle_list, grasp_particle_list = fix_particle_No(0.1, 0.1, 0.1/20)
+edge_np = init_edge()
+NE = edge_np.shape[0]
+edge = ti.Vector.field(2, dtype=ti.i32, shape=NE)
+edge.from_numpy(edge_np)
+# print(edge.to_numpy())
+fix_particle_list, grasp_particle_list, grasp_ele_list = fix_particle_No(0.1, 0.1, 0.1/20)
 print('Grasp particle index', grasp_particle_list)
+
 precomputation()
 lhs_matrix_np = lhs_matrix.to_numpy()
 s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
@@ -497,11 +533,12 @@ pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
 print("sparse lhs matrix:\n", s_lhs_matrix_np)
 
-# initinfo()
+initinfo()
 
 """-------------GGUI setting---------------"""
-particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
-particle_test[0] = ti.Vector([0.5, 0., 0.])
+particle_test = ti.Vector.field(3, dtype=ti.f32, shape=2)
+particle_test[0] = ti.Vector([0.2, 0., 0.1])
+particle_test[1] = ti.Vector([0.1, 0., 0.1])
 def gui_set(pos, target, FOV=60):
     # init the window, canvas, scene and camerea
     window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
@@ -544,8 +581,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
-    scene.particles(particle_test, radius=0.001, color=(0., 0., 0.))
-    # scene.lines(particle_show, width=0.0005, indices=edge_show, color=(1. ,1. ,1.))
+    scene.lines(particle_show, width=0.9, indices=edge, color=(0. ,0. ,0.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     canvas.set_background_color((1.0, 1.0, 1.0))
@@ -563,6 +599,9 @@ canvas = window.get_canvas()
 
 while window.running:
     gui_show(window, canvas, scene, SHOW_FLAG=True)
+
+    for i in ti.static(grasp_particle_list):
+        pos[i] = ti.Vector([0.105, 0.105])
 
     build_sn()
     # Warm up:
