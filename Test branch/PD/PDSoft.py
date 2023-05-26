@@ -30,7 +30,8 @@ GRASP_VEL = ti.Vector([0.005, 0.005])
 volume = 0.0000125
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
-m_weight_positional = 1.e8
+m_weight_positional = 1.e9
+m_weight_grasp = 1.e9
 print("m_weight_strain/volume", m_weight_strain/volume, "  m_weight_volume/volume", m_weight_volume/volume)
 
 mass = ti.field(ti.f64, NV)
@@ -230,8 +231,8 @@ def precomputation():
     for i in ti.static(grasp_particle_list):
         q_i_x_idx = i * 2
         q_i_y_idx = i * 2 + 1
-        lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_positional
-        lhs_matrix[q_i_y_idx, q_i_y_idx] += m_weight_positional
+        lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_grasp
+        lhs_matrix[q_i_y_idx, q_i_y_idx] += m_weight_grasp
 
 
 # NOTE: This function doesn't build all constraints
@@ -369,14 +370,14 @@ def build_rhs(rhs: ti.types.ndarray()):
         pos_new_i = pos_new[i]
         q_i_x_idx = i * 2
         q_i_y_idx = i * 2 + 1
-        rhs[q_i_x_idx] += (pos_new_i[0] * m_weight_positional)
-        rhs[q_i_y_idx] += (pos_new_i[1] * m_weight_positional)
+        rhs[q_i_x_idx] += (pos_new_i[0] * m_weight_grasp)
+        rhs[q_i_y_idx] += (pos_new_i[1] * m_weight_grasp)
 
 
 @ti.kernel
 def update_velocity_pos():
     for i in ti.static(grasp_particle_list):
-        pos_new[i] =
+        pos_new[i] = pos[i] + dt*GRASP_VEL
 
     for i in range(NV):
         pos_latest[i] = pos[i]
@@ -641,13 +642,15 @@ while window.running:
         # end_build_rhs_time = time.perf_counter_ns()
         # print("build rhs time elapsed:", end_build_rhs_time - start_build_rhs_time)
 
-        local_step_energy = compute_local_step_energy()
-        print("energy after local step:", local_step_energy)
-        if local_step_energy > last_record_energy:
-            print("Energy Error: LOCAL; Error Amount:", (local_step_energy - last_record_energy) / local_step_energy)
-            if (local_step_energy - last_record_energy) / local_step_energy > 0.01:
-                print("Large Error: LOCAL")
-        last_record_energy = local_step_energy
+        # """--------Local energy--------"""
+        # local_step_energy = compute_local_step_energy()
+        # print("energy after local step:", local_step_energy)
+        # if local_step_energy > last_record_energy:
+        #     print("Energy Error: LOCAL; Error Amount:", (local_step_energy - last_record_energy) / local_step_energy)
+        #     if (local_step_energy - last_record_energy) / local_step_energy > 0.01:
+        #         print("Large Error: LOCAL")
+        # last_record_energy = local_step_energy
+        # """--------Local energy--------"""
 
         # start_linear_solve_time = time.perf_counter_ns()
         pos_new_np = pre_fact_lhs_solve(rhs_np)
@@ -659,14 +662,16 @@ while window.running:
         # end_update_pos_time = time.perf_counter_ns()
         # print("update pos new elapsed:", end_update_pos_time - start_update_pos_time)
 
-        global_step_energy = compute_global_step_energy()
-        print("energy after global step:", global_step_energy)
-        plot_array.append([itr, global_step_energy])
-        if global_step_energy > last_record_energy:
-            print("Energy Error: GLOBAL; Error Amount:", (global_step_energy - last_record_energy) / global_step_energy)
-            if (global_step_energy - last_record_energy) / global_step_energy > 0.01:
-                print("Large Error: GLOBAL")
-        last_record_energy = global_step_energy
+        # """--------Global energy--------"""
+        # global_step_energy = compute_global_step_energy()
+        # print("energy after global step:", global_step_energy)
+        # plot_array.append([itr, global_step_energy])
+        # if global_step_energy > last_record_energy:
+        #     print("Energy Error: GLOBAL; Error Amount:", (global_step_energy - last_record_energy) / global_step_energy)
+        #     if (global_step_energy - last_record_energy) / global_step_energy > 0.01:
+        #         print("Large Error: GLOBAL")
+        # last_record_energy = global_step_energy
+        # """--------Global energy--------"""
 
         # start_check_residual_time = time.perf_counter_ns()
         # residual = check_residual()
