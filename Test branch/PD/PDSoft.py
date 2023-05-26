@@ -13,21 +13,23 @@ from scipy.sparse.linalg import factorized
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
 
 dim = 2
+LL = 0.103566
+WW = 0.051187*2
 N = 20  # internal of one edge
 W = 20
 dt = 1.0/480
 dx = 1 / N  # 0.05
-rho = 1.e3           # density
+rho = 1.145e3           # density
 NF = 2 * N * W # 2 * N ** 2   # number of faces
 NV = (N+1)*(W+1) # (N + 1) ** 2 # number of vertices
-E, nu = 5.e4, 0.25  # Young's modulus and Poisson's ratio
+E, nu = 5.e5, 0.1  # Young's modulus and Poisson's ratio
 mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
 gravity = ti.Vector([0.0, 0.0])
-GRASP_VEL = ti.Vector([0.005, 0.005])
+GRASP_VEL = ti.Vector([0.040632, 0.037653])/10.
 # Area: 0.000061 0.02*0.02*sin90*0.5
-volume = 0.0000125
+volume = LL*WW/(2*N*W)
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
 m_weight_positional = 1.e9
@@ -75,7 +77,8 @@ def init_pos():
     # 初始化节点位置
     for i, j in ti.ndrange(N + 1, W + 1):
         k = i*(W+1)+j
-        pos[k] = ti.Vector([i/N*0.1, j/W*0.1]) + ti.Vector([0.0, -0.05]) # 0.2, 0.4 - 0.6,
+        pos[k] = ti.Vector([i/N*LL, j/W*WW]) + ti.Vector([0.0, -WW/2]) # 0.2,
+        # 0.4 - 0.6,
         # 0.6  0.02*0.02
         pos_init[k] = pos[k]
         vel[k] = ti.Vector([0, 0])
@@ -248,11 +251,11 @@ def local_solve_build_bp_for_all_constraints():
         F_i = ti.cast(D_i @ B[i], ti.f64)
         F[i] = F_i
 
-        if i == grasp_ele_list[0]:
-            print('Deformation gradient F', F[i])
-
-        if i == 300:
-            print('Deformation gradient F--300', F[i])
+        # if i == grasp_ele_list[0]:
+        #     print('Deformation gradient F', F[i])
+        #
+        # if i == 300:
+        #     print('Deformation gradient F--300', F[i])
 
         # Use current F_i construct current 'B * p' or Ri
         U, sigma, V = ti.svd(F_i, ti.f64)
@@ -300,16 +303,16 @@ def build_sn():
         Sn[Sn_idx1] = pos_i[0] + dt * vel_i[0]  # x-direction;
         Sn[Sn_idx2] = pos_i[1] + dt * vel_i[1] + dt * dt * gravity[1]  # y-direction;
 
-    for i in ti.static(grasp_particle_list):
-        pos_i = pos[i]  # pos = m_x
-        vel_i = vel[i]
-        idx0 = i*2
-        idx1 = i*2 + 1
-        Sn[idx0] = pos_i[0] + dt * vel_i[0]  # x-direction;
-        Sn[idx1] = pos_i[1] + dt * vel_i[1] + dt * dt * gravity[1]  # y-direction;
-        print('Pos i', pos_i[0], pos_i[1])
-        print('Vel i', vel_i[0], vel_i[1])
-        print('Sn', Sn[idx0], Sn[idx1])
+    # for i in ti.static(grasp_particle_list):
+    #     pos_i = pos[i]  # pos = m_x
+    #     vel_i = vel[i]
+    #     idx0 = i*2
+    #     idx1 = i*2 + 1
+    #     Sn[idx0] = pos_i[0] + dt * vel_i[0]  # x-direction;
+    #     Sn[idx1] = pos_i[1] + dt * vel_i[1] + dt * dt * gravity[1]  # y-direction;
+    #     print('Pos i', pos_i[0], pos_i[1])
+    #     print('Vel i', vel_i[0], vel_i[1])
+    #     print('Sn', Sn[idx0], Sn[idx1])
 
 
 @ti.kernel
@@ -384,12 +387,12 @@ def update_velocity_pos():
         vel[i] = (pos_new[i] - pos[i]) / dt
         pos[i] = pos_new[i]    # time.sleep(20)
 
-    # for i in ti.static(grasp_particle_list):
+    for i in ti.static(grasp_particle_list):
     #     print('Vel of grasp particle', vel[i])
     #     print('Pos new', pos_new[i])
     #     pos[i] = ti.Vector[0.102, 0.052]
     #     vel[i] = GRASP_VEL
-    #     print('Pos', pos[i])
+        print('Pos', pos[i])
 
 
 @ti.kernel
@@ -399,8 +402,8 @@ def warm_up():
         pos_new[pos_idx][0] = Sn[sn_idx1]
         pos_new[pos_idx][1] = Sn[sn_idx2]
 
-    for i in ti.static(grasp_particle_list):
-        print('Pos New', pos_new[i])
+    # for i in ti.static(grasp_particle_list):
+    #     print('Pos New', pos_new[i])
 
 
 @ti.kernel
@@ -539,11 +542,15 @@ frame_counter = 0
 init_mesh()
 init_pos()
 edge_np = init_edge()
+edge_np = edge_np.flatten()
+# np.savetxt('edge.txt', edge_np, fmt='%d')
 NE = edge_np.shape[0]
-edge = ti.Vector.field(2, dtype=ti.i32, shape=NE)
-edge.from_numpy(edge_np)
+edge_show = ti.field(dtype=ti.i32, shape=NE)
+edge_show.from_numpy(edge_np)
+print(edge_show.shape[0])
+
 # print(edge.to_numpy())
-fix_particle_list, grasp_particle_list, grasp_ele_list = fix_particle_No(0.1, 0.1, 0.1/20)
+fix_particle_list, grasp_particle_list, grasp_ele_list = fix_particle_No(LL, WW, LL/20)
 print('Particle number', NV)
 print('Grasp particle index', grasp_particle_list)
 print('Grasp element index', grasp_ele_list)
@@ -553,7 +560,7 @@ lhs_matrix_np = lhs_matrix.to_numpy()
 s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
 pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
-print("sparse lhs matrix:\n", s_lhs_matrix_np)
+# print("sparse lhs matrix:\n", s_lhs_matrix_np)
 
 initinfo()
 
@@ -603,13 +610,13 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
-    scene.lines(particle_show, width=0.9, indices=edge, color=(0. ,0. ,0.))
+    scene.lines(particle_show, width=0.9, indices=edge_show, color=(0. ,0. ,0.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     canvas.set_background_color((1.0, 1.0, 1.0))
-    # if particle_pos[399].x > 0.14:
-    #     window.save_image(f'Figure/{global_E}.png')
-    #     exit(0)
+    if pos[440].x > 0.144014:
+        window.save_image(f'Figure/{E}-{nu}.png')
+        exit(0)
     window.show()
 
 # frame_counter = 0
@@ -618,18 +625,17 @@ plot_array = []
 
 window, camera, scene = gui_set(pos=[0.1, 0.3, 0.], target=[0.1, 0., 0.])
 canvas = window.get_canvas()
+gui_show(window, canvas, scene, SHOW_FLAG=True)
 
 while window.running:
-    gui_show(window, canvas, scene, SHOW_FLAG=True)
-
     # for i in ti.static(grasp_particle_list):
     #     pos[i] = ti.Vector([0.102, 0.052])
-
     build_sn()
     # Warm up:
     warm_up()
     # print("Frame ", frame_counter)
     last_record_energy = 1000000.0
+
     for itr in range(solver_max_iteration):
 
         # start_solve_constraints_time = time.perf_counter_ns()
@@ -654,6 +660,7 @@ while window.running:
 
         # start_linear_solve_time = time.perf_counter_ns()
         pos_new_np = pre_fact_lhs_solve(rhs_np)
+
         # end_linear_solve_time = time.perf_counter_ns()
         # print("linear solve time elapsed:", end_linear_solve_time - start_linear_solve_time)
 
@@ -685,6 +692,7 @@ while window.running:
     # Update velocity and positions
     update_velocity_pos()
     gui_show(window, canvas, scene, SHOW_FLAG=True)
+
     # paint_phi(canvas)
     # canvas.circles(pos, radius=0.001, color=(0.5, 0.5, 0.5))
     # frame_counter += 1
