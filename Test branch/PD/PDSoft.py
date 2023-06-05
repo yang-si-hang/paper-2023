@@ -244,6 +244,8 @@ def precomputation():
 def local_solve_build_bp_for_all_constraints():
     for i in range(NF):
         # Construct strain constraints:
+        # The idea is similar to ARAP, which is to minimize the difference between the current
+        # and rest configuration of the element.
         # Construct Current F_i:
         ia, ib, ic = f2v[i]
         a, b, c = pos_new[ia], pos_new[ib], pos_new[ic]
@@ -263,11 +265,15 @@ def local_solve_build_bp_for_all_constraints():
         Bp[i] = U @ V.transpose()
 
         # Construct volume preservation constraints:
+        # x, y is the initial D of the iteration
         x, y, max_it, tol = 10.0, 10.0, 80, 1e-6
         for t in range(max_it):
             aa, bb = x + sigma[0, 0], y + sigma[1, 1]
+            # f is the function C
             f = aa * bb - 1
+            # g1, g2 is the gradient of function C
             g1, g2 = bb, aa
+            # bot is the square of the gradiant of function C
             bot = g1 * g1 + g2 * g2
             if abs(bot) < tol:
                 break
