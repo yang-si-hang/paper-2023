@@ -22,7 +22,7 @@ dx = 1 / N  # 0.05
 rho = 1.145e3           # density
 NF = 2 * N * W # 2 * N ** 2   # number of faces
 NV = (N+1)*(W+1) # (N + 1) ** 2 # number of vertices
-E, nu = 5.e5, 0.45  # Young's modulus and Poisson's ratio
+E, nu = 5.e5, 0.05  # Young's modulus and Poisson's ratio
 mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
@@ -600,7 +600,7 @@ def gui_set(pos, target, FOV=60):
     return window, camera, scene
 
 
-def gui_show(window, canvas, scene, SHOW_FLAG=True):
+def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
     """
     Show the GUI
     """
@@ -616,26 +616,29 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True):
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
-    scene.lines(particle_show, width=0.9, indices=edge_show, color=(0. ,0. ,0.))
+    scene.lines(particle_show, width=1., indices=edge_show, color=(0. ,0. ,0.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     canvas.set_background_color((1.0, 1.0, 1.0))
     if pos[440].x > 0.144014:
-        window.save_image(f'Figure/{E}-{nu}.png')
+        # window.save_image(f'Figure/{E}-{nu}.png')
         exit(0)
+    if WRITE_FLAG is True and itr_num % 10 == 0:
+        window.save_image(f'FigureWrite/{itr_num}.png')
     window.show()
 
 # frame_counter = 0
 sim_t = 0.0
 plot_array = []
 
-window, camera, scene = gui_set(pos=[0.1, 0.3, 0.], target=[0.1, 0., 0.])
+window, camera, scene = gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
 canvas = window.get_canvas()
 gui_show(window, canvas, scene, SHOW_FLAG=True)
 
+itr_temp = 0
+
 while window.running:
-    # for i in ti.static(grasp_particle_list):
-    #     pos[i] = ti.Vector([0.102, 0.052])
+    itr_temp += 1
     build_sn()
     # Warm up:
     warm_up()
@@ -697,7 +700,7 @@ while window.running:
 
     # Update velocity and positions
     update_velocity_pos()
-    gui_show(window, canvas, scene, SHOW_FLAG=True)
+    gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=itr_temp)
 
     # paint_phi(canvas)
     # canvas.circles(pos, radius=0.001, color=(0.5, 0.5, 0.5))
