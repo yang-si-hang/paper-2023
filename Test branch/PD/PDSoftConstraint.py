@@ -5,6 +5,7 @@ apllied to the marker points.
 
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
+import taichi.math as tm
 import numpy as np
 import time
 import csv
@@ -160,6 +161,80 @@ def fix_particle_No(L: float, W: float, seed_size: float):
             grasp_ele_list.append(i)
 
     return fix_particle_list, grasp_particle_list, grasp_ele_list
+
+
+def marker_point_node(marker_point_np:ti.types.ndarray()):
+    """
+    Input the marker points, return the K-th nearest nodes No. and the weights.
+    :param marker_point_np: 2D array, shape = (marker_num, 2)
+    """
+    N = marker_point_np.shape[0]
+    marker_point = ti.Vector.field(2, dtype=ti.f64, shape=N)
+    marker_point.from_numpy(marker_point_np)
+    marker_weight = ti.Vector.field(3, dtype=ti.f64, shape=N)
+    marker_tri_idx = ti.ndarray(dtype=ti.math.ivec3, shape=N)
+
+
+    def gravity_coordinate(nodes, idx, point):
+        """
+        Calculate the gravity coordinate of the point in the triangle.
+        :param nodes: The nodes of all the vertices
+        :param idx: The index of the triangle node
+        :return: The gravity coordinates
+        """
+        edge0 = nodes[idx[1]] - nodes[idx[0]]
+        edge1 = nodes[idx[2]] - nodes[idx[0]]
+        point_vec = point - nodes[idx[0]]
+
+        d00 = edge0.dot(edge0)
+        d01 = edge0.dot(edge1)
+        d11 = edge1.dot(edge1)
+        d20 = point_vec.dot(edge0)
+        d21 = point_vec.dot(edge1)
+        denom = d00 * d11 - d01 * d01
+
+        w1 = (d11 * d20 - d01 * d21) / denom
+        w2 = (d00 * d21 - d01 * d20) / denom
+        w3 = 1 - w1 - w2
+
+        if w1 < 0 or w2 < 0 or w3 < 0:
+            print("Error: point out of triangle.")
+
+        weight = ti.Vector([w1, w2, w3])
+
+        return weight
+
+    sorts = ti.field(dtype=ti.i32, shape=NV)
+    dists = ti.field(dtype=ti.f64, shape=NV)
+
+
+    @ti.kernel
+    def points_knn(point:ti.types.vector(2, dtype=ti.f64)):
+        """
+        Find the K-th nearest nodes No. and the weights.
+        :param point: ti.Vector
+        :return:
+        """
+        sorts.fill(0)
+        dists.fill(0.)
+        for i in range(NV):
+            sorts[i] = i
+            dists[i] = (pos_init[i] - point).norm()
+
+
+    for i in range(marker_point.shape[0]):
+        points_knn(marker_point[i])
+        ti.algorithms.parallel_sort(dists, sorts)
+        sorts_host = sorts.to_numpy()
+        dists_host = dists.to_numpy()
+        triangle_idx = ti.Vector([sorts_host[0], sorts_host[1], sorts_host[2]])
+        # print(triangle_idx)
+        marker_tri_idx[i] = triangle_idx
+        # triangle_dist = dists_host[0:3]
+        marker_weight[i] = gravity_coordinate(pos_init, triangle_idx, marker_point[i])
+
+
+    return marker_weight.to_numpy(), marker_tri_idx.to_numpy()
 
 
 @ti.kernel
@@ -636,6 +711,15 @@ plot_array = []
 window, camera, scene = gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
 canvas = window.get_canvas()
 gui_show(window, canvas, scene, SHOW_FLAG=True)
+
+
+marker_point_np = np.array([
+    [0.092861, -0.008877],
+    [0.093197, 0.005458],
+    [0.086154, -0.013352]])
+marker_weight, marker_tri = marker_point_node(marker_point_np)
+print(marker_weight)
+print(marker_tri)
 
 itr_temp = 0
 
