@@ -449,6 +449,7 @@ while frame_counter < 500:
     warm_up()
     print("Frame ", frame_counter)
     last_record_energy = 1000000.0
+    # rhs_np.fill(0.0)
     for itr in range(solver_max_iteration):
 
         # start_solve_constraints_time = time.perf_counter_ns()

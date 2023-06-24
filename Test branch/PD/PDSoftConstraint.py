@@ -16,8 +16,8 @@ from scipy.sparse.linalg import factorized
 
 
 dim = 2
-LL = 0.103566
-WW = 0.051187*2
+LL = 0.09577
+WW = 0.0499805*2
 N = 20  # internal of one edge
 W = 20
 dt = 1.0/480
@@ -30,13 +30,14 @@ mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
 gravity = ti.Vector([0.0, 0.0])
-GRASP_VEL = ti.Vector([0.040632, 0.037653])/10.
+GRASP_VEL = ti.Vector([0.016364, -0.000622])/5.
 # Area: 0.000061 0.02*0.02*sin90*0.5
 volume = LL*WW/(2*N*W)
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
 m_weight_positional = 1.e9
 m_weight_grasp = 1.e9
+m_weight_marker = 1.e9
 print("m_weight_strain/volume", m_weight_strain/volume, "  m_weight_volume/volume", m_weight_volume/volume)
 
 mass = ti.field(ti.f64, NV)
@@ -138,7 +139,7 @@ def fix_particle_No(L: float, W: float, seed_size: float):
             z_temp = pos_init[idx].y        # 2D dimension
             # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
             fix_flag_temp = (x_temp < 0. + EPS)
-            grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W/2 -EPS)
+            grasp_flag_temp = (x_temp > L - EPS) and (z_temp > -EPS) and (z_temp < EPS)
             fix_flag[idx] = fix_flag_temp
             grasp_flag[idx] = grasp_flag_temp
 
@@ -645,7 +646,28 @@ pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
 # print("sparse lhs matrix:\n", s_lhs_matrix_np)
 
+
+marker_point_np = np.array([
+    [0.092861, -0.008877],
+    [0.093197, 0.005458],
+    [0.086154, -0.013352]])
+marker_weight, marker_tri = marker_point_node(marker_point_np)
+print(marker_weight)
+print(marker_tri)
+marker_tri_list = list(marker_tri.flatten())
+# print(marker_tri_list)
+# exit(0)
+marker_point_np_ = np.array([
+    [0.100975, -0.008703],
+    [0.101761, 0.005869],
+    [0.091917, -0.0125]])
+marker_delta = marker_point_np_ - marker_point_np
+print(marker_delta)
+
+particle_marker = ti.Vector.field(3, ti.f32, shape=len(marker_tri_list))
+
 initinfo()
+
 
 """-------------GGUI setting---------------"""
 particle_test = ti.Vector.field(3, dtype=ti.f32, shape=2)
@@ -687,6 +709,12 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
     scene.ambient_light((0.8, 0.8, 0.8))
     # the conversion of object particles, etc. the ggui of the taichi only support float32
     particle_show.from_numpy(np.insert(pos.to_numpy(dtype=np.float32), 1, np.zeros(NV), axis=1))
+    j = 0
+    for i in ti.static(marker_tri_list):
+        particle_marker[j].x = pos[i].x
+        particle_marker[j].y = 0.
+        particle_marker[j].z = pos[i].y
+        j += 1
 
     # particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
     # particle_test[0] = ti.Vector([0.0, 0., -0.0])
@@ -694,6 +722,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
     scene.lines(particle_show, width=1., indices=edge_show, color=(0. ,0. ,0.))
+    scene.particles(particle_marker, radius=0.001, color=(1., 0., 0.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     canvas.set_background_color((1.0, 1.0, 1.0))
@@ -713,24 +742,17 @@ canvas = window.get_canvas()
 gui_show(window, canvas, scene, SHOW_FLAG=True)
 
 
-marker_point_np = np.array([
-    [0.092861, -0.008877],
-    [0.093197, 0.005458],
-    [0.086154, -0.013352]])
-marker_weight, marker_tri = marker_point_node(marker_point_np)
-print(marker_weight)
-print(marker_tri)
-
 itr_temp = 0
+GRASP_DONE = False
 
-while window.running:
+while window.running and GRASP_DONE is False:
     itr_temp += 1
     build_sn()
     # Warm up:
     warm_up()
     # print("Frame ", frame_counter)
     last_record_energy = 1000000.0
-
+    rhs_np.fill(0.0)
     for itr in range(solver_max_iteration):
 
         # start_solve_constraints_time = time.perf_counter_ns()
@@ -786,11 +808,71 @@ while window.running:
 
     # Update velocity and positions
     update_velocity_pos()
-    gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=itr_temp)
+    gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+    for i in ti.static(grasp_particle_list):
+        if pos[i].x > 0.112274:
+            GRASP_DONE = True
+            break
 
-    # paint_phi(canvas)
-    # canvas.circles(pos, radius=0.001, color=(0.5, 0.5, 0.5))
-    # frame_counter += 1
-    # filename = f'FigureDemo/frame_{frame_counter:05d}.png'
-    # window.show()
-    # print("\n")
+
+# Update the lhs matrix
+for i in ti.static(marker_tri_list):
+    q_i_x_idx = i * 2
+    q_i_y_idx = i * 2 + 1
+    lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_marker
+    lhs_matrix[q_i_y_idx, q_i_y_idx] += m_weight_marker
+
+lhs_matrix_np = lhs_matrix.to_numpy()
+s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
+pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
+
+GRASP_VEL = ti.Vector([0.0, 0.0])
+
+for j in ti.static(range(marker_tri.shape[0])):
+    idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
+    print(idx0, idx1, idx2)
+    pos_new[idx0] = pos_init[idx0] + marker_delta[j]
+    pos_new[idx1] = pos_init[idx1] + marker_delta[j]
+    pos_new[idx2] = pos_init[idx2] + marker_delta[j]
+    print(pos_new[idx0], pos_new[idx1], pos_new[idx2])
+
+marker_tri_del = ti.Vector.field(2, dtype=ti.f32, shape=(marker_tri.shape[0],3))
+
+for j in ti.static(range(marker_tri.shape[0])):
+    idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
+    marker_tri_del[j,0] = pos_init[idx0] + marker_delta[j] - pos[idx0]
+    marker_tri_del[j,1] = pos_init[idx1] + marker_delta[j] - pos[idx1]
+    marker_tri_del[j,2] = pos_init[idx2] + marker_delta[j] - pos[idx2]
+
+while window.running:
+
+    warm_up()
+    last_record_energy = 1000000.0
+    rhs_np.fill(0.0)
+    for itr in range(solver_max_iteration):
+        local_solve_build_bp_for_all_constraints()
+
+        build_rhs(rhs_np)
+
+        for i in ti.static(marker_tri_list):
+            pos_new_i = pos_new[i]
+            q_i_x_idx = i * 2
+            q_i_y_idx = i * 2 + 1
+            rhs_np[q_i_x_idx] += (pos_new_i[0] * m_weight_marker)
+            rhs_np[q_i_y_idx] += (pos_new_i[1] * m_weight_marker)
+
+        pos_new_np = pre_fact_lhs_solve(rhs_np)
+
+        update_pos_new_from_numpy(pos_new_np)
+
+    for i in ti.static(grasp_particle_list):
+        pos[i] = ti.Vector([0.112274, -0.001906])
+
+    for j in ti.static(range(marker_tri.shape[0])):
+        idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
+        pos_new[idx0] = pos[idx0] + dt * marker_tri_del[j,0]
+        pos_new[idx1] = pos[idx1] + dt * marker_tri_del[j,1]
+        pos_new[idx2] = pos[idx2] + dt * marker_tri_del[j,2]
+
+    update_velocity_pos()
+    gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
