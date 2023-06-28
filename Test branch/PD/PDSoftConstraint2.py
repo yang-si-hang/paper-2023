@@ -24,7 +24,7 @@ dx = 1 / N  # 0.05
 rho = 1.145e3           # density
 NF = 2 * N * W # 2 * N ** 2   # number of faces
 NV = (N+1)*(W+1) # (N + 1) ** 2 # number of vertices
-E, nu = 5.e5, 0.05  # Young's modulus and Poisson's ratio
+E, nu = 5.e5, 0.45  # Young's modulus and Poisson's ratio
 mu, lam = E / (2*(1+nu)), E * nu / ((1+nu)*(1-2*nu))  # Lame parameters
 ball_pos, ball_radius = ti.Vector([0.5, 0.0]), 0.32
 # gravity = ti.Vector([0, -9.8])
@@ -473,7 +473,7 @@ def update_velocity_pos():
     #     print('Pos new', pos_new[i])
     #     pos[i] = ti.Vector[0.102, 0.052]
     #     vel[i] = GRASP_VEL
-        print('Pos', pos[i])
+        print('Grasping particle Pos', pos[i])
 
 
 @ti.kernel
@@ -683,11 +683,11 @@ marker_point_np = np.array([
     [0.080281, 0.037477],
     [0.080698, 0.042693],
     [0.079965, 0.048805]])
-marker_weight, marker_tri = marker_point_node(marker_point_np)
-print(marker_weight)
-print(marker_tri)
-marker_tri_list = list(marker_tri.flatten())
-# print(marker_tri_list)
+# marker_weight, marker_tri = marker_point_node(marker_point_np)
+nearest_idx = marker_nearest_paticle(marker_point_np)
+# print(nearest_idx)
+marker_nearest_list = list(nearest_idx.flatten())
+print(marker_nearest_list)
 # exit(0)
 marker_point_np_ = np.array([
     [0.104243, 0.044501],
@@ -699,7 +699,7 @@ marker_point_np_ = np.array([
 marker_delta = marker_point_np_ - marker_point_np
 print(marker_delta)
 
-particle_marker = ti.Vector.field(3, ti.f32, shape=len(marker_tri_list))
+particle_marker = ti.Vector.field(3, ti.f32, shape=len(marker_nearest_list))
 
 initinfo()
 
@@ -745,7 +745,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
     # the conversion of object particles, etc. the ggui of the taichi only support float32
     particle_show.from_numpy(np.insert(pos.to_numpy(dtype=np.float32), 1, np.zeros(NV), axis=1))
     j = 0
-    for i in ti.static(marker_tri_list):
+    for i in ti.static(marker_nearest_list):
         particle_marker[j].x = pos[i].x
         particle_marker[j].y = 0.
         particle_marker[j].z = pos[i].y
@@ -761,10 +761,11 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
     canvas.set_background_color((1.0, 1.0, 1.0))
-    if pos[440].x > 0.144014:
+    # if pos[440].x > 0.144014:
         # window.save_image(f'Figure/{E}-{nu}.png')
-        exit(0)
-    if WRITE_FLAG is True and itr_num % 10 == 0:
+        # exit(0)
+    # if WRITE_FLAG is True and itr_num % 10 == 0:
+    if WRITE_FLAG is True:
         window.save_image(f'FigureWrite/{itr_num}.png')
     window.show()
 
@@ -849,12 +850,12 @@ while window.running and GRASP_DONE is False:
             GRASP_DONE = True
             break
 
-# exit(0)
+gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=0)
 
 lhs_matrix.fill(0.)
 precomputation()
 # Update the lhs matrix
-for i in ti.static(marker_tri_list):
+for i in ti.static(marker_nearest_list):
     q_i_x_idx = i * 2
     q_i_y_idx = i * 2 + 1
     lhs_matrix[q_i_x_idx, q_i_x_idx] += m_weight_marker
@@ -866,23 +867,19 @@ pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
 GRASP_VEL = ti.Vector([0.0, 0.0])
 
-for j in ti.static(range(marker_tri.shape[0])):
-    idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
-    print(idx0, idx1, idx2)
-    pos_new[idx0] = pos_init[idx0] + marker_delta[j]
-    pos_new[idx1] = pos_init[idx1] + marker_delta[j]
-    pos_new[idx2] = pos_init[idx2] + marker_delta[j]
-    print(pos_new[idx0], pos_new[idx1], pos_new[idx2])
+for j in ti.static(range(len(marker_nearest_list))):
+    idx = marker_nearest_list[j]
+    print(idx)
+    pos_new[idx] = pos_init[idx] + marker_delta[j]
+    print(pos_new[idx])
 
-marker_tri_del = ti.Vector.field(2, dtype=ti.f32, shape=(marker_tri.shape[0],3))
+marker_nearest_del = ti.Vector.field(2, dtype=ti.f32, shape=len(marker_nearest_list))
 
-for j in ti.static(range(marker_tri.shape[0])):
-    idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
-    marker_tri_del[j,0] = pos_init[idx0] + marker_delta[j] - pos[idx0]
-    marker_tri_del[j,1] = pos_init[idx1] + marker_delta[j] - pos[idx1]
-    marker_tri_del[j,2] = pos_init[idx2] + marker_delta[j] - pos[idx2]
+for j in ti.static(range(len(marker_nearest_list))):
+    idx = marker_nearest_list[j]
+    marker_nearest_del[j] = pos_init[idx] + marker_delta[j] - pos[idx]
 
-while window.running:
+for temp in range(480):
 
     warm_up()
     last_record_energy = 1000000.0
@@ -892,7 +889,7 @@ while window.running:
 
         build_rhs(rhs_np)
 
-        for i in ti.static(marker_tri_list):
+        for i in ti.static(marker_nearest_list):
             pos_new_i = pos_new[i]
             q_i_x_idx = i * 2
             q_i_y_idx = i * 2 + 1
@@ -904,16 +901,17 @@ while window.running:
         update_pos_new_from_numpy(pos_new_np)
 
     for i in ti.static(grasp_particle_list):
-        pos[i] = ti.Vector([0.114197, 0.061675])
+        pos[i] = ti.Vector([0.11483, 0.064103])
 
-    for j in ti.static(range(marker_tri.shape[0])):
-        idx0, idx1, idx2 = marker_tri[j, 0], marker_tri[j, 1], marker_tri[j, 2]
+    for j in ti.static(range(len(marker_nearest_list))):
+        idx= marker_nearest_list[j]
         # pos_new[idx0] = pos[idx0] + dt * marker_tri_del[j,0]
         # pos_new[idx1] = pos[idx1] + dt * marker_tri_del[j,1]
         # pos_new[idx2] = pos[idx2] + dt * marker_tri_del[j,2]
-        pos_new[idx0] = pos_init[idx0] + marker_delta[j]
-        pos_new[idx1] = pos_init[idx1] + marker_delta[j]
-        pos_new[idx2] = pos_init[idx2] + marker_delta[j]
+        pos_new[idx] = pos[idx] + dt*marker_nearest_del[j]
 
     update_velocity_pos()
     gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+    print('Particle No.271', pos[270])
+
+gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=1)
