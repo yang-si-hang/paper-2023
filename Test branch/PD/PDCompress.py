@@ -17,6 +17,12 @@ class SoftObject:
     def __init__(self, shape, seed_size):
         self.shape = shape
         self.seed_size = seed_size
+        self.dt = 1./120
+        self.rho = 1.145e3
+        self.strain_weight =
+        self.volume_weight =
+        self.positional_mass = 1.e9
+        self.grasp_mass = 1.e9
         self.dim = len(shape)
 
         node_np, edge_np, element_np = self.mesh_object()
@@ -27,23 +33,36 @@ class SoftObject:
         self.EDGE_NUM = edge_np.shape[0]
         self.ELEMENT_NUM = element_np.shape[0]
 
-        self.node_pos = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
 
         self.edge = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
 
         # This is only for 2D, should be changed for 3D!!!
         self.element = ti.Vector.field(3, dtype=ti.i32, shape=self.ELEMENT_NUM)
+        self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
 
         self.B = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.F = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.A = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM*2)
+        self.Bp = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM*2)
+
+        self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2)
+        self.lhs = ti.field(ti.f64, shape=(2*self.ELEMENT_NUM, 2*self.ELEMENT_NUM))
+
 
         self.construct_B()
+        self.construct_mass()
+
+        self.fix_particle_list, self.grasp_particle_list, grasp_ele_list = self.fix_particle_No()
+
 
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
+        print('Grasp particle No.: ', self.grasp_particle_list)
 
 
 
@@ -93,12 +112,126 @@ class SoftObject:
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
             a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
-            B_i_inv = ti.Matrix.cols([a - c, b - c])
+            B_i_inv = ti.Matrix.cols([b - a, c - a])
             self.B[i] = B_i_inv.inverse()
 
 
     @ti.kernel
+    def construct_mass(self):
+        for i in range(self.ELEMENT_NUM):
+            ia, ib, ic = self.element[i]
+            self.node_mass[ia] += self.element_volume[i] * self.rho / 3
+            self.node_mass[ib] += self.element_volume[i] * self.rho / 3
+            self.node_mass[ic] += self.element_volume[i] * self.rho / 3
+
+
+    @ti.kernel
     def precomputation(self):
+        ELEMENT_NUM = self.ELEMENT_NUM
+        dim = self.dim
+
+        for i in range(self.ELEMENT_NUM):
+            for d in ti.static(range(2)):
+                self.lhs[i*dim + d, i*dim + d] = self.node_mass[i]/self.dt**2
+
+        for i in ti.static(range(self.ELEMENT_NUM)):
+            B_i = self.B[i]
+            a = B_i[0,0]
+            b = B_i[0,1]
+            c = B_i[1,0]
+            d = B_i[1,1]
+
+            for t in range(2):
+                # X_f*X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row
+                self.A[t*ELEMENT_NUM + i][0,0] = -a - c
+                self.A[t*ELEMENT_NUM + i][0,2] = a
+                self.A[t*ELEMENT_NUM + i][0,4] = c
+                self.A[t*ELEMENT_NUM + i][1,0] = -b - d
+                self.A[t*ELEMENT_NUM + i][1,2] = b
+                self.A[t*ELEMENT_NUM + i][1,4] = d
+                self.A[t*ELEMENT_NUM + i][2,1] = -a - c
+                self.A[t*ELEMENT_NUM + i][2,3] = a
+                self.A[t*ELEMENT_NUM + i][2,5] = c
+                self.A[t*ELEMENT_NUM + i][3,1] = -b - d
+                self.A[t*ELEMENT_NUM + i][3,3] = b
+                self.A[t*ELEMENT_NUM + i][3,5] = d
+
+        for ele_idx in ti.static(range(ELEMENT_NUM)):
+            for t in range(2):
+                A_i = self.A[t*ELEMENT_NUM + ele_idx]
+                ia, ib, ic = self.element[ele_idx]
+                ia_x, ia_y = ia*dim, ia*dim+1
+                ib_x, ib_y = ib*dim, ib*dim+1
+                ic_x, ic_y = ic*dim, ic*dim+1
+                q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
+                for A_row_idx, A_col_idx in ti.static(ti.ndarray(6,6)):
+                    lhs_row_idx = q_idx_vec[A_row_idx]
+                    lhs_col_idx = q_idx_vec[A_col_idx]
+                    for idx in ti.static(range(dim**2)):
+                        if t == 0:
+                            weight = self.strain_weight
+                        else:
+                            weight = self.volume_weight
+                        self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+
+        for i in ti.static(self.fix_particle_list):
+            q_i_x_idx = i * dim
+            q_i_y_idx = i * dim + 1
+            self.lhs[q_i_x_idx, q_i_x_idx] += self.positional_mass
+            self.lhs[q_i_y_idx, q_i_y_idx] += self.poistional_mass
+
+        for i in ti.static(self.grasp_particle_list):
+            q_i_x_idx = i * 2
+            q_i_y_idx = i * 2 + 1
+            self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
+            self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
+
+
+    @ti.kernel
+    def construct_sn(self):
+        dim = self.dim
+        dt = self.dt
+        for i in range(self.PARTICLE_NUM):
+            idx1, idx2 = dim*i, dim*i+1
+            pos = self.node_pos[i]
+            vel = self.node_vel[i]
+            self.sn[idx1] = pos[0] + dt * vel[0]
+            self.sn[idx2] = pos[1] + dt * vel[1]
+
+
+    @ti.kernel
+    def construct_rhs(self):
+
+
+
+    @ti.kernel
+    def local_solve(self):
+        for i in range(self.ELEMENT_NUM):
+            ia, ib, ic = self.element[0]
+            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            D_i = ti.Matrix.cols([b-a, c-a])
+            F_i = ti.cast(D_i @ self.B[i], ti.f64)
+            self.F[i] = F_i
+
+            U, sig, V = ti.svd(F_i, ti.f64)
+            self.Bp[i] = U @ V.transpose()
+
+            # Solve the volume constraint
+            D, max_it, tol = ti.Vector([10., 10.]), 80, 1.e-6
+            for it in range(max_it):
+                aa, bb = D[0,] + sig[0,0], D[1] + sig[1,1]
+                C = aa * bb - 1
+                partial_C = ti.Vector([bb, aa])
+
+                D_temp = (partial_C.dot(D)-C) / partial_C.norm()**2 * partial_C
+                if (D-D_temp).norm() < tol:
+                    break
+                D = D_temp
+
+            PP = ti.Matrix.rows([[D[0]+sig[0,0],0.], [0., D[1]+sig[1,1]]])
+            self.Bp[self.ELEMENT_NUM + i] = U @ PP @ V.transpose()
+
+
 
 
 
@@ -213,6 +346,8 @@ class SoftObject:
 
 
     def substep(self):
+        self.construct_sn()
+        self.local_solve()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
@@ -220,6 +355,8 @@ class SoftObject:
 def main():
     soft_obj = SoftObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
+    soft_obj.precomputation()
+
     window = soft_obj.window
     while window.running:
         soft_obj.substep()
