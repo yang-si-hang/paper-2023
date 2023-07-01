@@ -130,11 +130,11 @@ class SoftObject:
         ELEMENT_NUM = self.ELEMENT_NUM
         dim = self.dim
 
-        for i in range(self.ELEMENT_NUM):
+        for i in range(ELEMENT_NUM):
             for d in ti.static(range(2)):
                 self.lhs[i*dim + d, i*dim + d] = self.node_mass[i]/self.dt**2
 
-        for i in ti.static(range(self.ELEMENT_NUM)):
+        for i in range(ELEMENT_NUM):
             B_i = self.B[i]
             a = B_i[0,0]
             b = B_i[0,1]
@@ -156,7 +156,7 @@ class SoftObject:
                 self.A[t*ELEMENT_NUM + i][3,3] = b
                 self.A[t*ELEMENT_NUM + i][3,5] = d
 
-        for ele_idx in ti.static(range(ELEMENT_NUM)):
+        for ele_idx in range(ELEMENT_NUM):
             for t in range(2):
                 A_i = self.A[t*ELEMENT_NUM + ele_idx]
                 ia, ib, ic = self.element[ele_idx]
@@ -174,7 +174,7 @@ class SoftObject:
                             weight = self.volume_weight
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
-        for i in ti.static(self.fix_particle_list):
+        for i in self.fix_particle_list:
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
             self.lhs[q_i_x_idx, q_i_x_idx] += self.positional_mass
@@ -201,6 +201,24 @@ class SoftObject:
 
     @ti.kernel
     def construct_rhs(self):
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx1, idx2 = dim*i, dim*i+1
+            self.rhs[idx1] = self.node_mass[i] * self.sn[idx1] / self.dt**2
+            self.rhs[idx2] = self.node_mass[i] * self.sn[idx2] / self.dt**2
+
+        for i in range(self.ELEMENT_NUM):
+            for t in ti.static(range(2)):
+
+                Bp_i = self.Bp[t*self.ELEMENT_NUM + i]
+                Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
+                A_i = self.A[t*self.ELEMENT_NUM + i]
+                AT_Bp = A_i.transpose() @ Bp_i_vec
+                if t == 0:
+                    weight = self.strain_weight
+                else:
+                    weight = self.volume_weight
+
 
 
 
