@@ -19,12 +19,13 @@ class SoftObject:
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145e3
-        self.strain_weight =
-        self.volume_weight =
+        self.E = 5.e5
+        self.nu = 0.4
         self.positional_mass = 1.e9
         self.grasp_mass = 1.e9
         self.solve_iteration = 10
         self.dim = len(shape)
+        self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
         node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
@@ -45,6 +46,8 @@ class SoftObject:
         # This is only for 2D, should be changed for 3D!!!
         self.element = ti.Vector.field(3, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.strain_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.volume_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
 
         self.B = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.F = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -57,6 +60,7 @@ class SoftObject:
 
 
         self.construct_B()
+        self.construct_volume()
         self.construct_mass()
 
         self.fix_particle_list, self.grasp_particle_list, grasp_ele_list = self.fix_particle_No()
@@ -120,6 +124,17 @@ class SoftObject:
 
 
     @ti.kernel
+    def construct_volume(self):
+        for i in range(self.ELEMENT_NUM):
+            ia, ib, ic = self.element[i]
+            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            element_volume_i = abs((b - a).cross(c - a)) / 2
+            self.element_volume[i] = element_volume_i
+            self.strain_weight[i] = self.mu * 2 * element_volume_i
+            self.volume_weight[i] = self.lam * self.dim * element_volume_i
+
+
+    @ti.kernel
     def construct_mass(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
@@ -172,9 +187,9 @@ class SoftObject:
                     lhs_col_idx = q_idx_vec[A_col_idx]
                     for idx in ti.static(range(dim**2)):
                         if t == 0:
-                            weight = self.strain_weight
+                            weight = self.strain_weight[ele_idx]
                         else:
-                            weight = self.volume_weight
+                            weight = self.volume_weight[ele_idx]
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
         for i in self.fix_particle_list:
@@ -218,9 +233,9 @@ class SoftObject:
                 A_i = self.A[t*self.ELEMENT_NUM + i]
                 AT_Bp = A_i.transpose() @ Bp_i_vec
                 if t == 0:
-                    weight = self.strain_weight
+                    weight = self.strain_weight[i]
                 else:
-                    weight = self.volume_weight
+                    weight = self.volume_weight[i]
                 AT_Bp *= weight
 
                 q_ia_x_idx = ia * dim
@@ -425,6 +440,11 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
+@ti.kernel
+def init_vel():
+    for i in range(self):
+
+
 
 def main():
     soft_obj = SoftObject(shape=[0.1, 0.1], seed_size=0.01)
@@ -433,6 +453,8 @@ def main():
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+
 
     window = soft_obj.window
     while window.running:
