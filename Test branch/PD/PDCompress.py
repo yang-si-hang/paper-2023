@@ -23,6 +23,7 @@ class SoftObject:
         self.volume_weight =
         self.positional_mass = 1.e9
         self.grasp_mass = 1.e9
+        self.solve_iteration = 10
         self.dim = len(shape)
 
         node_np, edge_np, element_np = self.mesh_object()
@@ -35,6 +36,7 @@ class SoftObject:
 
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
 
@@ -51,6 +53,7 @@ class SoftObject:
 
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2)
         self.lhs = ti.field(ti.f64, shape=(2*self.ELEMENT_NUM, 2*self.ELEMENT_NUM))
+        self.rhs = ti.field(ti.f64, shape=2*self.ELEMENT_NUM)
 
 
         self.construct_B()
@@ -209,7 +212,7 @@ class SoftObject:
 
         for i in range(self.ELEMENT_NUM):
             for t in ti.static(range(2)):
-
+                ia, ib, ic = self.element[i]
                 Bp_i = self.Bp[t*self.ELEMENT_NUM + i]
                 Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
                 A_i = self.A[t*self.ELEMENT_NUM + i]
@@ -218,8 +221,41 @@ class SoftObject:
                     weight = self.strain_weight
                 else:
                     weight = self.volume_weight
+                AT_Bp *= weight
+
+                q_ia_x_idx = ia * dim
+                q_ia_y_idx = ia * dim + 1
+                self.rhs[q_ia_x_idx] += AT_Bp[0]
+                self.rhs[q_ia_y_idx] += AT_Bp[1]
+
+                q_ib_x_idx = ib * dim
+                q_ib_y_idx = ib * dim + 1
+                self.rhs[q_ib_x_idx] += AT_Bp[2]
+                self.rhs[q_ib_y_idx] += AT_Bp[3]
+
+                q_ic_x_idx = ic * dim
+                q_ic_y_idx = ic * dim + 1
+                self.rhs[q_ic_x_idx] += AT_Bp[4]
+                self.rhs[q_ic_y_idx] += AT_Bp[5]
+
+        for i in self.fix_particle_list:
+            pos_init = self.node_init_pos[i]
+            q_i_x_idx = i * dim
+            q_i_y_idx = i * dim + 1
+            self.rhs[q_i_x_idx] = self.positional_mass * pos_init[0] / self.dt**2
+            self.rhs[q_i_y_idx] = self.positional_mass * pos_init[1] / self.dt**2
 
 
+    @ti.kernel
+    def warm_up(self):
+        """
+        Warm start the solver
+        """
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*dim, i*dim+1
+            self.node_pos_new[i].x = self.sn[idx0]
+            self.node_pos_new[i].y = self.sn[idx1]
 
 
     @ti.kernel
@@ -250,7 +286,19 @@ class SoftObject:
             self.Bp[self.ELEMENT_NUM + i] = U @ PP @ V.transpose()
 
 
+    @ti.kernel
+    def update_pos_new(self, sol:ti.types.ndarray()):
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.node_pos_new[i].x = sol[idx0]
+            self.node_pos_new[i].y = sol[idx1]
 
+
+    @ti.kernel
+    def update_vel_pos(self):
+        for i in range(self.PARTICLE_NUM):
+            self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
+            self.node_pos[i] = self.node_pos_new[i]
 
 
     def fix_particle_No(self):
@@ -365,7 +413,15 @@ class SoftObject:
 
     def substep(self):
         self.construct_sn()
-        self.local_solve()
+        self.warm_up()
+        for itr in ti.static(range(self.solve_iteration)):
+            self.local_solve()
+            self.construct_rhs()
+            rhs_np = self.rhs.to_numpy()
+            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
+            self.update_pos_new(node_pos_new_np)
+
+        self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
@@ -374,10 +430,14 @@ def main():
     soft_obj = SoftObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
     soft_obj.precomputation()
+    lhs_np = soft_obj.lhs.to_numpy()
+    s_lhs_np = sparse.csr_matrix(lhs_np)
+    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     window = soft_obj.window
     while window.running:
         soft_obj.substep()
+
 
 if __name__ == '__main__':
     main()
