@@ -28,7 +28,7 @@ class SoftObject:
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
-        node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
+        # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
@@ -40,14 +40,18 @@ class SoftObject:
         self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_init_pos.from_numpy(node_np.astype(np.float32))
+        self.node_pos.from_numpy(node_np.astype(np.float64))
 
         self.edge = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
+        self.edge.from_numpy(edge_np.astype(np.int32))
 
         # This is only for 2D, should be changed for 3D!!!
         self.element = ti.Vector.field(3, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.strain_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.volume_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.element.from_numpy(element_np.astype(np.int32))
 
         self.B = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.F = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -58,18 +62,17 @@ class SoftObject:
         self.lhs = ti.field(ti.f64, shape=(2*self.ELEMENT_NUM, 2*self.ELEMENT_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.ELEMENT_NUM)
 
-
         self.construct_B()
         self.construct_volume()
         self.construct_mass()
 
-        self.fix_particle_list, self.grasp_particle_list, grasp_ele_list = self.fix_particle_No()
-
+        self.fix_particle_list = self.fix_particle_No()
 
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
-        print('Grasp particle No.: ', self.grasp_particle_list)
+        print('Element number: ', self.ELEMENT_NUM)
+        # print('Grasp particle No.: ', self.grasp_particle_list)
 
 
 
@@ -127,7 +130,7 @@ class SoftObject:
     def construct_volume(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
-            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            a, b, c = self.node_init_pos[ia], self.node_init_pos[ib], self.node_init_pos[ic]
             element_volume_i = abs((b - a).cross(c - a)) / 2
             self.element_volume[i] = element_volume_i
             self.strain_weight[i] = self.mu * 2 * element_volume_i
@@ -182,27 +185,28 @@ class SoftObject:
                 ib_x, ib_y = ib*dim, ib*dim+1
                 ic_x, ic_y = ic*dim, ic*dim+1
                 q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
-                for A_row_idx, A_col_idx in ti.static(ti.ndarray(6,6)):
+                for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                     lhs_row_idx = q_idx_vec[A_row_idx]
                     lhs_col_idx = q_idx_vec[A_col_idx]
-                    for idx in ti.static(range(dim**2)):
+                    for idx in range(dim**2):
+                        weight = 0.
                         if t == 0:
                             weight = self.strain_weight[ele_idx]
                         else:
                             weight = self.volume_weight[ele_idx]
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
-        for i in self.fix_particle_list:
+        for i in ti.static(self.fix_particle_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
             self.lhs[q_i_x_idx, q_i_x_idx] += self.positional_mass
-            self.lhs[q_i_y_idx, q_i_y_idx] += self.poistional_mass
+            self.lhs[q_i_y_idx, q_i_y_idx] += self.positional_mass
 
-        for i in ti.static(self.grasp_particle_list):
-            q_i_x_idx = i * 2
-            q_i_y_idx = i * 2 + 1
-            self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-            self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
+        # for i in ti.static(self.grasp_particle_list):
+        #     q_i_x_idx = i * 2
+        #     q_i_y_idx = i * 2 + 1
+        #     self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
+        #     self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
 
 
     @ti.kernel
@@ -318,10 +322,9 @@ class SoftObject:
 
     def fix_particle_No(self):
         """
-        Find the particle No. of fix constraint and grasping constraint
+        Find the particle No. of fix constraint
         """
         fix_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-        grasp_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
         L = self.shape[0]
         W = self.shape[1]
         seed_size = self.seed_size
@@ -329,27 +332,47 @@ class SoftObject:
         @ti.kernel
         def cal_fix_constraint(L: float, W: float, seed_size: float):
             EPS = seed_size / 3
-            # flag = np.array(PARTICLE_NUM, dtype=int)
             for idx in range(self.PARTICLE_NUM):
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
                 fix_flag_temp = (x_temp < 0. + EPS)
-                grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
                 fix_flag[idx] = fix_flag_temp
-                grasp_flag[idx] = grasp_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
         fix_particle_set = set()
-        grasp_particle_set = set()
         for i in range(self.PARTICLE_NUM):
             if fix_flag[i]:
                 fix_particle_set.add(i)
+        fix_particle_list = list(fix_particle_set)
+
+        return fix_particle_list
+
+
+    def grasp_particle_No(self):
+        """
+        Find the particle No. and grasping constraint
+        """
+        grasp_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        L = self.shape[0]
+        W = self.shape[1]
+        seed_size = self.seed_size
+
+        @ti.kernel
+        def cal_grasp_constraint(L: float, W: float, seed_size: float):
+            EPS = seed_size / 3
+            for idx in range(self.PARTICLE_NUM):
+                x_temp = self.node_init_pos[idx].x
+                z_temp = self.node_init_pos[idx].y  # 2D dimension
+                grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
+                grasp_flag[idx] = grasp_flag_temp
+
+        cal_grasp_constraint(L, W, seed_size)
+        grasp_particle_set = set()
+        for i in range(self.PARTICLE_NUM):
             if grasp_flag[i]:
                 grasp_particle_set.add(i)
-        fix_particle_list = list(fix_particle_set)
         grasp_particle_list = list(grasp_particle_set)
-
         grasp_idx = grasp_particle_list[0]
         grasp_ele_list = []
         for i in range(self.ELEMENT_NUM):
@@ -357,7 +380,7 @@ class SoftObject:
             if grasp_idx in ele_temp:
                 grasp_ele_list.append(i)
 
-        return fix_particle_list, grasp_particle_list, grasp_ele_list
+            return grasp_particle_list, grasp_ele_list
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -440,10 +463,13 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
-@ti.kernel
-def init_vel():
-    for i in range(self):
-
+    @ti.kernel
+    def init_vel(self):
+        for i in range(self.PARTICLE_NUM):
+            if self.node_init_pos.x > self.shape[0] - self.seed_size/3:
+                self.node_vel[i].x = 5.
+            else:
+                self.node_vel[i].x = 0.
 
 
 def main():
@@ -451,10 +477,15 @@ def main():
     soft_obj.preset()
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
+    # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy())
+    np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
+    # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
+    np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
+    np.savetxt('lhs.txt', lhs_np)
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-
+    soft_obj.init_vel()
 
     window = soft_obj.window
     while window.running:
