@@ -59,8 +59,8 @@ class SoftObject:
         self.Bp = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM*2)
 
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2)
-        self.lhs = ti.field(ti.f64, shape=(2*self.ELEMENT_NUM, 2*self.ELEMENT_NUM))
-        self.rhs = ti.field(ti.f64, shape=2*self.ELEMENT_NUM)
+        self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
+        self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.construct_B()
         self.construct_volume()
@@ -72,6 +72,7 @@ class SoftObject:
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
         print('Element number: ', self.ELEMENT_NUM)
+        print('Edge number: ', self.EDGE_NUM)
         # print('Grasp particle No.: ', self.grasp_particle_list)
 
 
@@ -110,7 +111,7 @@ class SoftObject:
 
         edge = np.array(list(edge_set))
 
-        return node, element, edge
+        return node, edge, element
 
 
     def mesh_object_3d(self):
@@ -121,7 +122,7 @@ class SoftObject:
     def construct_B(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
-            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            a, b, c = self.node_init_pos[ia], self.node_init_pos[ib], self.node_init_pos[ic]
             B_i_inv = ti.Matrix.cols([b - a, c - a])
             self.B[i] = B_i_inv.inverse()
 
@@ -153,7 +154,7 @@ class SoftObject:
 
         for i in range(ELEMENT_NUM):
             for d in ti.static(range(2)):
-                self.lhs[i*dim + d, i*dim + d] = self.node_mass[i]/self.dt**2
+                self.lhs[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
 
         for i in range(ELEMENT_NUM):
             B_i = self.B[i]
@@ -236,6 +237,7 @@ class SoftObject:
                 Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
                 A_i = self.A[t*self.ELEMENT_NUM + i]
                 AT_Bp = A_i.transpose() @ Bp_i_vec
+                weight = 0.
                 if t == 0:
                     weight = self.strain_weight[i]
                 else:
@@ -257,7 +259,7 @@ class SoftObject:
                 self.rhs[q_ic_x_idx] += AT_Bp[4]
                 self.rhs[q_ic_y_idx] += AT_Bp[5]
 
-        for i in self.fix_particle_list:
+        for i in ti.static(self.fix_particle_list):
             pos_init = self.node_init_pos[i]
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
@@ -279,9 +281,12 @@ class SoftObject:
 
     @ti.kernel
     def local_solve(self):
+        """
+        Minimize the energy function
+        """
         for i in range(self.ELEMENT_NUM):
-            ia, ib, ic = self.element[0]
-            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            ia, ib, ic = self.element[i]
+            a, b, c = self.node_pos_new[ia], self.node_pos_new[ib], self.node_pos_new[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
             self.F[i] = F_i
@@ -292,16 +297,17 @@ class SoftObject:
             # Solve the volume constraint
             D, max_it, tol = ti.Vector([10., 10.]), 80, 1.e-6
             for it in range(max_it):
-                aa, bb = D[0,] + sig[0,0], D[1] + sig[1,1]
+                aa, bb = D[0] + sig[0,0], D[1] + sig[1,1]
                 C = aa * bb - 1
                 partial_C = ti.Vector([bb, aa])
 
                 D_temp = (partial_C.dot(D)-C) / partial_C.norm()**2 * partial_C
-                if (D-D_temp).norm() < tol:
-                    break
+                D_error = (D-D_temp).norm()
                 D = D_temp
+                if D_error < tol:
+                    break
 
-            PP = ti.Matrix.rows([[D[0]+sig[0,0],0.], [0., D[1]+sig[1,1]]])
+            PP = ti.Matrix.rows([[D[0]+sig[0,0], 0.], [0., D[1]+sig[1,1]]])
             self.Bp[self.ELEMENT_NUM + i] = U @ PP @ V.transpose()
 
 
@@ -424,7 +430,8 @@ class SoftObject:
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
         # the conversion of object particles, etc. the ggui of the taichi only support float32
-        self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1, np.zeros(self.PARTICLE_NUM), axis=1))
+        self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1,
+                                            np.zeros(self.PARTICLE_NUM), axis=1))
 
         # particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
         # particle_test[0] = ti.Vector([0.0, 0., -0.0])
@@ -446,6 +453,7 @@ class SoftObject:
 
     def preset(self):
         self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
+        self.canvas = self.window.get_canvas()
         self.show_preset()
 
 
@@ -466,26 +474,36 @@ class SoftObject:
     @ti.kernel
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
-            if self.node_init_pos.x > self.shape[0] - self.seed_size/3:
+            if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
                 self.node_vel[i].x = 5.
             else:
                 self.node_vel[i].x = 0.
 
 
 def main():
-    soft_obj = SoftObject(shape=[0.1, 0.1], seed_size=0.01)
+    class MyObject(SoftObject):
+        def __init__(self, shape, seed_size):
+            super().__init__(shape, seed_size)
+
+
+
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy())
-    np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
+    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy())
+    # np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
+    # np.savetxt('edge.csv', soft_obj.edge.to_numpy(), fmt='%d')
+    # np.savetxt('B.csv', soft_obj.B.to_numpy())
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
-    np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
+    np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
+    # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
     np.savetxt('lhs.txt', lhs_np)
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    soft_obj.init_vel()
+    # soft_obj.init_vel()
 
     window = soft_obj.window
     while window.running:
