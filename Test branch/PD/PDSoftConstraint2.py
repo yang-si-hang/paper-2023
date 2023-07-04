@@ -637,6 +637,8 @@ print('Grasp particle index', grasp_particle_list)
 print('Grasp element index', grasp_ele_list)
 
 precomputation()
+np.savetxt('lhs_right.csv', lhs_matrix.to_numpy(), fmt='%f', delimiter=',')
+exit(0)
 lhs_matrix_np = lhs_matrix.to_numpy()
 s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
 pre_fact_lhs_solve = factorized(s_lhs_matrix_np)

@@ -158,25 +158,25 @@ class SoftObject:
 
         for i in range(ELEMENT_NUM):
             B_i = self.B[i]
-            a = B_i[0,0]
-            b = B_i[0,1]
-            c = B_i[1,0]
-            d = B_i[1,1]
+            a = B_i[0, 0]
+            b = B_i[0, 1]
+            c = B_i[1, 0]
+            d = B_i[1, 1]
 
             for t in range(2):
                 # X_f*X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row
-                self.A[t*ELEMENT_NUM + i][0,0] = -a - c
-                self.A[t*ELEMENT_NUM + i][0,2] = a
-                self.A[t*ELEMENT_NUM + i][0,4] = c
-                self.A[t*ELEMENT_NUM + i][1,0] = -b - d
-                self.A[t*ELEMENT_NUM + i][1,2] = b
-                self.A[t*ELEMENT_NUM + i][1,4] = d
-                self.A[t*ELEMENT_NUM + i][2,1] = -a - c
-                self.A[t*ELEMENT_NUM + i][2,3] = a
-                self.A[t*ELEMENT_NUM + i][2,5] = c
-                self.A[t*ELEMENT_NUM + i][3,1] = -b - d
-                self.A[t*ELEMENT_NUM + i][3,3] = b
-                self.A[t*ELEMENT_NUM + i][3,5] = d
+                self.A[t*ELEMENT_NUM + i][0, 0] = -a - c
+                self.A[t*ELEMENT_NUM + i][0, 2] = a
+                self.A[t*ELEMENT_NUM + i][0, 4] = c
+                self.A[t*ELEMENT_NUM + i][1, 0] = -b - d
+                self.A[t*ELEMENT_NUM + i][1, 2] = b
+                self.A[t*ELEMENT_NUM + i][1, 4] = d
+                self.A[t*ELEMENT_NUM + i][2, 1] = -a - c
+                self.A[t*ELEMENT_NUM + i][2, 3] = a
+                self.A[t*ELEMENT_NUM + i][2, 5] = c
+                self.A[t*ELEMENT_NUM + i][3, 1] = -b - d
+                self.A[t*ELEMENT_NUM + i][3, 3] = b
+                self.A[t*ELEMENT_NUM + i][3 ,5] = d
 
         for ele_idx in range(ELEMENT_NUM):
             for t in range(2):
@@ -486,7 +486,6 @@ def main():
             super().__init__(shape, seed_size)
 
 
-
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
     soft_obj.precomputation()
@@ -499,15 +498,17 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    np.savetxt('lhs.txt', lhs_np)
+    np.savetxt('lhs.txt', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     # soft_obj.init_vel()
+    print(soft_obj.node_pos[0])
 
     window = soft_obj.window
     while window.running:
         soft_obj.substep()
+        print(soft_obj.node_pos[0])
 
 
 if __name__ == '__main__':
