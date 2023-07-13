@@ -10,11 +10,11 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
 
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=False)
 
 dim = 2
-N = 10  # internal of one edge
-W = 10
+N = 1  # internal of one edge
+W = 1
 dt = 1.0/120
 dx = 1 / N  # 0.05
 rho = 1.145e3           # density
@@ -29,7 +29,8 @@ gravity = ti.Vector([0.0, 0.0])
 volume = 0.01*0.01*0.5
 m_weight_strain = mu * 2 * volume
 m_weight_volume = lam * dim * volume
-m_weight_positional = 10000.0
+# m_weight_positional = 10000.0
+m_weight_positional = 0.
 print("m_weight_strain/volume", m_weight_strain/volume, "  m_weight_volume/volume", m_weight_volume/volume)
 
 mass = ti.field(ti.f64, NV)
@@ -180,6 +181,7 @@ def local_solve_build_bp_for_all_constraints():
         D_i = ti.Matrix.cols([b - a, c - a])
         F_i = ti.cast(D_i @ B[i], ti.f64)
         F[i] = F_i
+        print('F_i:', F_i)
         # Use current F_i construct current 'B * p' or Ri
         U, sigma, V = ti.svd(F_i, ti.f64)
         Bp[i] = U @ V.transpose()
@@ -202,7 +204,10 @@ def local_solve_build_bp_for_all_constraints():
             if _dx * _dx + _dy * _dy < tol * tol:
                 break
         PP = ti.Matrix.rows([[x + sigma[0, 0], 0.0], [0.0, sigma[1, 1] + y]])
+        print('PP:',PP)
         Bp[NF + i] = U @ PP @ V.transpose()
+    for i in Bp:
+        print('Bp:', Bp[i])
 
     # Calculate Phi for all the elements:
     for i in range(NF):
@@ -243,7 +248,7 @@ def build_rhs(rhs: ti.types.ndarray()):
         for ele_idx in range(NF):
             ia, ib, ic = f2v[ele_idx]
             Bp_i = Bp[t*NF+ele_idx]  # It is a 2x2 matrix now. We want it be a 4x1 vector.
-            # 注意这里的Bp_i是一个2x2的矩阵，转换成4x1的向量时的顺序，于对A向量化的顺序是一致的
+            # 注意这里的Bp_i是一个2x2的矩阵，转换成4x1的向量时的顺序，与对A向量化的顺序是一致的
             Bp_i_vec = ti.Vector([Bp_i[0, 0], Bp_i[0, 1], Bp_i[1, 0], Bp_i[1, 1]])
             A_i = A[ele_idx]
             AT_Bp = A_i.transpose() @ Bp_i_vec  # AT_Bp is a 6x1 vector now.
@@ -253,6 +258,9 @@ def build_rhs(rhs: ti.types.ndarray()):
             else:
                 weight = m_weight_volume
             AT_Bp *= weight  # m_weight_strain
+            print('A_i:', A_i.transpose())
+            print('Bp_i_vec:', Bp_i_vec)
+            print('AT_Bp:', AT_Bp)
 
             # Add AT_Bp back to rhs
             q_ia_x_idx = ia*2
@@ -270,6 +278,10 @@ def build_rhs(rhs: ti.types.ndarray()):
             rhs[q_ic_x_idx] += AT_Bp[4]
             rhs[q_ic_y_idx] += AT_Bp[5]
 
+    ti.loop_config(serialize=True)
+    for i in rhs:
+        print('rhs:', rhs[i])
+
     # Add positional constraints Bp to the rhs
     # 位置约束将质量设置为无穷大（一个很大的数）
     for i in range(NV):
@@ -279,6 +291,10 @@ def build_rhs(rhs: ti.types.ndarray()):
             q_i_y_idx = i * 2 + 1
             rhs[q_i_x_idx] += (pos_init_i[0] * m_weight_positional)
             rhs[q_i_y_idx] += (pos_init_i[1] * m_weight_positional)
+
+    ti.loop_config(serialize=True)
+    for i in rhs:
+        print('latter rhs:', rhs[i])
 
 
 @ti.kernel
@@ -430,6 +446,13 @@ s_lhs_matrix_np = sparse.csr_matrix(lhs_matrix_np)
 pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 
 print("sparse lhs matrix:\n", s_lhs_matrix_np)
+for i in range(4):
+    np.savetxt(f'A{i}_truth.csv', A[i].to_numpy(), fmt='%f', delimiter=',')
+np.savetxt('lhs_truth.csv', lhs_matrix_np, fmt='%f', delimiter=',')
+np.savetxt('B0_truth.csv', B[0].to_numpy(), fmt='%f', delimiter=',')
+np.savetxt('B1_truth.csv', B[1].to_numpy(), fmt='%f', delimiter=',')
+np.savetxt('f2v.csv', f2v.to_numpy(), fmt='%d', delimiter=',')
+np.savetxt('pos_init_truth.csv', pos_init.to_numpy(), fmt='%f', delimiter=',')
 
 initinfo()
 
@@ -460,6 +483,8 @@ while frame_counter < 500:
 
         # start_build_rhs_time = time.perf_counter_ns()
         build_rhs(rhs_np)
+        # np.savetxt('rhs_truth.csv', rhs_np, fmt='%f', delimiter=',')
+        # exit(0)
         # end_build_rhs_time = time.perf_counter_ns()
         # print("build rhs time elapsed:", end_build_rhs_time - start_build_rhs_time)
 

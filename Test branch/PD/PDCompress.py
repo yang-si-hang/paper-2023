@@ -19,7 +19,7 @@ class SoftObject:
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145e3
-        self.E = 5.e5
+        self.E = 5.e3
         self.nu = 0.4
         self.positional_mass = 1.e9
         self.grasp_mass = 1.e9
@@ -89,8 +89,8 @@ class SoftObject:
     def mesh_object_2d(self, shape, seed_size):
         L = shape[0]
         W = shape[1]
-        LN = int(np.ceil(L / seed_size))
-        WN = int(np.ceil(W / seed_size))
+        LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
+        WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
 
         # Generate the nodes' position
         xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
@@ -152,7 +152,7 @@ class SoftObject:
         ELEMENT_NUM = self.ELEMENT_NUM
         dim = self.dim
 
-        for i in range(ELEMENT_NUM):
+        for i in range(self.PARTICLE_NUM):
             for d in ti.static(range(2)):
                 self.lhs[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
 
@@ -176,16 +176,16 @@ class SoftObject:
                 self.A[t*ELEMENT_NUM + i][2, 5] = c
                 self.A[t*ELEMENT_NUM + i][3, 1] = -b - d
                 self.A[t*ELEMENT_NUM + i][3, 3] = b
-                self.A[t*ELEMENT_NUM + i][3 ,5] = d
+                self.A[t*ELEMENT_NUM + i][3, 5] = d
 
         for ele_idx in range(ELEMENT_NUM):
+            ia, ib, ic = self.element[ele_idx]
+            ia_x, ia_y = ia * dim, ia * dim + 1
+            ib_x, ib_y = ib * dim, ib * dim + 1
+            ic_x, ic_y = ic * dim, ic * dim + 1
+            q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
             for t in range(2):
                 A_i = self.A[t*ELEMENT_NUM + ele_idx]
-                ia, ib, ic = self.element[ele_idx]
-                ia_x, ia_y = ia*dim, ia*dim+1
-                ib_x, ib_y = ib*dim, ib*dim+1
-                ic_x, ic_y = ic*dim, ic*dim+1
-                q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
                 for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                     lhs_row_idx = q_idx_vec[A_row_idx]
                     lhs_col_idx = q_idx_vec[A_col_idx]
@@ -223,63 +223,6 @@ class SoftObject:
 
 
     @ti.kernel
-    def construct_rhs(self):
-        dim = self.dim
-        for i in range(self.PARTICLE_NUM):
-            idx1, idx2 = dim*i, dim*i+1
-            self.rhs[idx1] = self.node_mass[i] * self.sn[idx1] / self.dt**2
-            self.rhs[idx2] = self.node_mass[i] * self.sn[idx2] / self.dt**2
-
-        for i in range(self.ELEMENT_NUM):
-            for t in ti.static(range(2)):
-                ia, ib, ic = self.element[i]
-                Bp_i = self.Bp[t*self.ELEMENT_NUM + i]
-                Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
-                A_i = self.A[t*self.ELEMENT_NUM + i]
-                AT_Bp = A_i.transpose() @ Bp_i_vec
-                weight = 0.
-                if t == 0:
-                    weight = self.strain_weight[i]
-                else:
-                    weight = self.volume_weight[i]
-                AT_Bp *= weight
-
-                q_ia_x_idx = ia * dim
-                q_ia_y_idx = ia * dim + 1
-                self.rhs[q_ia_x_idx] += AT_Bp[0]
-                self.rhs[q_ia_y_idx] += AT_Bp[1]
-
-                q_ib_x_idx = ib * dim
-                q_ib_y_idx = ib * dim + 1
-                self.rhs[q_ib_x_idx] += AT_Bp[2]
-                self.rhs[q_ib_y_idx] += AT_Bp[3]
-
-                q_ic_x_idx = ic * dim
-                q_ic_y_idx = ic * dim + 1
-                self.rhs[q_ic_x_idx] += AT_Bp[4]
-                self.rhs[q_ic_y_idx] += AT_Bp[5]
-
-        for i in ti.static(self.fix_particle_list):
-            pos_init = self.node_init_pos[i]
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            self.rhs[q_i_x_idx] = self.positional_mass * pos_init[0] / self.dt**2
-            self.rhs[q_i_y_idx] = self.positional_mass * pos_init[1] / self.dt**2
-
-
-    @ti.kernel
-    def warm_up(self):
-        """
-        Warm start the solver
-        """
-        dim = self.dim
-        for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*dim, i*dim+1
-            self.node_pos_new[i].x = self.sn[idx0]
-            self.node_pos_new[i].y = self.sn[idx1]
-
-
-    @ti.kernel
     def local_solve(self):
         """
         Minimize the energy function
@@ -309,6 +252,76 @@ class SoftObject:
 
             PP = ti.Matrix.rows([[D[0]+sig[0,0], 0.], [0., D[1]+sig[1,1]]])
             self.Bp[self.ELEMENT_NUM + i] = U @ PP @ V.transpose()
+
+
+    @ti.kernel
+    def construct_rhs(self):
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx1, idx2 = dim*i, dim*i+1
+            self.rhs[idx1] = self.node_mass[i] * self.sn[idx1] / self.dt**2
+            self.rhs[idx2] = self.node_mass[i] * self.sn[idx2] / self.dt**2
+
+        ti.loop_config(serialize=True)
+        for i in range(self.ELEMENT_NUM):
+            ia, ib, ic = self.element[i]
+            for t in ti.static(range(2)):
+                Bp_i = self.Bp[t*self.ELEMENT_NUM + i]
+                Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
+                A_i = self.A[t*self.ELEMENT_NUM + i]
+                AT_Bp = A_i.transpose() @ Bp_i_vec
+                weight = 0.
+                if t == 0:
+                    weight = self.strain_weight[i]
+                else:
+                    weight = self.volume_weight[i]
+                AT_Bp *= weight
+                # print('A_i:', A_i.transpose())
+                # print('Bp_i_vec:', Bp_i_vec)
+                # print('AT_Bp:', AT_Bp)
+
+                q_ia_x_idx = ia * dim
+                q_ia_y_idx = ia * dim + 1
+                self.rhs[q_ia_x_idx] += AT_Bp[0]
+                self.rhs[q_ia_y_idx] += AT_Bp[1]
+
+                q_ib_x_idx = ib * dim
+                q_ib_y_idx = ib * dim + 1
+                self.rhs[q_ib_x_idx] += AT_Bp[2]
+                self.rhs[q_ib_y_idx] += AT_Bp[3]
+
+                q_ic_x_idx = ic * dim
+                q_ic_y_idx = ic * dim + 1
+                self.rhs[q_ic_x_idx] += AT_Bp[4]
+                self.rhs[q_ic_y_idx] += AT_Bp[5]
+
+        # ti.loop_config(serialize=True)
+        # for i in self.rhs:
+        #     print('rhs:', self.rhs[i])
+
+        # The positional mass constraint of the rhs matrix need match the lhs matrix
+        for i in ti.static(self.fix_particle_list):
+            pos_init = self.node_init_pos[i]
+            q_i_x_idx = i * dim
+            q_i_y_idx = i * dim + 1
+            self.rhs[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
+            self.rhs[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
+
+        # ti.loop_config(serialize=True)
+        # for i in self.rhs:
+        #     print('latter rhs:', self.rhs[i])
+
+
+    @ti.kernel
+    def warm_up(self):
+        """
+        Warm start the solver
+        """
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*dim, i*dim+1
+            self.node_pos_new[i].x = self.sn[idx0]
+            self.node_pos_new[i].y = self.sn[idx1]
 
 
     @ti.kernel
@@ -464,8 +477,11 @@ class SoftObject:
             self.local_solve()
             self.construct_rhs()
             rhs_np = self.rhs.to_numpy()
+            # np.savetxt(f'rhs.csv', rhs_np, fmt='%f', delimiter=',')
+            # exit(0)
             node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(node_pos_new_np)
+            # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
@@ -486,29 +502,35 @@ def main():
             super().__init__(shape, seed_size)
 
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
+    soft_obj = MyObject(shape=[0.01, 0.01], seed_size=0.01)
     soft_obj.preset()
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
+    # for i in range(4):
+    #     np.savetxt(f'A{i}.csv', soft_obj.A[i].to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy())
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy())
     # np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
     # np.savetxt('edge.csv', soft_obj.edge.to_numpy(), fmt='%d')
-    # np.savetxt('B.csv', soft_obj.B.to_numpy())
+    # np.savetxt('B0.csv', soft_obj.B[0].to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('B1.csv', soft_obj.B[1].to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
-    np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
+    # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    np.savetxt('lhs.txt', lhs_np, fmt='%f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # soft_obj.init_vel()
-    print(soft_obj.node_pos[0])
+    soft_obj.init_vel()
+    # print(soft_obj.node_pos[0])
 
     window = soft_obj.window
     while window.running:
         soft_obj.substep()
-        print(soft_obj.node_pos[0])
+        print('pos 0:', soft_obj.node_pos[0])
+        print('pos 1:', soft_obj.node_vel[1])
+        print('pos 2:', soft_obj.node_vel[2])
+        print('pos 3:', soft_obj.node_vel[3])
 
 
 if __name__ == '__main__':
