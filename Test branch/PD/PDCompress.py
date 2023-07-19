@@ -491,7 +491,7 @@ class SoftObject:
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
             if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
-                self.node_vel[i].x = 5.
+                self.node_vel[i].x = 8.
             else:
                 self.node_vel[i].x = 0.
 
@@ -502,7 +502,7 @@ def main():
             super().__init__(shape, seed_size)
 
 
-    soft_obj = MyObject(shape=[0.01, 0.01], seed_size=0.01)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -527,10 +527,10 @@ def main():
     window = soft_obj.window
     while window.running:
         soft_obj.substep()
-        print('pos 0:', soft_obj.node_pos[0])
-        print('pos 1:', soft_obj.node_vel[1])
-        print('pos 2:', soft_obj.node_vel[2])
-        print('pos 3:', soft_obj.node_vel[3])
+        # print('pos 0:', soft_obj.node_pos[0])
+        # print('pos 1:', soft_obj.node_vel[1])
+        # print('pos 2:', soft_obj.node_vel[2])
+        # print('pos 3:', soft_obj.node_vel[3])
 
 
 if __name__ == '__main__':
