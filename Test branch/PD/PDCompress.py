@@ -19,10 +19,13 @@ class SoftObject:
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145e3
-        self.E = 5.e3
+        self.E = 5.e5
         self.nu = 0.4
+        self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
+        self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.positional_mass = 1.e9
         self.grasp_mass = 1.e9
+        self.marker_mass = 1.e9
         self.solve_iteration = 10
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
@@ -67,6 +70,7 @@ class SoftObject:
         self.construct_mass()
 
         self.fix_particle_list = self.fix_particle_No()
+        self.grasp_particle_list, _ = self.grasp_particle_No()
 
 
         # Print the information
@@ -203,11 +207,11 @@ class SoftObject:
             self.lhs[q_i_x_idx, q_i_x_idx] += self.positional_mass
             self.lhs[q_i_y_idx, q_i_y_idx] += self.positional_mass
 
-        # for i in ti.static(self.grasp_particle_list):
-        #     q_i_x_idx = i * 2
-        #     q_i_y_idx = i * 2 + 1
-        #     self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-        #     self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
+        for i in ti.static(self.grasp_particle_list):
+            q_i_x_idx = i * 2
+            q_i_y_idx = i * 2 + 1
+            self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
+            self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
 
 
     @ti.kernel
@@ -256,13 +260,14 @@ class SoftObject:
 
     @ti.kernel
     def construct_rhs(self):
+        self.rhs.fill(0.)
         dim = self.dim
         for i in range(self.PARTICLE_NUM):
             idx1, idx2 = dim*i, dim*i+1
             self.rhs[idx1] = self.node_mass[i] * self.sn[idx1] / self.dt**2
             self.rhs[idx2] = self.node_mass[i] * self.sn[idx2] / self.dt**2
 
-        ti.loop_config(serialize=True)
+        # ti.loop_config(serialize=True)
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
             for t in ti.static(range(2)):
@@ -307,9 +312,12 @@ class SoftObject:
             self.rhs[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
             self.rhs[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
 
-        # ti.loop_config(serialize=True)
-        # for i in self.rhs:
-        #     print('latter rhs:', self.rhs[i])
+        for i in ti.static(self.grasp_particle_list):
+            pos_new_i = self.node_pos_new[i]
+            q_i_x_idx = i * 2
+            q_i_y_idx = i * 2 + 1
+            self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
+            self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
 
 
     @ti.kernel
@@ -334,6 +342,11 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
+        ti.loop_config(serialize=True)
+        for i in ti.static(self.grasp_particle_list):
+            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
+
+        ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
@@ -370,7 +383,7 @@ class SoftObject:
 
     def grasp_particle_No(self):
         """
-        Find the particle No. and grasping constraint
+        Find the particle No. & element No. of grasp constraint
         """
         grasp_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
         L = self.shape[0]
@@ -382,7 +395,7 @@ class SoftObject:
             EPS = seed_size / 3
             for idx in range(self.PARTICLE_NUM):
                 x_temp = self.node_init_pos[idx].x
-                z_temp = self.node_init_pos[idx].y  # 2D dimension
+                z_temp = self.node_init_pos[idx].y
                 grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
                 grasp_flag[idx] = grasp_flag_temp
 
@@ -399,7 +412,7 @@ class SoftObject:
             if grasp_idx in ele_temp:
                 grasp_ele_list.append(i)
 
-            return grasp_particle_list, grasp_ele_list
+        return grasp_particle_list, grasp_ele_list
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -496,6 +509,39 @@ class SoftObject:
                 self.node_vel[i].x = 0.
 
 
+    def marker_constraint(self, marker_point_np:ti.types.ndarray()):
+        N = marker_point_np.shape[0]
+        marker_point = ti.Vector.field(2, dtype=ti.f64, shape=N)
+        marker_point.from_numpy(marker_point_np)
+        # the nearest node No. of the marker point
+        node_nearest = ti.ndarray(dtype=ti.i32, shape=N)
+
+        sorts = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        dists = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
+
+        @ti.kernel
+        def points_knn(point:ti.types.vector(2, dtype=ti.f64)):
+            """
+            Find the K-th nearest nodes No. and the weights.
+            :param point: ti.Vector
+            :return:
+            """
+            sorts.fill(0)
+            dists.fill(0.)
+            for i in range(self.PARTICLE_NUM):
+                sorts[i] = i
+                dists[i] = (self.node_init_pos[i] - point).norm()
+
+        for i in range(N):
+            points_knn(marker_point[i])
+            ti.algorithms.parallel_sort(dists, sorts)
+            sorts_host = sorts.to_numpy()
+            nearest_idx = sorts_host[0]
+            node_nearest[i] = nearest_idx
+
+        return node_nearest.to_numpy()
+
+
 def main():
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size):
@@ -504,6 +550,16 @@ def main():
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
+
+    marker_point = np.array([
+        [0.09, 0.041]
+    ])
+    node_nearest_idx = soft_obj.marker_constraint(marker_point)
+    node_nearest_list = list(node_nearest_idx)
+    node_marker_show = ti.Vector.field(3, dtype=ti.f32, shape=len(node_nearest_list))
+    print('marker nearest node', node_nearest_list)
+    print('grasp node', soft_obj.grasp_particle_list)
+
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     # for i in range(4):
@@ -521,16 +577,59 @@ def main():
     s_lhs_np = sparse.csr_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    soft_obj.init_vel()
+    # soft_obj.init_vel()
     # print(soft_obj.node_pos[0])
+    # soft_obj.GRASP_VEL = ti.Vector([0., 0.])
 
     window = soft_obj.window
-    while window.running:
+    # while window.running:
+    for i in range(500):
         soft_obj.substep()
-        # print('pos 0:', soft_obj.node_pos[0])
-        # print('pos 1:', soft_obj.node_vel[1])
-        # print('pos 2:', soft_obj.node_vel[2])
-        # print('pos 3:', soft_obj.node_vel[3])
+
+    soft_obj.lhs.fill(0.)
+    soft_obj.precomputation()
+    for i in ti.static(node_nearest_list):
+        q_i_x_idx = i * 2
+        q_i_y_idx = i * 2 + 1
+        soft_obj.lhs[q_i_x_idx, q_i_x_idx] += soft_obj.marker_mass
+        soft_obj.lhs[q_i_y_idx, q_i_y_idx] += soft_obj.marker_mass
+
+    lhs_np = soft_obj.lhs.to_numpy()
+    s_lhs_np = sparse.csr_matrix(lhs_np)
+    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+    soft_obj.GRASP_VEL[0] = ti.Vector([0., 0.])
+    # soft_obj.GRASP_VEL.x = 0.
+
+    for temp in range(900):
+        soft_obj.construct_sn()
+        soft_obj.warm_up()
+        for itr in ti.static(range(soft_obj.solve_iteration)):
+            soft_obj.local_solve()
+            soft_obj.construct_rhs()
+            for i in node_nearest_list:
+                pos_new_i = soft_obj.node_pos_new[i]
+                q_i_x_idx = i * 2
+                q_i_y_idx = i * 2 + 1
+                soft_obj.rhs[q_i_x_idx] += soft_obj.marker_mass * pos_new_i[0]
+                soft_obj.rhs[q_i_y_idx] += soft_obj.marker_mass * pos_new_i[1]
+            rhs_np = soft_obj.rhs.to_numpy()
+            node_pos_new_np = soft_obj.pre_fact_lhs_solve(rhs_np)
+            soft_obj.update_pos_new(node_pos_new_np)
+
+        for i in node_nearest_list:
+            soft_obj.node_pos_new[i] = soft_obj.node_pos[i] + ti.Vector([-0.005, 0.]) * soft_obj.dt
+        soft_obj.update_vel_pos()
+        soft_obj.gui_show(soft_obj.window, soft_obj.canvas, soft_obj.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+
+        j = 0
+        for i in node_nearest_list:
+            node_marker_show[j].x = soft_obj.node_pos[i].x
+            node_marker_show[j].y = 0.
+            node_marker_show[j].z = soft_obj.node_pos[i].y
+            print('node_pos:', soft_obj.node_pos[i])
+        soft_obj.scene.particles(node_marker_show, radius=0.001, color=(1., 0., 0.))
+
 
 
 if __name__ == '__main__':

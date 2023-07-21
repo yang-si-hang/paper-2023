@@ -758,7 +758,7 @@ def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
     # scene.mesh(particle_show, indices=surf_show, color=(1, 1, 0))
     scene.particles(particle_show, radius=0.001, color=(0., 0., 0.))
-    scene.lines(particle_show, width=1., indices=edge_show, color=(0. ,0. ,0.))
+    scene.lines(particle_show, width=1., indices=edge_show, color=(0., 0., 0.))
     scene.particles(particle_marker, radius=0.001, color=(1., 0., 0.))
     # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
     canvas.scene(scene)
