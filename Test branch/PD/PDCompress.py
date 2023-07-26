@@ -314,8 +314,8 @@ class SoftObject:
 
         for i in ti.static(self.grasp_particle_list):
             pos_new_i = self.node_pos_new[i]
-            q_i_x_idx = i * 2
-            q_i_y_idx = i * 2 + 1
+            q_i_x_idx = i * dim
+            q_i_y_idx = i * dim + 1
             self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
             self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
 
@@ -342,11 +342,11 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
-        ti.loop_config(serialize=True)
+        # ti.loop_config(serialize=True)
         for i in ti.static(self.grasp_particle_list):
             self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
 
-        ti.loop_config(serialize=True)
+        # ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
