@@ -4,7 +4,7 @@ by Taichi.
 """
 
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
+ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True)
 import taichi.math as tm
 import numpy as np
 import time
@@ -54,9 +54,11 @@ class PDTest():
         self.lhs = ti.field(ti.f64, shape=(2*self.NODE_NUM, 2*self.NODE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.NODE_NUM)
 
-        self.lhs_t_K = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM,
+        # self.lhs_t_K = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM,
+        #                                              max_num_triplets=100)
+        self.lhs_t_K = ti.linalg.SparseMatrixBuilder(8, 8,
                                                      max_num_triplets=100)
-        self.lhs_t = self.lhs_t_K.build()
+        # self.lhs_t = self.lhs_t_K.build()
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
 
@@ -111,7 +113,7 @@ class PDTest():
 
         for i in range(self.NODE_NUM):
             for d in ti.static(range(2)):
-                self.lhs_t[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
+                self.lhs_t_K[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
 
         for i in range(self.ELE_NUM):
             B_i = self.B[i]
@@ -151,20 +153,20 @@ class PDTest():
                             weight = self.strain_weight[ele_idx]
                         else:
                             weight = self.vol_weight[ele_idx]
-                        self.lhs_t[lhs_row_idx, lhs_col_idx] += \
+                        self.lhs_t_K[lhs_row_idx, lhs_col_idx] += \
                             weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
         for i in ti.static(self.fix_node_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
-            self.lhs_t[q_i_x_idx, q_i_x_idx] += self.positional_mass
-            self.lhs_t[q_i_y_idx, q_i_y_idx] += self.positional_mass
+            self.lhs_t_K[q_i_x_idx, q_i_x_idx] += self.positional_mass
+            self.lhs_t_K[q_i_y_idx, q_i_y_idx] += self.positional_mass
 
         for i in ti.static(self.grasp_node_list):
             q_i_x_idx = i * 2
             q_i_y_idx = i * 2 + 1
-            self.lhs_t[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-            self.lhs_t[q_i_y_idx, q_i_y_idx] += self.grasp_mass
+            self.lhs_t_K[q_i_x_idx, q_i_x_idx] += self.grasp_mass
+            self.lhs_t_K[q_i_y_idx, q_i_y_idx] += self.grasp_mass
 
 
     @ti.kernel
@@ -411,6 +413,7 @@ def main():
     # s_lhs_np = sparse.csc_matrix(lhs_np)
     # test.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    test.lhs_t = test.lhs_t_K.build()
     test.solver = ti.linalg.SparseSolver(solver_type="LLT")
     test.solver.analyze_pattern(test.lhs_t)
     test.solver.factorize(test.lhs_t)
