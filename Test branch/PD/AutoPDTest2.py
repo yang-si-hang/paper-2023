@@ -145,15 +145,19 @@ class PDTest():
                 for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                     lhs_row_idx = q_idx_vec[A_row_idx]
                     lhs_col_idx = q_idx_vec[A_col_idx]
+                    matrix_temp = ti.f64(0.)
                     for idx in range(dim**2):
+                    # for idx in range(1):
                         weight = ti.f64(0.)
                         if t == 0:
                             weight = self.strain_weight[ele_idx]
                         else:
                             weight = self.vol_weight[ele_idx]
+                        matrix_temp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                         # lhs_t[lhs_row_idx, lhs_col_idx] += \
                         #     weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                        lhs_t[0,0] += ti.f64(0.)
+                    print('Matrix Index:', lhs_row_idx, lhs_col_idx)
+                    lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
 
         print('code running here!')
         for i in ti.static(self.fix_node_list):
