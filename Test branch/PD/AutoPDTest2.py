@@ -154,10 +154,10 @@ class PDTest():
                         else:
                             weight = self.vol_weight[ele_idx]
                         matrix_temp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                        # lhs_t[lhs_row_idx, lhs_col_idx] += \
-                        #     weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                    print('Matrix Index:', lhs_row_idx, lhs_col_idx)
-                    lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
+                        lhs_t[lhs_row_idx, lhs_col_idx] += \
+                            weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    # print('Matrix Index:', lhs_row_idx, lhs_col_idx)
+                    # lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
 
         print('code running here!')
         for i in ti.static(self.fix_node_list):
