@@ -4,7 +4,7 @@ by Taichi.
 """
 
 import taichi as ti
-ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True)
 import taichi.math as tm
 import numpy as np
 import time
@@ -56,7 +56,7 @@ class PDTest():
 
         # self.lhs_t_K = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM,
         #                                              max_num_triplets=100)
-        self.lhs_t_builder = ti.linalg.SparseMatrixBuilder(8, 8, max_num_triplets=100)
+        self.lhs_t_builder = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM, max_num_triplets=100)
         # self.lhs_t = self.lhs_t_K.build()
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
@@ -146,14 +146,16 @@ class PDTest():
                     lhs_row_idx = q_idx_vec[A_row_idx]
                     lhs_col_idx = q_idx_vec[A_col_idx]
                     for idx in range(dim**2):
-                        weight = 0.
+                        weight = ti.f64(0.)
                         if t == 0:
                             weight = self.strain_weight[ele_idx]
                         else:
                             weight = self.vol_weight[ele_idx]
-                        lhs_t[lhs_row_idx, lhs_col_idx] += \
-                            weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                        # lhs_t[lhs_row_idx, lhs_col_idx] += \
+                        #     weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                        lhs_t[0,0] += ti.f64(0.)
 
+        print('code running here!')
         for i in ti.static(self.fix_node_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
@@ -411,6 +413,7 @@ def main():
     # s_lhs_np = sparse.csc_matrix(lhs_np)
     # test.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    test.lhs_t_builder.print_triplets()
     test.lhs_t = test.lhs_t_builder.build()
     test.solver = ti.linalg.SparseSolver(solver_type="LLT")
     test.solver.analyze_pattern(test.lhs_t)
