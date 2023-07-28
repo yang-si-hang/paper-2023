@@ -358,6 +358,15 @@ class PDTest():
         self.show_preset()
 
 
+    @ti.kernel
+    def init_vel(self):
+        for i in range(self.NODE_NUM):
+            if self.node_pos_init[i].x > 0.8:
+                self.node_vel[i].x = 8.
+            else:
+                self.node_vel[i].x = 0.
+
+
     def substep(self):
         self.construct_sn()
         self.warm_up()
@@ -398,16 +407,18 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     test.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    test.init_vel()
+
     window = test.window
     while window.running:
-        # test.substep()
+        test.substep()
         # coss_now = test.compute_loss()
         # print(coss_now)
-        with ti.ad.Tape(loss=test.my_loss):
-            test.substep()
-            test.compute_loss()
-        print('Loss:',test.my_loss[None])
-        print('Gradiant:',test.node_pos.grad.to_numpy())
+        # with ti.ad.Tape(loss=test.my_loss):
+        #     test.substep()
+        #     test.compute_loss()
+        # print('Loss:',test.my_loss[None])
+        # print('Gradiant:',test.node_pos.grad.to_numpy())
 
 
 
