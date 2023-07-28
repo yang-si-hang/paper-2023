@@ -147,17 +147,16 @@ class PDTest():
                     lhs_col_idx = q_idx_vec[A_col_idx]
                     matrix_temp = ti.f64(0.)
                     for idx in range(dim**2):
-                    # for idx in range(1):
                         weight = ti.f64(0.)
                         if t == 0:
                             weight = self.strain_weight[ele_idx]
                         else:
                             weight = self.vol_weight[ele_idx]
                         matrix_temp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                        lhs_t[lhs_row_idx, lhs_col_idx] += \
-                            weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                        # lhs_t[lhs_row_idx, lhs_col_idx] += \
+                        #     weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                     # print('Matrix Index:', lhs_row_idx, lhs_col_idx)
-                    # lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
+                    lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
 
         print('code running here!')
         for i in ti.static(self.fix_node_list):
@@ -218,13 +217,13 @@ class PDTest():
 
 
     @ti.kernel
-    def construct_rhs(self):
-        self.rhs_t.fill(0.)
+    def construct_rhs(self, rhs_t:ti.types.ndarray()):
+        # self.rhs_t.fill(0.)
         dim = self.dim
         for i in range(self.NODE_NUM):
             idx1, idx2 = dim*i, dim*i+1
-            self.rhs_t[idx1] = self.node_mass[i] * self.sn[idx1] / self.dt**2
-            self.rhs_t[idx2] = self.node_mass[i] * self.sn[idx2] / self.dt**2
+            rhs_t[idx1] += self.node_mass[i] * self.sn[idx1] / self.dt**2
+            rhs_t[idx2] += self.node_mass[i] * self.sn[idx2] / self.dt**2
 
         # ti.loop_config(serialize=True)
         for i in range(self.ELE_NUM):
@@ -243,33 +242,33 @@ class PDTest():
 
                 q_ia_x_idx = ia * dim
                 q_ia_y_idx = ia * dim + 1
-                self.rhs_t[q_ia_x_idx] += AT_Bp[0]
-                self.rhs_t[q_ia_y_idx] += AT_Bp[1]
+                rhs_t[q_ia_x_idx] += AT_Bp[0]
+                rhs_t[q_ia_y_idx] += AT_Bp[1]
 
                 q_ib_x_idx = ib * dim
                 q_ib_y_idx = ib * dim + 1
-                self.rhs_t[q_ib_x_idx] += AT_Bp[2]
-                self.rhs_t[q_ib_y_idx] += AT_Bp[3]
+                rhs_t[q_ib_x_idx] += AT_Bp[2]
+                rhs_t[q_ib_y_idx] += AT_Bp[3]
 
                 q_ic_x_idx = ic * dim
                 q_ic_y_idx = ic * dim + 1
-                self.rhs_t[q_ic_x_idx] += AT_Bp[4]
-                self.rhs_t[q_ic_y_idx] += AT_Bp[5]
+                rhs_t[q_ic_x_idx] += AT_Bp[4]
+                rhs_t[q_ic_y_idx] += AT_Bp[5]
 
         # The positional mass constraint of the rhs matrix need match the lhs matrix
         for i in ti.static(self.fix_node_list):
             pos_init = self.node_pos_init[i]
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
-            self.rhs_t[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
-            self.rhs_t[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
+            rhs_t[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
+            rhs_t[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
 
         for i in ti.static(self.grasp_node_list):
             pos_new_i = self.node_pos_new[i]
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
-            self.rhs_t[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-            self.rhs_t[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
+            rhs_t[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
+            rhs_t[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
 
 
     def itration_solve(self):
@@ -378,7 +377,8 @@ class PDTest():
         # self.itration_solve()
         for itr in ti.static(range(self.solve_itr)):
             self.local_solve()
-            self.construct_rhs()
+            self.rhs_t.fill(0.)
+            self.construct_rhs(self.rhs_t)
 
             x = self.solver.solve(self.rhs_t)
             self.update_pos_new(x)
@@ -389,6 +389,15 @@ class PDTest():
 
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+
+
+    @ti.kernel
+    def init_vel(self):
+        for i in range(self.NODE_NUM):
+            if self.node_pos_init[i].x > 0.8:
+                self.node_vel[i].x = 8.
+            else:
+                self.node_vel[i].x = 0.
 
 
 def main():
@@ -422,6 +431,8 @@ def main():
     test.solver = ti.linalg.SparseSolver(solver_type="LLT")
     test.solver.analyze_pattern(test.lhs_t)
     test.solver.factorize(test.lhs_t)
+
+    test.init_vel()
 
     window = test.window
     while window.running:
