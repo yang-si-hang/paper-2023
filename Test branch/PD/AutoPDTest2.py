@@ -142,7 +142,8 @@ class PDTest():
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
             for t in range(2):
                 A_i = self.A[t*ELE_NUM + ele_idx]
-                for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
+                # for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
+                for A_row_idx, A_col_idx in ti.ndrange(6, 6):
                     lhs_row_idx = q_idx_vec[A_row_idx]
                     lhs_col_idx = q_idx_vec[A_col_idx]
                     matrix_temp = ti.f64(0.)

@@ -65,7 +65,7 @@ class SoftObject:
         self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
-        self.lhs_t_buider = ti.linalg.SparseMatrixBuilder(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM, max_num_triplets=20*self.PARTICLE_NUM)
+        self.lhs_t_buider = ti.linalg.SparseMatrixBuilder(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM, max_num_triplets=3*200*self.PARTICLE_NUM)
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.PARTICLE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.PARTICLE_NUM)
 
@@ -492,12 +492,17 @@ class SoftObject:
         self.warm_up()
         for itr in ti.static(range(self.solve_iteration)):
             self.local_solve()
-            self.construct_rhs()
-            rhs_np = self.rhs.to_numpy()
+            self.rhs_t.fill(0.)
+            self.construct_rhs(self.rhs_t)
+
+            x = self.solver.solve(self.rhs_t)
+            self.update_pos_new(x)
+
+            # rhs_np = self.rhs.to_numpy()
             # np.savetxt(f'rhs.csv', rhs_np, fmt='%f', delimiter=',')
             # exit(0)
-            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
-            self.update_pos_new(node_pos_new_np)
+            # node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
+            # self.update_pos_new(node_pos_new_np)
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
@@ -569,7 +574,11 @@ def main():
     # s_lhs_np = sparse.csr_matrix(lhs_np)
     # soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-
+    soft_obj.lhs_t_buider.print_triplets()
+    soft_obj.lhs_t = soft_obj.lhs_t_buider.build()
+    soft_obj.solver = ti.linalg.SparseSolver(solver_type='LLT')
+    soft_obj.solver.analyze_pattern(soft_obj.lhs_t)
+    soft_obj.solver.factorize(soft_obj.lhs_t)
 
     # soft_obj.init_vel()
     # print(soft_obj.node_pos[0])
