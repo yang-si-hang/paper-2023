@@ -3,7 +3,7 @@ This file simulates the compression of a soft object by Projective Dynamics.
 """
 
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=False)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
@@ -65,7 +65,9 @@ class SoftObject:
         self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
-        self.lhs_t_buider = ti.linalg.SparseMatrixBuilder(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM, max_num_triplets=3*200*self.PARTICLE_NUM)
+        # self.lhs_t_buider = ti.linalg.SparseMatrixBuilder(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM, max_num_triplets=3*200*self.PARTICLE_NUM)
+        self.lhs_t_buider = ti.linalg.SparseMatrixBuilder(2 * self.PARTICLE_NUM, 2 * self.PARTICLE_NUM,
+                                                          max_num_triplets=200*200*3)
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.PARTICLE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.PARTICLE_NUM)
 
@@ -588,6 +590,8 @@ def main():
     # while window.running:
     for i in range(500):
         soft_obj.substep()
+        # isSuccess = soft_obj.solver.info()
+        # print(isSuccess)
 
     """
     soft_obj.lhs.fill(0.)

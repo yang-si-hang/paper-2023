@@ -27,6 +27,7 @@ class PDTest():
         self.grasp_mass = 1.e6
         self.solve_itr = 10
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
+        # self.GRASP_VEL[0] = ti.Vector([0.02, 0.02])
         self.GRASP_VEL[0] = ti.Vector([0.0, 0.0])
 
         self.node_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=4)
@@ -56,7 +57,7 @@ class PDTest():
 
         # self.lhs_t_K = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM,
         #                                              max_num_triplets=100)
-        self.lhs_t_builder = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM, max_num_triplets=100)
+        self.lhs_t_builder = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM, max_num_triplets=500)
         # self.lhs_t = self.lhs_t_K.build()
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
@@ -293,10 +294,13 @@ class PDTest():
 
 
     @ti.kernel
-    def update_vel_pos(self):
+    def update_grasp_pos(self):
         for i in ti.static(self.grasp_node_list):
             self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
 
+
+    @ti.kernel
+    def update_vel_pos(self):
         for i in range(self.NODE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
@@ -436,14 +440,28 @@ def main():
 
     window = test.window
     while window.running:
-        test.substep()
+        # test.substep()
         # coss_now = test.compute_loss()
         # print(coss_now)
-        # with ti.ad.Tape(loss=test.my_loss):
-        #     # test.substep()
-        #     test.compute_loss()
-        # print('Loss:',test.my_loss[None])
-        # print('Gradiant:',test.node_pos.grad.to_numpy())
+
+        test.construct_sn()
+        test.warm_up()
+        # self.itration_solve()
+        for itr in ti.static(range(test.solve_itr)):
+            test.local_solve()
+            test.rhs_t.fill(0.)
+            test.construct_rhs(test.rhs_t)
+
+            x = test.solver.solve(test.rhs_t)
+            test.update_pos_new(x)
+
+        with ti.ad.Tape(loss=test.my_loss):
+            test.update_grasp_pos()
+            test.update_vel_pos()
+            test.compute_loss()
+        test.gui_show(test.window, test.canvas, test.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+        print('Loss:',test.my_loss[None])
+        print('Gradiant:',test.node_pos.grad.to_numpy())
 
 
 
