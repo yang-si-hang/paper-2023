@@ -159,7 +159,6 @@ class PDTest():
                     # print('Matrix Index:', lhs_row_idx, lhs_col_idx)
                     lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
 
-        print('code running here!')
         for i in ti.static(self.fix_node_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
