@@ -4,14 +4,9 @@ by Taichi.
 """
 
 import taichi as ti
-ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True)
+ti.init(arch=ti.gpu, default_fp=ti.f32, debug=True)
 import taichi.math as tm
 import numpy as np
-import time
-import csv
-from scipy import sparse
-from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import factorized
 
 
 @ti.data_oriented
@@ -54,10 +49,7 @@ class PDTest():
         self.lhs = ti.field(ti.f64, shape=(2*self.NODE_NUM, 2*self.NODE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.NODE_NUM)
 
-        # self.lhs_t_K = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM,
-        #                                              max_num_triplets=100)
         self.lhs_t_builder = ti.linalg.SparseMatrixBuilder(2*self.NODE_NUM, 2*self.NODE_NUM, max_num_triplets=100)
-        # self.lhs_t = self.lhs_t_K.build()
         self.rhs_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
         self.sn_t = ti.ndarray(dtype=ti.f32, shape=2*self.NODE_NUM)
 
@@ -159,175 +151,6 @@ class PDTest():
                     # print('Matrix Index:', lhs_row_idx, lhs_col_idx)
                     # lhs_t[lhs_row_idx, lhs_col_idx] += matrix_temp
 
-        for i in ti.static(self.fix_node_list):
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            lhs_t[q_i_x_idx, q_i_x_idx] += self.positional_mass
-            lhs_t[q_i_y_idx, q_i_y_idx] += self.positional_mass
-
-        for i in ti.static(self.grasp_node_list):
-            q_i_x_idx = i * 2
-            q_i_y_idx = i * 2 + 1
-            lhs_t[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-            lhs_t[q_i_y_idx, q_i_y_idx] += self.grasp_mass
-
-
-    @ti.kernel
-    def construct_sn(self):
-        dim = self.dim
-        dt = self.dt
-        for i in range(self.NODE_NUM):
-            idx1, idx2 = dim*i, dim*i+1
-            pos = self.node_pos[i]
-            vel = self.node_vel[i]
-            self.sn[idx1] = pos[0] + dt * vel[0]
-            self.sn[idx2] = pos[1] + dt * vel[1]
-
-
-    @ti.kernel
-    def local_solve(self):
-        """
-        Minimize the energy function
-        """
-        for i in range(self.ELE_NUM):
-            ia, ib, ic = self.element[i]
-            a, b, c = self.node_pos_new[ia], self.node_pos_new[ib], self.node_pos_new[ic]
-            D_i = ti.Matrix.cols([b-a, c-a])
-            F_i = ti.cast(D_i @ self.B[i], ti.f64)
-            self.F[i] = F_i
-
-            U, sig, V = ti.svd(F_i, ti.f64)
-            self.Bp[i] = U @ V.transpose()
-
-            # Solve the volume constraint
-            D, max_it, tol = ti.Vector([10., 10.]), 80, 1.e-6
-            for it in range(max_it):
-                aa, bb = D[0] + sig[0,0], D[1] + sig[1,1]
-                C = aa * bb - 1
-                partial_C = ti.Vector([bb, aa])
-
-                D_temp = (partial_C.dot(D)-C) / partial_C.norm()**2 * partial_C
-                D_error = (D-D_temp).norm()
-                D = D_temp
-                if D_error < tol:
-                    break
-
-            PP = ti.Matrix.rows([[D[0]+sig[0,0], 0.], [0., D[1]+sig[1,1]]])
-            self.Bp[self.ELE_NUM + i] = U @ PP @ V.transpose()
-
-
-    @ti.kernel
-    def construct_rhs(self, rhs_t:ti.types.ndarray()):
-        # self.rhs_t.fill(0.)
-        dim = self.dim
-        for i in range(self.NODE_NUM):
-            idx1, idx2 = dim*i, dim*i+1
-            rhs_t[idx1] += self.node_mass[i] * self.sn[idx1] / self.dt**2
-            rhs_t[idx2] += self.node_mass[i] * self.sn[idx2] / self.dt**2
-
-        # ti.loop_config(serialize=True)
-        for i in range(self.ELE_NUM):
-            ia, ib, ic = self.element[i]
-            for t in ti.static(range(2)):
-                Bp_i = self.Bp[t*self.ELE_NUM + i]
-                Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[1,0], Bp_i[1,1]])
-                A_i = self.A[t*self.ELE_NUM + i]
-                AT_Bp = A_i.transpose() @ Bp_i_vec
-                weight = 0.
-                if t == 0:
-                    weight = self.strain_weight[i]
-                else:
-                    weight = self.vol_weight[i]
-                AT_Bp *= weight
-
-                q_ia_x_idx = ia * dim
-                q_ia_y_idx = ia * dim + 1
-                rhs_t[q_ia_x_idx] += AT_Bp[0]
-                rhs_t[q_ia_y_idx] += AT_Bp[1]
-
-                q_ib_x_idx = ib * dim
-                q_ib_y_idx = ib * dim + 1
-                rhs_t[q_ib_x_idx] += AT_Bp[2]
-                rhs_t[q_ib_y_idx] += AT_Bp[3]
-
-                q_ic_x_idx = ic * dim
-                q_ic_y_idx = ic * dim + 1
-                rhs_t[q_ic_x_idx] += AT_Bp[4]
-                rhs_t[q_ic_y_idx] += AT_Bp[5]
-
-        # The positional mass constraint of the rhs matrix need match the lhs matrix
-        for i in ti.static(self.fix_node_list):
-            pos_init = self.node_pos_init[i]
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            rhs_t[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
-            rhs_t[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
-
-        for i in ti.static(self.grasp_node_list):
-            pos_new_i = self.node_pos_new[i]
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            rhs_t[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-            rhs_t[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
-
-
-    def itration_solve(self):
-        pass
-
-
-    @ti.kernel
-    def warm_up(self):
-        dim = self.dim
-        for i in range(self.NODE_NUM):
-            idx0, idx1 = i*dim, i*dim+1
-            self.node_pos_new[i].x = self.sn[idx0]
-            self.node_pos_new[i].y = self.sn[idx1]
-
-
-    @ti.kernel
-    def update_pos_new(self, sol:ti.types.ndarray()):
-        for i in range(self.NODE_NUM):
-            idx0, idx1 = i*self.dim, i*self.dim+1
-            self.node_pos_new[i].x = sol[idx0]
-            self.node_pos_new[i].y = sol[idx1]
-
-
-    @ti.kernel
-    def update_vel_pos(self):
-        for i in ti.static(self.grasp_node_list):
-            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
-
-        for i in range(self.NODE_NUM):
-            self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
-            self.node_pos[i] = self.node_pos_new[i]
-
-
-    def show_preset(self):
-        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.NODE_NUM)
-        self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
-        self.edge_show.from_numpy(self.edge_np)
-
-
-    def substep(self):
-        self.construct_sn()
-        self.warm_up()
-        # self.itration_solve()
-        for itr in ti.static(range(self.solve_itr)):
-            self.local_solve()
-            self.rhs_t.fill(0.)
-            self.construct_rhs(self.rhs_t)
-
-            x = self.solver.solve(self.rhs_t)
-            self.update_pos_new(x)
-
-            # rhs_np = self.rhs.to_numpy()
-            # node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
-            # self.update_pos_new(node_pos_new_np)
-
-        self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
-
-
 
 def main():
     class AutoDiffPD(PDTest):
@@ -335,44 +158,15 @@ def main():
             super().__init__()
             self.my_loss = ti.field(dtype=ti.f64, shape=(), needs_grad=True)
 
-
-        @ti.kernel
-        def compute_loss(self):
-            desired_pos = ti.Vector([1.2, 0.])
-            # now_pos = self.node_pos[3]
-            # my_loss = (desired_pos - now_pos).norm()
-            self.my_loss[None] = (desired_pos - self.node_pos[3]).norm()
-
-
-    ti.root.lazy_grad()
     test = AutoDiffPD()
 
     test.precomputation(test.lhs_t_builder)
-
-    # lhs_np = test.lhs.to_numpy()
-    # # s_lhs_np = sparse.csr_matrix(lhs_np)
-    # s_lhs_np = sparse.csc_matrix(lhs_np)
-    # test.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     test.lhs_t_builder.print_triplets()
     test.lhs_t = test.lhs_t_builder.build()
     test.solver = ti.linalg.SparseSolver(solver_type="LLT")
     test.solver.analyze_pattern(test.lhs_t)
     test.solver.factorize(test.lhs_t)
-
-    # test.init_vel()
-
-    # window = test.window
-    # while window.running:
-    #     test.substep()
-        # coss_now = test.compute_loss()
-        # print(coss_now)
-        # with ti.ad.Tape(loss=test.my_loss):
-        #     # test.substep()
-        #     test.compute_loss()
-        # print('Loss:',test.my_loss[None])
-        # print('Gradiant:',test.node_pos.grad.to_numpy())
-
 
 
 if __name__ == '__main__':
