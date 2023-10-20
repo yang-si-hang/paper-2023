@@ -455,6 +455,8 @@ class SoftObject:
 
             AT_dT_dq = A_i.transpose() @ self.dT_dq[i]
 
+            # This code from vs code
+
 
 
     @ti.kernel
