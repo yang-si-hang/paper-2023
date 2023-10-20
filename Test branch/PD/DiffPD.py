@@ -68,6 +68,7 @@ class SoftObject:
         # Following is diffPD
         self.dT_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                    # \partial Bp / \partial q
+        self.AT_dT_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                 # A^T * \partial Bp / \partial q
         self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
@@ -452,7 +453,8 @@ class SoftObject:
                 # T=Bq
                 dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
                 dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
-                self.dT_dF[i][self.dim*m+n] = dT_df_vec
+                # 根据f_i的顺序按列排列
+                self.dT_dF[i][:,self.dim*m+n] = dT_df_vec
 
             dF_dq = A_i
 
@@ -460,42 +462,21 @@ class SoftObject:
             self.dT_dq[i] = self.dT_dF[i] @ dF_dq
 
             # Element AT_dT_dq
-            AT_dT_dq = A_i.transpose() @ self.dT_dq[i]
+            self.AT_dT_dq[i] = A_i.transpose() @ self.dT_dq[i]
 
-        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD 
-        weight = self.strain_weight
+        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
         dim = self.dim
         for i in range(self.ELEMENT_NUM):
+            weight = self.strain_weight[i]
             ia, ib, ic = self.element[i]
             ia_x, ia_y = ia * dim, ia * dim + 1
             ib_x, ib_y = ib * dim, ib * dim + 1
             ic_x, ic_y = ic * dim, ic * dim + 1
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
             for row_idx, col_idx in ti.static(ti.ndrange(6,6)):
-                rhs_row_idx = q_idx_vec[rhs_row_idx]
-                rhs_col_idx = q_idx_vec[rhs_col_idx]
-                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
-
-
-
-    @ti.kernel
-    def jacobian_cal(self, dL):     # dL的类型需要给,i*1 vector
-        """
-        Calculate the Jacobian matrix. Symbols are the same as DiffPD paper.
-        :param dL: \partial L / \partial x, the gradient of the Lagrangian function
-        :return:
-        """
-        A = self.lhs
-        dA = self.rhs_dA
-        z_k = 
-        z_k1 = 
-        for itr in range(10):
-            
-            
-            # 如何构建一个迭代公式，选择初始值
-
-
-        return
+                rhs_row_idx = q_idx_vec[row_idx]
+                rhs_col_idx = q_idx_vec[col_idx]
+                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
 
 
     def gui_set(self, pos, target, FOV=60):
