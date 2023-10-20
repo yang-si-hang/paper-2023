@@ -171,8 +171,8 @@ class SoftObject:
             d = B_i[1, 1]
 
             for t in range(2):
-                # X_f@X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row(行优先). q is element first
-                # [q_ax, q_bx, q_cx, q_ay, q_by, q_cy]
+                # X_f@X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row(行优先).
+                #  q is cooridnate first, q=[q_ax, q_ay, q_bx, q_by, q_cx, q_cy]^T
                 self.A[t*ELEMENT_NUM + i][0, 0] = -a - c
                 self.A[t*ELEMENT_NUM + i][0, 2] = a
                 self.A[t*ELEMENT_NUM + i][0, 4] = c
@@ -427,6 +427,7 @@ class SoftObject:
         :return:
         """
         for i in range(self.ELEMENT_NUM):
+            A_i = self.A[i]
             ia, ib ,ic = self.element[i]
             a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
@@ -442,14 +443,18 @@ class SoftObject:
                 UV = A_tmp.inverse() @ B_tmp
                 Omega_U = tm.mat2([0., UV[0]], [-UV[0], 0.])
                 Omega_V = tm.mat2([0., UV[1]], [-UV[1], 0.])
+                # T=Bq
                 dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
                 dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
                 self.dT_dF[i][self.dim*m+n] = dT_df_vec
 
-            dF_dq = self.A[i]
+            dF_dq = A_i
 
-            # Straint constraint
+            # Strain constraint，4*6 matrix
             self.dT_dq[i] = self.dT_dF[i] @ dF_dq
+
+            AT_dT_dq = A_i.transpose() @ self.dT_dq[i]
+
 
 
     @ti.kernel
@@ -460,7 +465,7 @@ class SoftObject:
         :return:
         """
         for i in range(self.ELEMENT_NUM):
-            self.
+            # 如何构建一个迭代公式，选择初始值
 
 
         return
