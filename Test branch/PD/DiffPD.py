@@ -67,7 +67,8 @@ class SoftObject:
 
         # Following is diffPD
         self.dT_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                    # \partial Bp / \partial q
+        self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
 
         self.construct_B()
         self.construct_volume()
@@ -453,10 +454,21 @@ class SoftObject:
             # Strain constraint，4*6 matrix
             self.dT_dq[i] = self.dT_dF[i] @ dF_dq
 
+            # Element AT_dT_dq
             AT_dT_dq = A_i.transpose() @ self.dT_dq[i]
 
-            # This code from vs code
-
+        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD 
+        weight = self.strain_weight
+        for i in range(self.ELEMENT_NUM):
+            ia, ib, ic = self.element[i]
+            ia_x, ia_y = ia * dim, ia * dim + 1
+            ib_x, ib_y = ib * dim, ib * dim + 1
+            ic_x, ic_y = ic * dim, ic * dim + 1
+            q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
+            for row_idx, col_idx in ti.static(ti.ndrange(6,6)):
+                rhs_row_idx = q_idx_vec[rhs_row_idx]
+                rhs_col_idx = q_idx_vec[rhs_col_idx]
+                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
 
 
     @ti.kernel
@@ -466,7 +478,9 @@ class SoftObject:
         :param dL: \partial L / \partial x, the gradient of the Lagrangian function
         :return:
         """
+        # Construct \Delta A
         for i in range(self.ELEMENT_NUM):
+            
             # 如何构建一个迭代公式，选择初始值
 
 
