@@ -69,6 +69,11 @@ class SoftObject:
         self.dT_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                    # \partial Bp / \partial q
         self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
+        self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        
+        self.dL.fill(1.)
+        self.z.fill(1.)
 
         self.construct_B()
         self.construct_volume()
@@ -459,6 +464,7 @@ class SoftObject:
 
         # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD 
         weight = self.strain_weight
+        dim = self.dim
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
             ia_x, ia_y = ia * dim, ia * dim + 1
@@ -471,15 +477,20 @@ class SoftObject:
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
 
 
+
     @ti.kernel
-    def jacobian_cal(self, dL):
+    def jacobian_cal(self, dL):     # dL的类型需要给,i*1 vector
         """
         Calculate the Jacobian matrix. Symbols are the same as DiffPD paper.
         :param dL: \partial L / \partial x, the gradient of the Lagrangian function
         :return:
         """
-        # Construct \Delta A
-        for i in range(self.ELEMENT_NUM):
+        A = self.lhs
+        dA = self.rhs_dA
+        z_k = 
+        z_k1 = 
+        for itr in range(10):
+            
             
             # 如何构建一个迭代公式，选择初始值
 
@@ -568,6 +579,17 @@ class SoftObject:
             node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(node_pos_new_np)
             # print(f'itr: {itr}, {node_pos_new_np}')
+
+        # DiffPD iterate z
+        self.partial_p()
+        dA = self.rhs_dA.to_numpy()
+        dL = self.dL.to_numpy()
+        z = self.z.to_numpy()
+        for itr in ti.static(range(10)):
+            rhs_diff_np = dA @ z + dL
+            z_new = self.pre_fact_lhs_solve(rhs_diff_np)
+            z = z_new
+        self.z.from_numpy(z_new)
 
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
