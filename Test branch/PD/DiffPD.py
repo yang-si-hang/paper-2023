@@ -3,13 +3,15 @@ Apply differentiable PD in simulation.
 """
 
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=False)
+ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
 from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
+import warnings
+import pdb
 
 
 @ti.data_oriented
@@ -479,6 +481,24 @@ class SoftObject:
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
 
 
+    def test_partial_p(self):
+        A_i = self.A[0].to_numpy()
+        ia, ib ,ic = self.element[0].to_numpy()
+        a, b, c = self.node_pos[ia].to_numpy(), self.node_pos[ib].to_numpy(), self.node_pos[ic].to_numpy()
+        D_i = np.array([b-a, c-a]).T
+        F_i = D_i @ self.B[0].to_numpy()
+        U, sig, V = np.linalg.svd(F_i)
+
+        A_tmp = np.array([[sig[0], 0.], [0., sig[1]]])
+        for m, n in ti.ndrange(self.dim, self.dim):
+            B_tmp = np.array([U[m,1]*V[n,0], -U[m,0]*V[n,1]])
+            UV = np.linalg.inv(A_tmp) @ B_tmp
+            Omega_U = np.array([[0., UV[0]], [-UV[0], 0.]])
+            Omega_V = np.array([[0., UV[1]], [-UV[1], 0.]])
+            dT_df = U @ Omega_U @ V.T + U @ Omega_V @ V.T
+            dT_df_vec = np.array([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
+
+
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
         window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
@@ -563,13 +583,26 @@ class SoftObject:
 
         # DiffPD iterate z
         self.partial_p()
+        # self.test_partial_p()
         dA = self.rhs_dA.to_numpy()
         dL = self.dL.to_numpy()
         z = self.z.to_numpy()
-        for itr in ti.static(range(10)):
-            rhs_diff_np = dA @ z + dL
-            z_new = self.pre_fact_lhs_solve(rhs_diff_np)
-            z = z_new
+        # print('AT_dT_dq:', self.AT_dT_dq.to_numpy())
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter('error')
+            try:
+                for itr in ti.static(range(10)):
+                    rhs_diff_np = dA @ z + dL
+                    z_new = self.pre_fact_lhs_solve(rhs_diff_np)
+                    z = z_new
+            except RuntimeWarning as e:
+                pdb.set_trace()
+                    # for i in ti.static(self.fix_particle_list):
+                    #     z[i*self.dim] = 0.
+                    #     z[i*self.dim+1] = 0.
+                    # for i in ti.static(self.grasp_particle_list):
+                    #     z[i*self.dim] = 0.
+                    #     z[i*self.dim+1] = 0.
         self.z.from_numpy(z_new)
 
         self.update_vel_pos()
@@ -658,8 +691,13 @@ def main():
 
     window = soft_obj.window
     # while window.running:
-    for i in range(500):
+    # Change the iteration number from 500 to 100
+    for i in range(100):
         soft_obj.substep()
+
+    # Following lines for test!
+    np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
+    exit(0)
 
     soft_obj.lhs.fill(0.)
     soft_obj.precomputation()
