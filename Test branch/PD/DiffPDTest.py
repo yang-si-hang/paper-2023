@@ -452,8 +452,8 @@ class SoftObject:
                 # Subscript [0,1] due to the 2D
                 B_tmp = tm.vec2(U[m,1]*V[n,0], -U[m,0]*V[n,1])
                 UV = A_tmp.inverse() @ B_tmp
-                Omega_U = tm.mat2([0., UV[0]], [-UV[0], 0.])
-                Omega_V = tm.mat2([0., UV[1]], [-UV[1], 0.])
+                Omega_U = tm.mat2([0., -UV[0]], [UV[0], 0.])
+                Omega_V = tm.mat2([0., -UV[1]], [UV[1], 0.])
                 # T=Bq
                 dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
                 dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
@@ -483,22 +483,58 @@ class SoftObject:
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
 
 
-    def test_partial_p(self):
-        A_i = self.A[0].to_numpy()
-        ia, ib ,ic = self.element[0].to_numpy()
-        a, b, c = self.node_pos[ia].to_numpy(), self.node_pos[ib].to_numpy(), self.node_pos[ic].to_numpy()
-        D_i = np.array([b-a, c-a]).T
-        F_i = D_i @ self.B[0].to_numpy()
-        U, sig, V = np.linalg.svd(F_i)
+    def partial_p_np(self):
+        """
+        Calculate $\partial q/\partial q$
+        :return:
+        """
+        for i in range(self.ELEMENT_NUM):
+            A_i = self.A[i].to_numpy()
+            ia, ib, ic = self.element[i].to_numpy()
+            a, b, c = self.node_pos[ia].to_numpy(), self.node_pos[ib].to_numpy(), \
+                      self.node_pos[ic].to_numpy()
+            D_i = np.column_stack([b - a, c - a])
+            F_i = np.dot(D_i, self.B[i]).astype(np.float64)
+            U, sig, V = np.linalg.svd(F_i)
 
-        A_tmp = np.array([[sig[0], 0.], [0., sig[1]]])
-        for m, n in ti.ndrange(self.dim, self.dim):
-            B_tmp = np.array([U[m,1]*V[n,0], -U[m,0]*V[n,1]])
-            UV = np.linalg.inv(A_tmp) @ B_tmp
-            Omega_U = np.array([[0., UV[0]], [-UV[0], 0.]])
-            Omega_V = np.array([[0., UV[1]], [-UV[1], 0.]])
-            dT_df = U @ Omega_U @ V.T + U @ Omega_V @ V.T
-            dT_df_vec = np.array([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
+            # Solve a linear equations
+            # Position dimension is 2
+            A_tmp = np.array([[sig[0], sig[1]], [sig[1], sig[0]]])
+            dT_df = np.zeros((4, 4))
+            for m in range(self.dim):
+                for n in range(self.dim):
+                    B_tmp = np.array([U[m, 1] * V[n, 0], -U[m, 0] * V[n, 1]])
+                    UV = np.linalg.inv(A_tmp).dot(B_tmp)
+                    Omega_U = np.array([[0., -UV[0]], [UV[0], 0.]])
+                    Omega_V = np.array([[0., -UV[1]], [UV[1], 0.]])
+                    dT_df_mn = U.dot(Omega_U).dot(V.T) + U.dot(Omega_V).dot(V.T)
+                    dT_df_mn_vec = np.array([dT_df_mn[0, 0], dT_df_mn[0, 1], dT_df_mn[1, 0], dT_df_mn[1, 1]])
+                    dT_df[:,m*self.dim+n] = dT_df_mn_vec
+            self.dT_dF[i] = dT_df
+
+            dF_dq = A_i
+
+            # Strain constraint，4*6 matrix
+            self.dT_dq[i] = np.dot(self.dT_dF[i], dF_dq)
+
+            # Element AT_dT_dq
+            self.AT_dT_dq[i] = np.dot(A_i.T, self.dT_dq[i])
+
+        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
+        dim = self.dim
+        for i in range(self.ELEMENT_NUM):
+            weight = self.strain_weight[i]
+            ia, ib, ic = self.element[i]
+            ia_x, ia_y = ia * dim, ia * dim + 1
+            ib_x, ib_y = ib * dim, ib * dim + 1
+            ic_x, ic_y = ic * dim, ic * dim + 1
+            q_idx_vec = np.array([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
+            for row_idx in range(6):
+                for col_idx in range(6):
+                    rhs_row_idx = q_idx_vec[row_idx]
+                    rhs_col_idx = q_idx_vec[col_idx]
+                    self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][
+                        row_idx, col_idx]
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -572,6 +608,7 @@ class SoftObject:
     def substep(self):
         self.construct_sn()
         self.warm_up()
+        np.savetxt('lhs.csv', self.lhs.to_numpy(), fmt='%f', delimiter=',')
         # Local sovle needs iteration
         for itr in ti.static(range(self.solve_iteration)):
             self.local_solve()
@@ -583,6 +620,11 @@ class SoftObject:
             self.update_pos_new(node_pos_new_np)
             # print(f'itr: {itr}, {node_pos_new_np}')
 
+        self.update_vel_pos()
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+
+
+        self.partial_p_np()
         # DiffPD iterate z
         self.partial_p()
         # self.test_partial_p()
@@ -612,9 +654,6 @@ class SoftObject:
         #         z[i*self.dim] = 0.
         #         z[i*self.dim+1] = 0.
         self.z.from_numpy(z_new)
-
-        self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
     @ti.kernel
@@ -664,7 +703,7 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1)
     soft_obj.preset()
 
     marker_point = np.array([
