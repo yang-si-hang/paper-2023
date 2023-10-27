@@ -112,11 +112,28 @@ def partial_p_test():
     qa, qb, ac = node_pos[0], node_pos[1], node_pos[2]
     D = ti.Matrix.cols([qb - qa, ac - qa])
     F = D @ B[0]
+    # Numpy svd is U@diag(S)@V
     U, S, V = np.linalg.svd(F)
 
     dT_dF = np.zeros((4, 4))
-    A_tmp = np.array([[S[0], S[1]], [S[1], S[0]]])
+    for i, j in np.ndindex(2, 2):
+        Omega_uv = np.zeros((2, 2))
+        Omega_uv[0, 1] = (U[i, 0]*V[1, j] - U[i, 1]*V[0, j])/(S[0] + S[1])
+        Omega_uv[1, 0] = -Omega_uv[0, 1]
+        dT_df = U @ Omega_uv @ V
+        dT_df_vec = dT_df.reshape(-1, order='C')
+        dT_dF[:, 2*i+j] = dT_df_vec
 
+    dT = dT_dF @ A_np
+    AT_dT_dq = weight * dT
+
+    q_idx_vec = [0, 1, 2, 3, 4, 5]
+    for row_idx, col_idx in np.ndindex(6, 6):
+        rhs_row_idx = q_idx_vec[row_idx]
+        rhs_col_idx = q_idx_vec[col_idx]
+        Rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
+
+    """
     S_eps = ti.abs(S[0] - S[1])
     # Two same singualr values
     if S_eps < 1e-5:
@@ -144,6 +161,7 @@ def partial_p_test():
         rhs_row_idx = q_idx_vec[row_idx]
         rhs_col_idx = q_idx_vec[col_idx]
         Rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
+    """
 
 
 def warm_up():

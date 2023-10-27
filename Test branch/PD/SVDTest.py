@@ -38,8 +38,6 @@ def main():
     for i in range(6):
         q_tmp = q.copy()
         q_tmp[i] += eps
-        # D_tmp = np.array([[q_tmp[2] - q_tmp[0], q_tmp[3] - q_tmp[1]],
-        #                   [q_tmp[4] - q_tmp[0], q_tmp[5] - q_tmp[1]]])
         D_tmp = np.array([[q_tmp[2] - q_tmp[0], q_tmp[4] - q_tmp[0]],
                           [q_tmp[3] - q_tmp[1], q_tmp[5] - q_tmp[1]]])
         # D_tmp = D_tmp.T
@@ -64,8 +62,6 @@ def main():
     for i in range(6):
         q_tmp = q.copy()
         q_tmp[i] += eps
-        # D_tmp = np.array([[q_tmp[2]-q_tmp[0],q_tmp[3]-q_tmp[1]],
-        #                   [q_tmp[4]-q_tmp[0],q_tmp[5]-q_tmp[1]]])
         D_tmp = np.array([[q_tmp[2] - q_tmp[0], q_tmp[4] - q_tmp[0]],
                           [q_tmp[3] - q_tmp[1], q_tmp[5] - q_tmp[1]]])
         # D_tmp = D_tmp.T
