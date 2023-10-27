@@ -1,0 +1,271 @@
+"""
+This file is used to implement the DiffPD method for a triangle element.
+"""
+
+import taichi as ti
+ti.init(arch=ti.cpu, debug=True)
+import numpy as np
+from scipy import sparse
+import warnings
+
+
+weight = 1.
+dt = 1./50
+node_pos_init = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_pos = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_pos_new = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_vel = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_mass = ti.field(dtype=ti.f32, shape=3)
+
+node_show = ti.Vector.field(3, dtype=ti.f32, shape=3)
+edge_show = ti.Vector.field(2, dtype=ti.i32, shape=3)
+
+A = ti.Matrix.field(4, 6, dtype=ti.f32, shape=1)
+B = ti.Matrix.field(2, 2, dtype=ti.f32, shape=1)
+Bp = ti.Matrix.field(2, 2, dtype=ti.f32, shape=1)
+
+sn = ti.field(ti.f32, shape=6)
+Lhs = ti.field(ti.f32, shape=(6, 6))
+Rhs = ti.field(ti.f32, shape=6)
+Rhs_dA = ti.field(ti.f32, shape=(6, 6))
+z = ti.field(ti.f32, shape=6)
+dL = ti.field(ti.f32, shape=6)
+dL.fill(1.)
+
+
+def mesh_init():
+    node_pos_init_np = np.array([[0.0, 0.0],
+                                 [0.1, 0.0],
+                                 [0.0, 0.1]])
+    node_pos_init.from_numpy(node_pos_init_np)
+    node_vel.fill(0.)
+    node_pos.copy_from(node_pos_init)
+
+
+def construct_mass():
+    for i in range(3):
+        node_mass[i] = 1./3
+
+
+def precomputation():
+    pa, pb, pc = node_pos_init[0], node_pos_init[1], node_pos_init[2]
+    B[0] = ti.Matrix.cols([pb - pa, pc - pa]).inverse()
+
+    Ba, Bb, Bc, Bd = B[0][0, 0], B[0][0, 1], B[0][1, 0], B[0][1, 1]
+
+    A[0][0, 0] = -Ba - Bc
+    A[0][0, 2] = Ba
+    A[0][0, 4] = Bc
+    A[0][1, 0] = -Bb - Bd
+    A[0][1, 2] = Bb
+    A[0][1, 4] = Bd
+    A[0][2, 1] = -Ba - Bc
+    A[0][2, 3] = Ba
+    A[0][2, 5] = Bc
+    A[0][3, 1] = -Bb - Bd
+    A[0][3, 3] = Bb
+    A[0][3, 5] = Bd
+
+    A_np = A[0].to_numpy()
+
+    Lhs.from_numpy(weight*A_np.transpose() @ A_np)
+
+    for i in range(3):
+        Lhs[2*i, 2*i] += node_mass[i]/dt**2
+        Lhs[2*i+1, 2*i+1] += node_mass[i]/dt**2
+
+
+def construct_sn():
+    for i in range(3):
+        pos = node_pos[i]
+        vel = node_vel[i]
+        sn[i] = pos[0] + dt*vel[0]
+        sn[i+1] = pos[1] + dt*vel[1]
+
+
+@ti.kernel
+def local_solve():
+    pa, pb, pc = node_pos_new[0], node_pos_new[1], node_pos_new[2]
+    D = ti.Matrix.cols([pb - pa, pc - pa])
+    # F = ti.cast(D @ B[0], ti.f32)
+    F = D @ B[0]
+
+    U, S, V = ti.svd(F)
+    Bp[0] = U @ V.transpose()
+
+
+def construct_Rhs():
+    for i in range(3):
+        Rhs[i] = node_mass[i]*sn[i]/dt**2
+
+    Bp_vec = ti.Vector([Bp[0][0, 0], Bp[0][0, 1], Bp[0][1, 0], Bp[0][1, 1]])
+    AT_Bp = A[0].transpose() @ Bp_vec
+
+    AT_Bp *= weight
+
+    for i in range(6):
+        Rhs[i] += AT_Bp[i]
+
+
+def partial_p_test():
+    A_np = A[0].to_numpy()
+    qa, qb, ac = node_pos[0], node_pos[1], node_pos[2]
+    D = ti.Matrix.cols([qb - qa, ac - qa])
+    F = D @ B[0]
+    U, S, V = np.linalg.svd(F)
+
+    dT_dF = np.zeros((4, 4))
+    A_tmp = np.array([[S[0], S[1]], [S[1], S[0]]])
+
+    S_eps = ti.abs(S[0] - S[1])
+    # Two same singualr values
+    if S_eps < 1e-5:
+        S_tmp = (S[0] + S[1])/2
+        dT_dF = S_tmp * np.eye(4)
+    else:
+        for m, n in ti.ndrange(2, 2):
+            B_tmp = np.array([U[m,1]*V[n,0], -U[m,0]*V[n,1]])
+            UV = np.linalg.inv(A_tmp) @ B_tmp
+            Omega_U = np.array([[0., -UV[0]], [UV[0], 0.]])
+            Omega_V = np.array([[0., -UV[1]], [UV[1], 0.]])
+
+            dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
+            dT_df_vec = np.array([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
+
+            dT_dF[:, 2*m+n] = dT_df_vec
+
+    dF_dq = A[0].to_numpy()
+
+    dT_dq = dT_dF @ dF_dq
+    AT_dT_dq = A_np.transpose() @ dT_dq
+
+    q_idx_vec = [0, 1, 2, 3, 4, 5]
+    for row_idx, col_idx in ti.ndrange(6, 6):
+        rhs_row_idx = q_idx_vec[row_idx]
+        rhs_col_idx = q_idx_vec[col_idx]
+        Rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
+
+
+def warm_up():
+    for i in range(3):
+        node_pos_new[i].x = sn[2*i]
+        node_pos_new[i].y = sn[2*i+1]
+
+
+def update_pos_new(sol):
+    for i in range(3):
+        node_pos_new[i].x = sol[2*i]
+        node_pos_new[i].y = sol[2*i+1]
+
+
+def update_pos():
+    for i in range(3):
+        node_vel[i] = (node_pos_new[i] - node_pos[i])/dt
+        node_pos[i] = node_pos_new[i]
+
+
+def gui_set(pos, target, FOV=60):
+    # init the window, canvas, scene and camerea
+    window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
+    scene = ti.ui.Scene()
+    camera = ti.ui.Camera()
+
+    # initialize camera position
+    camera.position(pos[0], pos[1], pos[2])
+    camera.lookat(target[0], target[1], target[2])
+    camera.projection_mode(ti.ui.ProjectionMode.Perspective)
+    # 设置相机的向上轴的方向，在相机模型中是-Y轴
+    camera.up(0., 0., -1.)
+    camera.z_near(0.01)
+    camera.fov(FOV)
+
+    # set the camera, you can move around by pressing 'wasdeq'
+    camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
+    scene.set_camera(camera)
+
+    # set the light
+    scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+    # scene.point_light(pos=(0.01, 0, 3), color=(1., 1., 1.))
+    scene.ambient_light((1., 1., 1.))
+    return window, camera, scene
+
+
+def show_preset():
+    edge_np = np.array([[0, 1], [1, 2], [2, 0]])
+    edge_show.from_numpy(edge_np)
+
+
+def gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
+    """
+    Show the GUI
+    """
+    if SHOW_FLAG is False:
+        return
+    scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+    scene.ambient_light((0.8, 0.8, 0.8))
+    # the conversion of object particles, etc. the ggui of the taichi only support float32
+    node_show.from_numpy(np.insert(node_pos.to_numpy(dtype=np.float32), 1, np.zeros(3), axis=1))
+
+    # particle_test = ti.Vector.field(3, dtype=ti.f32, shape=1)
+    # particle_test[0] = ti.Vector([0.0, 0., -0.0])
+
+    scene.particles(node_show, radius=0.001, color=(0., 0., 0.))
+    scene.lines(node_show, width=1., indices=edge_show, color=(0., 0., 0.))
+    # scene.particles(particle_marker, radius=0.001, color=(1., 0., 0.))
+    # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
+    canvas.scene(scene)
+    canvas.set_background_color((1.0, 1.0, 1.0))
+    if WRITE_FLAG is True:
+        window.save_image(f'FigureWrite/{itr_num}.png')
+    window.show()
+
+
+def preset():
+    window, camera, scene = gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
+    canvas = window.get_canvas()
+    show_preset()
+    return window, canvas, scene
+
+
+def substep(pre_fact_Lhs_solve):
+    construct_sn()
+    warm_up()
+    for itr in range(10):
+        local_solve()
+        construct_Rhs()
+        node_pos_new_np = pre_fact_Lhs_solve(Rhs.to_numpy())
+        update_pos_new(node_pos_new_np)
+
+    partial_p_test()
+    dA_np = Rhs_dA.to_numpy()
+    dL_np = dL.to_numpy()
+    z_np = z.to_numpy()
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter('error')
+        try:
+            for itr in ti.static(range(10)):
+                rhs_diff_np = dA_np @ z_np + dL_np
+                z_new_np = pre_fact_Lhs_solve(rhs_diff_np)
+                z_np = z_new_np
+        except RuntimeWarning as e:
+            print(z_np)
+    print('Gradient p:', z_np)
+
+
+def main():
+    window, canvas, scene = preset()
+    mesh_init()
+    construct_mass()
+    precomputation()
+    Lhs_np = Lhs.to_numpy()
+    s_Lhs_np = sparse.csr_matrix(Lhs_np)
+    pre_fact_Lhs_solve = sparse.linalg.factorized(s_Lhs_np)
+
+    for i in range(100):
+        substep(pre_fact_Lhs_solve)
+        print('Node postions:', node_pos.to_numpy())
+        gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+
+
+if __name__ == '__main__':
+    main()

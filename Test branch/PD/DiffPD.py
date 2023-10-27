@@ -451,9 +451,9 @@ class SoftObject:
             for m,n in ti.ndrange(self.dim, self.dim):
                 # Subscript [0,1] due to the 2D
                 B_tmp = tm.vec2(U[m,1]*V[n,0], -U[m,0]*V[n,1])
-                UV = A_tmp.inverse() @ B_tmp
-                Omega_U = tm.mat2([0., UV[0]], [-UV[0], 0.])
-                Omega_V = tm.mat2([0., UV[1]], [-UV[1], 0.])
+                UV = A_tmp.inverse() @ B_tmp            # UV is \Omega_U_{1,0}, \Omega_V_{1,0}
+                Omega_U = tm.mat2([0., -UV[0]], [UV[0], 0.])
+                Omega_V = tm.mat2([0., -UV[1]], [UV[1], 0.])
                 # T=Bq
                 dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
                 dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
@@ -481,24 +481,6 @@ class SoftObject:
                 rhs_row_idx = q_idx_vec[row_idx]
                 rhs_col_idx = q_idx_vec[col_idx]
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
-
-
-    def test_partial_p(self):
-        A_i = self.A[0].to_numpy()
-        ia, ib ,ic = self.element[0].to_numpy()
-        a, b, c = self.node_pos[ia].to_numpy(), self.node_pos[ib].to_numpy(), self.node_pos[ic].to_numpy()
-        D_i = np.array([b-a, c-a]).T
-        F_i = D_i @ self.B[0].to_numpy()
-        U, sig, V = np.linalg.svd(F_i)
-
-        A_tmp = np.array([[sig[0], 0.], [0., sig[1]]])
-        for m, n in ti.ndrange(self.dim, self.dim):
-            B_tmp = np.array([U[m,1]*V[n,0], -U[m,0]*V[n,1]])
-            UV = np.linalg.inv(A_tmp) @ B_tmp
-            Omega_U = np.array([[0., UV[0]], [-UV[0], 0.]])
-            Omega_V = np.array([[0., UV[1]], [-UV[1], 0.]])
-            dT_df = U @ Omega_U @ V.T + U @ Omega_V @ V.T
-            dT_df_vec = np.array([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
 
 
     def gui_set(self, pos, target, FOV=60):
