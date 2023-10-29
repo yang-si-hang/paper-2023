@@ -1,6 +1,9 @@
 """
 This file is used to implement minimize loss by DiffPD method for a triangle element.
 Gradient of Loss w.r.t. p is computed by DiffTaichi.
+- The forward simulation doesn't work!
+- construct sn has checked.
+  Next check local solve
 """
 
 import taichi as ti
@@ -84,8 +87,11 @@ def construct_sn():
         vel = node_vel[i]
         mass = node_mass[i]
         force = node_force[i]
-        sn[i] = pos[0] + dt*vel[0] + dt**2*force[0]/mass
-        sn[i+1] = pos[1] + dt*vel[1] + dt**2*force[1]/mass
+        sn[2*i] = pos[0] + dt*vel[0] + dt**2*force[0]/mass
+        sn[2*i+1] = pos[1] + dt*vel[1] + dt**2*force[1]/mass
+    # print('node_pos:', node_pos[0][1])
+    # print('sn:', sn[1])
+    # print('force add:', dt**2*node_force[0][1]/node_mass[0])
 
 
 @ti.kernel
