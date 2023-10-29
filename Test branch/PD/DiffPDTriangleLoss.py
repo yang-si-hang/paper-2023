@@ -1,9 +1,11 @@
 """
-This file is used to implement forward simulation by DiffPD method for a triangle element.
+This file is used to implement minimize loss by DiffPD method for a triangle element.
+Gradient of Loss w.r.t. p is computed by DiffTaichi.
 """
 
 import taichi as ti
 ti.init(arch=ti.cpu, debug=True)
+import taichi.math as tm
 import numpy as np
 from scipy import sparse
 import warnings
@@ -12,9 +14,10 @@ import warnings
 weight = 1.
 dt = 1./50
 node_pos_init = ti.Vector.field(2, dtype=ti.f32, shape=3)
-node_pos = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_pos = ti.Vector.field(2, dtype=ti.f32, shape=3, needs_grad=True)
 node_pos_new = ti.Vector.field(2, dtype=ti.f32, shape=3)
 node_vel = ti.Vector.field(2, dtype=ti.f32, shape=3)
+node_force = ti.Vector.field(2, dtype=ti.f32, shape=3)
 node_mass = ti.field(dtype=ti.f32, shape=3)
 
 node_show = ti.Vector.field(3, dtype=ti.f32, shape=3)
@@ -29,8 +32,8 @@ Lhs = ti.field(ti.f32, shape=(6, 6))
 Rhs = ti.field(ti.f32, shape=6)
 Rhs_dA = ti.field(ti.f32, shape=(6, 6))
 z = ti.field(ti.f32, shape=6)
-dL = ti.field(ti.f32, shape=6)
-dL.fill(1.)
+L = ti.field(ti.f32, shape=(), needs_grad=True)
+dL_f = ti.field(ti.f32, shape=6)
 
 
 def mesh_init():
@@ -79,8 +82,10 @@ def construct_sn():
     for i in range(3):
         pos = node_pos[i]
         vel = node_vel[i]
-        sn[i] = pos[0] + dt*vel[0]
-        sn[i+1] = pos[1] + dt*vel[1]
+        mass = node_mass[i]
+        force = node_force[i]
+        sn[i] = pos[0] + dt*vel[0] + dt**2*force[0]/mass
+        sn[i+1] = pos[1] + dt*vel[1] + dt**2*force[1]/mass
 
 
 @ti.kernel
@@ -162,6 +167,27 @@ def partial_p_test():
         rhs_col_idx = q_idx_vec[col_idx]
         Rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq[row_idx, col_idx]
     """
+
+
+@ti.kernel
+def compute_L():
+    a, b, c = node_pos[0], node_pos[1], node_pos[2]
+    ab, ac = b - a, c - a
+    area_current  =ti.abs(ab.cross(ac))/2.
+    L[None] = (area_current - 0.8)**2
+
+
+def derivative():
+    partial_p_test()
+    dA_np = Rhs_dA.to_numpy()
+    dq_np = node_pos.grad.to_numpy().reshape(-1, order='C')
+    z_np = z.to_numpy()
+    for itr in ti.static(range(10)):
+        rhs_diff_np = dA_np @ z_np + dq_np
+        z_new_np = np.linalg.solve(Lhs.to_numpy(), rhs_diff_np)
+        z_np = z_new_np
+
+    dL_f.from_numpy(z_np.transpose())
 
 
 def warm_up():
@@ -254,34 +280,56 @@ def substep(pre_fact_Lhs_solve):
         node_pos_new_np = pre_fact_Lhs_solve(Rhs.to_numpy())
         update_pos_new(node_pos_new_np)
 
-    partial_p_test()
-    dA_np = Rhs_dA.to_numpy()
-    dL_np = dL.to_numpy()
-    z_np = z.to_numpy()
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter('error')
-        try:
-            for itr in ti.static(range(10)):
-                rhs_diff_np = dA_np @ z_np + dL_np
-                z_new_np = pre_fact_Lhs_solve(rhs_diff_np)
-                z_np = z_new_np
-        except RuntimeWarning as e:
-            print(z_np)
-    print('Gradient p:', z_np)
+    with ti.ad.Tape(loss=L):
+        compute_L()
+    print('Loss:', L)
+
+    print('Node gradient', node_pos.grad.to_numpy())
+    derivative()
+    # update(0.1)
+
+    node_force[0] = ti.Vector([0., -9.8])
+
+    # partial_p_test()
+    # dA_np = Rhs_dA.to_numpy()
+    # dL_np = dL.to_numpy()
+    # z_np = z.to_numpy()
+    # with warnings.catch_warnings(record=True):
+    #     warnings.simplefilter('error')
+    #     try:
+    #         for itr in ti.static(range(10)):
+    #             rhs_diff_np = dA_np @ z_np + dL_np
+    #             z_new_np = pre_fact_Lhs_solve(rhs_diff_np)
+    #             z_np = z_new_np
+    #     except RuntimeWarning as e:
+    #         print(z_np)
+    # print('Gradient p:', z_np)
+
+
+@ti.kernel
+def update(learning_rate: ti.f32):
+    for i in node_force:
+        node_force[i] -= learning_rate*dL_f[i]
+
+
+def init_vel():
+    node_force[0] = ti.Vector([0., -9.8])
 
 
 def main():
     window, canvas, scene = preset()
     mesh_init()
     construct_mass()
+    init_vel()
     precomputation()
     Lhs_np = Lhs.to_numpy()
     s_Lhs_np = sparse.csr_matrix(Lhs_np)
     pre_fact_Lhs_solve = sparse.linalg.factorized(s_Lhs_np)
 
-    for i in range(100):
+    for i in range(50):
         substep(pre_fact_Lhs_solve)
         print('Node postions:', node_pos.to_numpy())
+        print('Node force:', node_force.to_numpy())
         gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
