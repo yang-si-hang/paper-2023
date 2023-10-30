@@ -258,6 +258,7 @@ def substep(pre_fact_Lhs_solve):
     dA_np = Rhs_dA.to_numpy()
     dL_np = dL.to_numpy()
     z_np = z.to_numpy()
+    """
     with warnings.catch_warnings(record=True):
         warnings.simplefilter('error')
         try:
@@ -268,6 +269,12 @@ def substep(pre_fact_Lhs_solve):
         except RuntimeWarning as e:
             print(z_np)
     print('Gradient p:', z_np)
+    """
+    for itr in ti.static(range(10)):
+        rhs_diff_np = dA_np @ z_np + dL_np
+        z_new_np = pre_fact_Lhs_solve(rhs_diff_np)
+        z_np = z_new_np
+    print('Gradient p:', z_np)
 
 
 def main():
@@ -276,6 +283,7 @@ def main():
     construct_mass()
     precomputation()
     Lhs_np = Lhs.to_numpy()
+    print(Lhs_np)
     s_Lhs_np = sparse.csr_matrix(Lhs_np)
     pre_fact_Lhs_solve = sparse.linalg.factorized(s_Lhs_np)
 

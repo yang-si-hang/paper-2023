@@ -1,4 +1,5 @@
 """
+Check SVD gradient by using finite difference
 所有的矩阵每一个都应该检查维度，是否存在转置。以及每一个矩阵运算是否正确。
 """
 
@@ -6,8 +7,8 @@ import numpy as np
 
 
 def main():
-    a0, b0, c0 = np.array([0.,0.]), np.array([0.,1.]), np.array([1.,0.])
-    a, b, c = np.array([0.,0.]), np.array([-1.,1.]), np.array([1.,0.])
+    a0, b0, c0 = np.array([0.,0.]), np.array([0.1,0.]), np.array([0.,0.1])
+    a, b, c = np.array([0.,0.]), np.array([0.1,0.]), np.array([0.,0.1])
     q = np.hstack((a, b, c))
     B = np.vstack((b0 - a0, c0 - a0)).T
     D = np.vstack((b - a, c - a)).T
