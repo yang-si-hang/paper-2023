@@ -1,9 +1,6 @@
 """
 This file is used to implement minimize loss by DiffPD method for a triangle element.
 Gradient of Loss w.r.t. p is computed by DiffTaichi.
-- The forward simulation doesn't work!
-- construct sn has checked.
-  Next check local solve
 """
 
 import taichi as ti
@@ -42,12 +39,18 @@ dL_f = ti.field(ti.f32, shape=6)
 
 
 def mesh_init():
-    node_pos_init_np = np.array([[0.0, 0.0],
-                                 [0.1, 0.0],
-                                 [0.0, 0.1]])
+    # node_pos_init_np = np.array([[0.0, 0.0],
+    #                              [0.1, 0.0],
+    #                              [0.05, 0.05*np.sqrt(3.)]])
+    node_pos_init_np = 0.1*np.array([[0.0, np.sqrt(3.)/3.],
+                                 [-0.5, -np.sqrt(3.)/6.],
+                                 [0.5, -np.sqrt(3.)/6.]])
     node_pos_init.from_numpy(node_pos_init_np)
     node_vel.fill(0.)
     node_pos.copy_from(node_pos_init)
+
+    print('Node postions:\n', node_pos.to_numpy())
+    print('Gravity position: ', node_pos.to_numpy().sum(axis=0))
 
 
 def construct_mass():
@@ -336,6 +339,8 @@ def update(learning_rate: ti.f32):
         force_all_tmp -= node_force[i]
     force_all[None] = force_all_tmp/3.
     # print('force all: ', force_all_tmp)
+    # for i in range(3):
+    #     node_force[i] += force_all[None]
 
 
 def init_vel():
@@ -349,15 +354,17 @@ def main():
     # init_vel()
     precomputation()
     Lhs_np = Lhs.to_numpy()
-    s_Lhs_np = sparse.csr_matrix(Lhs_np)
+    s_Lhs_np = sparse.csc_matrix(Lhs_np)
     pre_fact_Lhs_solve = sparse.linalg.factorized(s_Lhs_np)
+
+
 
     for i in range(1000):
         substep(pre_fact_Lhs_solve)
-        print('Node postions:', node_pos.to_numpy())
-        # print('Gravity position: ', node_pos.to_numpy().sum(axis=0))
+        print('Node postions:\n', node_pos.to_numpy())
+        print('Gravity position: ', node_pos.to_numpy().sum(axis=0))
         print('Node force:\n', node_force.to_numpy())
-        # print('All force: ', node_force.to_numpy().sum(axis=0))
+        print('All force: ', node_force.to_numpy().sum(axis=0))
         gui_show(window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
 
