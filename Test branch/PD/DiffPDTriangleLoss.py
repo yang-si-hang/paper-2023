@@ -207,6 +207,14 @@ def derivative():
         z_new_np = np.linalg.solve(Lhs.to_numpy(), rhs_diff_np)
         z_np = z_new_np
 
+    # # Get gradient of position
+    # dq = np.zeros(2 * 3)
+    # for i in range(3):
+    #     idx0, idx1 = i * 2, i * 2 + 1
+    #     dq[idx0] = z_np[idx0] * node_mass[i] / dt ** 2
+    #     dq[idx1] = z_np[idx1] * node_mass[i] / dt ** 2
+    # print('dq:', dq)
+
     dL_f.from_numpy(z_np.transpose())
     print('Node gradient: ', dq_np)
     # print('Delta A gradient:\n', dA_np)

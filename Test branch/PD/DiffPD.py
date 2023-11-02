@@ -11,7 +11,7 @@ from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
 import warnings
-import pdb
+# import pdb
 import signal
 import sys
 
@@ -70,12 +70,15 @@ class SoftObject:
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         # Following is diffPD
-        self.dT_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                    # \partial Bp / \partial q
-        self.AT_dT_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                 # A^T * \partial Bp / \partial q
+        self.dBp_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.dBp_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # \partial Bp / \partial q
+        self.AT_dBp_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # A^T * \partial Bp / \partial q
         self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         
         self.dL.fill(1.)
         self.z.fill(1.)
@@ -86,7 +89,6 @@ class SoftObject:
 
         self.fix_particle_list = self.fix_particle_No()
         self.grasp_particle_list, _ = self.grasp_particle_No()
-
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -437,39 +439,35 @@ class SoftObject:
         Calculate $\partial q/\partial q$
         :return:
         """
+        dim = self.dim
         for i in range(self.ELEMENT_NUM):
             A_i = self.A[i]
             ia, ib ,ic = self.element[i]
             a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
+            # F = U @ sig @ V^T
             U, sig, V = ti.svd(F_i, ti.f64)
 
             # Solve a linear equations
             # Position dimension is 2
-            A_tmp = tm.mat2([sig[0,0], sig[1,1]], [sig[1,1], sig[0,0]])
-            for m,n in ti.ndrange(self.dim, self.dim):
+            for m,n in ti.ndrange(dim, dim):
                 # Subscript [0,1] due to the 2D
-                B_tmp = tm.vec2(U[m,1]*V[n,0], -U[m,0]*V[n,1])
-                UV = A_tmp.inverse() @ B_tmp            # UV is \Omega_U_{1,0}, \Omega_V_{1,0}
-                Omega_U = tm.mat2([0., -UV[0]], [UV[0], 0.])
-                Omega_V = tm.mat2([0., -UV[1]], [UV[1], 0.])
-                # T=Bq
-                dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
-                dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
-                # 根据f_i的顺序按列排列
-                self.dT_dF[i][:,self.dim*m+n] = dT_df_vec
-
-            dF_dq = A_i
+                Omega_UV = ti.Matrix([[0., 0.], [0., 0.]])
+                Omega_UV[0, 1] = (U[m,0]*V[n,1] - U[m,1]*V[n,0]) / (sig[0,0] + sig[1,1])
+                Omega_UV[1, 0] = -Omega_UV[0, 1]
+                dBp_df = U @ Omega_UV @ V.transpose()
+                dBp_df_vec = ti.Vector([dBp_df[0,0], dBp_df[0,1], dBp_df[1,0], dBp_df[1,1]])
+                self.dBp_dF[i][:,dim*m+n] = dBp_df_vec
 
             # Strain constraint，4*6 matrix
-            self.dT_dq[i] = self.dT_dF[i] @ dF_dq
+            self.dBp_dq[i] = self.dBp_dF[i] @ A_i
 
-            # Element AT_dT_dq
-            self.AT_dT_dq[i] = A_i.transpose() @ self.dT_dq[i]
+            # Element AT_dBp_dq
+            self.AT_dBp_dq[i] = A_i.transpose() @ self.dBp_dq[i]
 
         # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
-        dim = self.dim
+        self.rhs_dA.fill(0.)
         for i in range(self.ELEMENT_NUM):
             weight = self.strain_weight[i]
             ia, ib, ic = self.element[i]
@@ -480,7 +478,7 @@ class SoftObject:
             for row_idx, col_idx in ti.static(ti.ndrange(6,6)):
                 rhs_row_idx = q_idx_vec[row_idx]
                 rhs_col_idx = q_idx_vec[col_idx]
-                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
+                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -565,24 +563,23 @@ class SoftObject:
             self.update_pos_new(node_pos_new_np)
             # print(f'itr: {itr}, {node_pos_new_np}')
 
+        self.update_vel_pos()
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+
         # DiffPD iterate z
         self.partial_p()
         # self.test_partial_p()
         dA = self.rhs_dA.to_numpy()
         dL = self.dL.to_numpy()
-        z = self.z.to_numpy()
+        z_np = self.z.to_numpy()
         # print('AT_dT_dq:', self.AT_dT_dq.to_numpy())
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter('error')
-            try:
-                for itr in ti.static(range(10)):
-                    rhs_diff_np = dA @ z + dL
-                    z_new = self.pre_fact_lhs_solve(rhs_diff_np)
-                    z = z_new
-            except RuntimeWarning as e:
-                print(z)
-                np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
-                pdb.set_trace()
+        for itr in ti.static(range(10)):
+            rhs_diff_np = dA @ z_np + dL
+            z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
+            z_np = z_np_new
+        # print(z)
+        # np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
+
         # for itr in ti.static(range(10)):
         #     rhs_diff_np = dA @ z + dL
         #     z_new = self.pre_fact_lhs_solve(rhs_diff_np)
@@ -593,10 +590,13 @@ class SoftObject:
         #     for i in ti.static(self.grasp_particle_list):
         #         z[i*self.dim] = 0.
         #         z[i*self.dim+1] = 0.
-        self.z.from_numpy(z_new)
+        self.z.from_numpy(z_np)
 
-        self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
+            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+        print('dq:', self.displace.to_numpy())
 
 
     @ti.kernel
@@ -672,7 +672,7 @@ def main():
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
     # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    s_lhs_np = sparse.csr_matrix(lhs_np)
+    s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     # soft_obj.init_vel()
@@ -687,6 +687,7 @@ def main():
 
     # Following lines for test!
     np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
     exit(0)
 
     soft_obj.lhs.fill(0.)

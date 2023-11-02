@@ -24,6 +24,7 @@ class SoftObject:
         self.dt = 1./120
         self.rho = 1.145e3
         self.E = 5.e5
+        # self.E = 0.01
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
@@ -35,6 +36,7 @@ class SoftObject:
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
+        print('node_np:', node_np)
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
         self.edge_np = edge_np
 
@@ -86,7 +88,6 @@ class SoftObject:
 
         self.fix_particle_list = self.fix_particle_No()
         self.grasp_particle_list, _ = self.grasp_particle_No()
-
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -495,32 +496,32 @@ class SoftObject:
                       self.node_pos[ic].to_numpy()
             D_i = np.column_stack([b - a, c - a])
             F_i = np.dot(D_i, self.B[i]).astype(np.float64)
-            U, sig, V = np.linalg.svd(F_i)
+            U, S, V = np.linalg.svd(F_i)
 
             # Solve a linear equations
             # Position dimension is 2
-            A_tmp = np.array([[sig[0], sig[1]], [sig[1], sig[0]]])
-            dT_df = np.zeros((4, 4))
-            for m in range(self.dim):
-                for n in range(self.dim):
-                    B_tmp = np.array([U[m, 1] * V[n, 0], -U[m, 0] * V[n, 1]])
-                    UV = np.linalg.inv(A_tmp).dot(B_tmp)
-                    Omega_U = np.array([[0., -UV[0]], [UV[0], 0.]])
-                    Omega_V = np.array([[0., -UV[1]], [UV[1], 0.]])
-                    dT_df_mn = U.dot(Omega_U).dot(V.T) + U.dot(Omega_V).dot(V.T)
-                    dT_df_mn_vec = np.array([dT_df_mn[0, 0], dT_df_mn[0, 1], dT_df_mn[1, 0], dT_df_mn[1, 1]])
-                    dT_df[:,m*self.dim+n] = dT_df_mn_vec
-            self.dT_dF[i] = dT_df
+            # A_tmp = np.array([[sig[0], sig[1]], [sig[1], sig[0]]])
+            dT_dF_np = np.zeros((4, 4))
+            for m, n in np.ndindex(self.dim, self.dim):
+                Omega_UV = np.zeros((2, 2))
+                Omega_UV[0, 1] = (U[m,0]*V[1,n]-U[m,1]*V[0,n]) / (S[0]+S[1])
+                Omega_UV[1, 0] = -Omega_UV[0, 1]
+                dT_df = U @ Omega_UV @ V
+                dT_df_vec = dT_df.reshape(-1, order='C')
+                dT_dF_np[:, 2*m+n] = dT_df_vec
 
+            # self.dT_dF[i].from_numpy(dT_dF_np)
             dF_dq = A_i
-
             # Strain constraint，4*6 matrix
-            self.dT_dq[i] = np.dot(self.dT_dF[i], dF_dq)
+            self.dT_dq[i] = np.dot(dT_dF_np, dF_dq)
+            dT_dq_np = self.dT_dq[i].to_numpy()
 
             # Element AT_dT_dq
-            self.AT_dT_dq[i] = np.dot(A_i.T, self.dT_dq[i])
+            AT_dT_dq_tmp = np.dot(A_i.T, dT_dq_np)
+            # self.AT_dT_dq[i] = np.dot(A_i.T, self.dT_dq[i])
 
         # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
+        self.rhs_dA.fill(0.)
         dim = self.dim
         for i in range(self.ELEMENT_NUM):
             weight = self.strain_weight[i]
@@ -533,7 +534,7 @@ class SoftObject:
                 for col_idx in range(6):
                     rhs_row_idx = q_idx_vec[row_idx]
                     rhs_col_idx = q_idx_vec[col_idx]
-                    self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][
+                    self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq_tmp[
                         row_idx, col_idx]
 
 
@@ -623,37 +624,45 @@ class SoftObject:
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
-
         self.partial_p_np()
         # DiffPD iterate z
-        self.partial_p()
+        # self.partial_p()
         # self.test_partial_p()
         dA = self.rhs_dA.to_numpy()
         dL = self.dL.to_numpy()
-        z = self.z.to_numpy()
+        z_np = self.z.to_numpy()
         # print('AT_dT_dq:', self.AT_dT_dq.to_numpy())
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter('error')
-            try:
-                for itr in ti.static(range(10)):
-                    rhs_diff_np = dA @ z + dL
-                    z_new = self.pre_fact_lhs_solve(rhs_diff_np)
-                    z = z_new
-            except RuntimeWarning as e:
-                print(z)
-                np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
-                pdb.set_trace()
-        # for itr in ti.static(range(10)):
-        #     rhs_diff_np = dA @ z + dL
-        #     z_new = self.pre_fact_lhs_solve(rhs_diff_np)
-        #     z = z_new
-        #     for i in ti.static(self.fix_particle_list):
-        #         z[i*self.dim] = 0.
-        #         z[i*self.dim+1] = 0.
-        #     for i in ti.static(self.grasp_particle_list):
-        #         z[i*self.dim] = 0.
-        #         z[i*self.dim+1] = 0.
-        self.z.from_numpy(z_new)
+        # with warnings.catch_warnings(record=True):
+        #     warnings.simplefilter('error')
+        #     try:
+        #         for itr in ti.static(range(10)):
+        #             rhs_diff_np = dA @ z_np + dL
+        #             z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
+        #             z_np = z_np_new
+        #     except RuntimeWarning as e:
+        #         print(z_np)
+        #         np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
+        #         pdb.set_trace()
+        for itr in ti.static(range(10)):
+            rhs_diff_np = dA @ z_np + dL
+            z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
+            z_np = z_np_new
+            # for i in ti.static(self.fix_particle_list):
+            #     z[i*self.dim] = 0.
+            #     z[i*self.dim+1] = 0.
+            # for i in ti.static(self.grasp_particle_list):
+            #     z[i*self.dim] = 0.
+            #     z[i*self.dim+1] = 0.
+        self.z.from_numpy(z_np)
+
+        # Get gradient of position
+        # The difference between the inertial position gradient!!!
+        dq = np.zeros(2*self.PARTICLE_NUM)
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            dq[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
+            dq[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+        print('dq:', dq)
 
 
     @ti.kernel
@@ -729,7 +738,7 @@ def main():
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
     # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    s_lhs_np = sparse.csr_matrix(lhs_np)
+    s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     # soft_obj.init_vel()
@@ -743,54 +752,8 @@ def main():
         soft_obj.substep()
 
     # Following lines for test!
-    np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    exit(0)
-
-    soft_obj.lhs.fill(0.)
-    soft_obj.precomputation()
-    for i in ti.static(node_nearest_list):
-        q_i_x_idx = i * 2
-        q_i_y_idx = i * 2 + 1
-        soft_obj.lhs[q_i_x_idx, q_i_x_idx] += soft_obj.marker_mass
-        soft_obj.lhs[q_i_y_idx, q_i_y_idx] += soft_obj.marker_mass
-
-    lhs_np = soft_obj.lhs.to_numpy()
-    s_lhs_np = sparse.csr_matrix(lhs_np)
-    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-
-    soft_obj.GRASP_VEL[0] = ti.Vector([0., 0.])
-    # soft_obj.GRASP_VEL.x = 0.
-
-    for temp in range(900):
-        soft_obj.construct_sn()
-        soft_obj.warm_up()
-        for itr in ti.static(range(soft_obj.solve_iteration)):
-            soft_obj.local_solve()
-            soft_obj.construct_rhs()
-            for i in node_nearest_list:
-                pos_new_i = soft_obj.node_pos_new[i]
-                q_i_x_idx = i * 2
-                q_i_y_idx = i * 2 + 1
-                soft_obj.rhs[q_i_x_idx] += soft_obj.marker_mass * pos_new_i[0]
-                soft_obj.rhs[q_i_y_idx] += soft_obj.marker_mass * pos_new_i[1]
-            rhs_np = soft_obj.rhs.to_numpy()
-            # The solve step and update the position
-            node_pos_new_np = soft_obj.pre_fact_lhs_solve(rhs_np)
-            soft_obj.update_pos_new(node_pos_new_np)
-
-        for i in node_nearest_list:
-            soft_obj.node_pos_new[i] = soft_obj.node_pos[i] + ti.Vector([-0.005, 0.]) * soft_obj.dt
-        soft_obj.update_vel_pos()
-        soft_obj.gui_show(soft_obj.window, soft_obj.canvas, soft_obj.scene, SHOW_FLAG=True,
-                          WRITE_FLAG=False, itr_num=0)
-
-        j = 0
-        for i in node_nearest_list:
-            node_marker_show[j].x = soft_obj.node_pos[i].x
-            node_marker_show[j].y = 0.
-            node_marker_show[j].z = soft_obj.node_pos[i].y
-            print('node_pos:', soft_obj.node_pos[i])
-        soft_obj.scene.particles(node_marker_show, radius=0.001, color=(1., 0., 0.))
+    # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
+    print('z final:', soft_obj.z.to_numpy())
 
 
 if __name__ == '__main__':
