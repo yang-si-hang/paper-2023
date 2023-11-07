@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 raw_data = np.loadtxt('partial_displacement.csv')
 partial_x = raw_data[::2]  # 从索引0开始，每两个取一个
 partial_y = raw_data[1::2] # 从索引1开始，每两个取一个
-data = partial_y.reshape((10, 10))
+data_x = partial_x.reshape((10, 10))
+data_y = partial_y.reshape((10, 10))
 
 """ 
 # 3D 柱状图
@@ -40,6 +41,7 @@ cbar = plt.colorbar(mappable, ax=ax)
 cbar.set_label('Z Height')
 """
 
+data = data_x
 
 # 2D 热力图
 fig, ax = plt.subplots(figsize=(8, 6))

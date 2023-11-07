@@ -26,12 +26,12 @@ def substep():
 
 @ti.kernel
 def init():
-    # for i in q:
-    #     q[i] = ti.Vector([ti.random(), ti.random()])
+    for i in q:
+        q[i] = ti.Vector([ti.random(), ti.random()])
 
-    q[0] = ti.Vector([0., 0.])
-    q[1] = ti.Vector([0.1, 0.])
-    q[2] = ti.Vector([0., 0.1])
+    # q[0] = ti.Vector([0., 0.])
+    # q[1] = ti.Vector([0.1, 0.])
+    # q[2] = ti.Vector([0., 0.1])
 
 
 @ti.kernel

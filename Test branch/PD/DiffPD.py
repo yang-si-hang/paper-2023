@@ -80,7 +80,7 @@ class SoftObject:
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         
-        self.dL.fill(1.)
+        self.dL.fill(0.)
         self.z.fill(1.)
 
         self.construct_B()
@@ -318,10 +318,6 @@ class SoftObject:
                 self.rhs[q_ic_x_idx] += AT_Bp[4]
                 self.rhs[q_ic_y_idx] += AT_Bp[5]
 
-        # ti.loop_config(serialize=True)
-        # for i in self.rhs:
-        #     print('rhs:', self.rhs[i])
-
         # The positional mass constraint of the rhs matrix need match the lhs matrix
         for i in ti.static(self.fix_particle_list):
             pos_init = self.node_init_pos[i]
@@ -481,6 +477,35 @@ class SoftObject:
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
 
 
+    def construct_L(self):
+        idx = 11
+        direct_idx = 0
+        dim = self.dim
+        self.dL[idx*dim + direct_idx] = 1.
+
+
+    def diff_pd(self, itr_num:ti.i32):
+        """
+        The iterative method of DiffPD
+        :return:
+        """
+        self.partial_p()                # Calulate \partial p / \partial q, which is z
+        dA = self.rhs_dA.to_numpy()     # \Delta A in DiffPD iteration equation
+        par_L = self.dL.to_numpy()      # \partial L / \partial q in DiffPD iteration equation
+        z_np = self.z.to_numpy()
+        for itr in ti.static(range(itr_num)):
+            rhs_diff_np = dA @ z_np + par_L         # Right part of the DiffPD iteration equation
+            z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+            z_np = z_new_np
+        self.z.from_numpy(z_np)
+
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
+            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+        print('dq:', self.displace.to_numpy())
+
+
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
         window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
@@ -566,6 +591,10 @@ class SoftObject:
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
+        self.construct_L()
+        self.diff_pd(10)
+
+        """
         # DiffPD iterate z
         self.partial_p()
         # self.test_partial_p()
@@ -597,6 +626,7 @@ class SoftObject:
             self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
             self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
         print('dq:', self.displace.to_numpy())
+        """
 
 
     @ti.kernel

@@ -1,5 +1,7 @@
 """
 Apply DiffPD in simulation with two triangles.
+Test different mass of the particles.
+created on 11/07/2023
 """
 
 import taichi as ti
