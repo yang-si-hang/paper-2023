@@ -31,7 +31,7 @@ class SoftObject:
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.positional_mass = 1.e9
-        self.grasp_mass = 1.e9
+        self.grasp_mass = 0.
         self.marker_mass = 1.e9
         self.solve_iteration = 10
         self.dim = len(shape)
@@ -71,6 +71,7 @@ class SoftObject:
 
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2)
         self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
+        self.Aq = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         # Following is diffPD
@@ -174,6 +175,7 @@ class SoftObject:
         dim = self.dim
 
         for i in range(self.PARTICLE_NUM):
+            print('i:', i, 'node_mass:', self.node_mass[i]/self.dt**2)
             for d in ti.static(range(2)):
                 self.lhs[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
 
@@ -218,6 +220,7 @@ class SoftObject:
                         else:
                             weight = self.volume_weight[ele_idx]
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                        self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
         for i in ti.static(self.fix_particle_list):
             q_i_x_idx = i * dim
@@ -550,9 +553,9 @@ class SoftObject:
 
     def compute_L(self):
         dim = self.dim
-        node_idx = 1
+        node_idx = 0
         dim_idx = 0
-        self.L[dim*node_idx+dim_idx] = 1.
+        self.dL[dim*node_idx+dim_idx] = 1.
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -646,10 +649,10 @@ class SoftObject:
         self.partial_p_np()
         # DiffPD iterate z
         dA = self.rhs_dA.to_numpy()
-        dL = self.dL.to_numpy()
+        dL_np = self.dL.to_numpy()
         z_np = self.z.to_numpy()
-        for itr in ti.static(range(10)):
-            rhs_diff_np = dA @ z_np + dL
+        for itr in ti.static(range(20)):
+            rhs_diff_np = dA @ z_np + dL_np
             z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
             z_np = z_np_new
             # for i in ti.static(self.fix_particle_list):
@@ -663,11 +666,19 @@ class SoftObject:
         # Get gradient of position
         # The difference between the inertial position gradient!!!
         dq = np.zeros(2*self.PARTICLE_NUM)
+        coeff_tmp = np.zeros(2*self.PARTICLE_NUM)
         for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*self.dim, i*self.dim+1
-            dq[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
-            dq[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+            coeff_tmp[2*i] += self.node_mass[i] / self.dt**2
+            coeff_tmp[2*i+1] += self.node_mass[i] / self.dt**2
+        for i in ti.static(self.fix_particle_list):
+            coeff_tmp[2*i] += self.positional_mass
+            coeff_tmp[2*i+1] += self.positional_mass
+        for i in range(2*self.PARTICLE_NUM):
+            dq[i] = z_np[i] * coeff_tmp[i]
         print('dq:', dq)
+
+        np.savetxt('dq.csv', dq, fmt='%f', delimiter=',')
+        np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
 
 
     @ti.kernel
@@ -742,7 +753,8 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    np.savetxt('Aq.csv', soft_obj.Aq.to_numpy(), fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
@@ -753,12 +765,12 @@ def main():
     window = soft_obj.window
     # while window.running:
     # Change the iteration number from 500 to 100
-    for i in range(100):
+    for i in range(1):
         soft_obj.substep()
 
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    print('z final:', soft_obj.z.to_numpy())
+    # print('z final:', soft_obj.z.to_numpy())
 
 
 if __name__ == '__main__':
