@@ -1,5 +1,6 @@
 """
-This file simulates the compression of a soft object by Projective Dynamics.
+This file simulates the compression of a soft object by Projective Dynamics, which can align the
+ground truth of point cloud.
 """
 
 import taichi as ti
