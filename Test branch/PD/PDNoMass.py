@@ -27,7 +27,7 @@ class SoftObject:
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.02, 0.02]) / 5.
-        self.positional_weight = 0.
+        self.positional_weight = 1.e9
         self.positional_mass = 0.
         self.grasp_mass = 0.
         self.marker_mass = 0.

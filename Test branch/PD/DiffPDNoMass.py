@@ -1,8 +1,7 @@
 """
-Apply DiffPD in simulation with two triangles.
-Test different mass of the particles.
-created on 11/07/2023
+Execute DiffPD with normal mass distribution, which convert to positional constraint.
 """
+
 
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
@@ -13,7 +12,6 @@ from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
 import warnings
-import pdb
 import signal
 import sys
 
@@ -26,11 +24,10 @@ class SoftObject:
         self.dt = 1./120
         self.rho = 1.145e3
         self.E = 5.e5
-        # self.E = 0.01
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
-        self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
-        self.positional_weight = 1.e9
+        self.GRASP_VEL[0] = ti.Vector([0.02, 0.02]) / 5.
+        self.positional_weight = 0.
         self.positional_mass = 0.
         self.grasp_mass = 0.
         self.marker_mass = 0.
@@ -39,7 +36,6 @@ class SoftObject:
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
-        print('node_np:', node_np)
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
         self.edge_np = edge_np
 
@@ -72,16 +68,18 @@ class SoftObject:
 
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2)
         self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
-        self.Aq = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         # Following is diffPD
-        self.dT_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.dT_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                    # \partial Bp / \partial q
-        self.AT_dT_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)                 # A^T * \partial Bp / \partial q
+        self.dBp_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.dBp_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # \partial Bp / \partial q
+        self.AT_dBp_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # A^T * \partial Bp / \partial q
         self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         
         self.dL.fill(0.)
         self.z.fill(1.)
@@ -115,7 +113,7 @@ class SoftObject:
         LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
         WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
 
-        # Generate the nodes' position, x index changed first
+        # Generate the nodes' position
         xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
@@ -159,6 +157,7 @@ class SoftObject:
             self.element_volume[i] = element_volume_i
             self.strain_weight[i] = self.mu * 2 * element_volume_i
             self.volume_weight[i] = self.lam * self.dim * element_volume_i
+            # self.volume_weight[i] = 0.
 
 
     @ti.kernel
@@ -172,11 +171,11 @@ class SoftObject:
 
     @ti.kernel
     def precomputation(self):
+        # strain & volume contraint and positional constraint
         ELEMENT_NUM = self.ELEMENT_NUM
         dim = self.dim
 
         for i in range(self.PARTICLE_NUM):
-            print('i:', i, 'node_mass:', self.node_mass[i]/self.dt**2)
             for d in ti.static(range(2)):
                 self.lhs[i*dim + d, i*dim + d] += self.node_mass[i]/self.dt**2
 
@@ -221,7 +220,6 @@ class SoftObject:
                         else:
                             weight = self.volume_weight[ele_idx]
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                        self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
         # Positional constraint
         for par_idx in ti.static(self.fix_particle_list):
@@ -335,10 +333,6 @@ class SoftObject:
                 q_ic_y_idx = ic * dim + 1
                 self.rhs[q_ic_x_idx] += AT_Bp[4]
                 self.rhs[q_ic_y_idx] += AT_Bp[5]
-
-        # ti.loop_config(serialize=True)
-        # for i in self.rhs:
-        #     print('rhs:', self.rhs[i])
 
         for par_idx in ti.static(self.fix_particle_list):
             # B_i is identity dim*dim
@@ -465,39 +459,35 @@ class SoftObject:
         Calculate $\partial q/\partial q$
         :return:
         """
+        dim = self.dim
         for i in range(self.ELEMENT_NUM):
             A_i = self.A[i]
             ia, ib ,ic = self.element[i]
             a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
+            # F = U @ sig @ V^T
             U, sig, V = ti.svd(F_i, ti.f64)
 
             # Solve a linear equations
             # Position dimension is 2
-            A_tmp = tm.mat2([sig[0,0], sig[1,1]], [sig[1,1], sig[0,0]])
-            for m,n in ti.ndrange(self.dim, self.dim):
+            for m,n in ti.ndrange(dim, dim):
                 # Subscript [0,1] due to the 2D
-                B_tmp = tm.vec2(U[m,1]*V[n,0], -U[m,0]*V[n,1])
-                UV = A_tmp.inverse() @ B_tmp
-                Omega_U = tm.mat2([0., -UV[0]], [UV[0], 0.])
-                Omega_V = tm.mat2([0., -UV[1]], [UV[1], 0.])
-                # T=Bq
-                dT_df = U @ Omega_U @ V.transpose() + U @ Omega_V @ V.transpose()
-                dT_df_vec = ti.Vector([dT_df[0,0], dT_df[0,1], dT_df[1,0], dT_df[1,1]])
-                # 根据f_i的顺序按列排列
-                self.dT_dF[i][:,self.dim*m+n] = dT_df_vec
-
-            dF_dq = A_i
+                Omega_UV = ti.Matrix([[0., 0.], [0., 0.]])
+                Omega_UV[0, 1] = (U[m,0]*V[n,1] - U[m,1]*V[n,0]) / (sig[0,0] + sig[1,1])
+                Omega_UV[1, 0] = -Omega_UV[0, 1]
+                dBp_df = U @ Omega_UV @ V.transpose()
+                dBp_df_vec = ti.Vector([dBp_df[0,0], dBp_df[0,1], dBp_df[1,0], dBp_df[1,1]])
+                self.dBp_dF[i][:,dim*m+n] = dBp_df_vec
 
             # Strain constraint，4*6 matrix
-            self.dT_dq[i] = self.dT_dF[i] @ dF_dq
+            self.dBp_dq[i] = self.dBp_dF[i] @ A_i
 
-            # Element AT_dT_dq
-            self.AT_dT_dq[i] = A_i.transpose() @ self.dT_dq[i]
+            # Element AT_dBp_dq
+            self.AT_dBp_dq[i] = A_i.transpose() @ self.dBp_dq[i]
 
         # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
-        dim = self.dim
+        self.rhs_dA.fill(0.)
         for i in range(self.ELEMENT_NUM):
             weight = self.strain_weight[i]
             ia, ib, ic = self.element[i]
@@ -508,76 +498,36 @@ class SoftObject:
             for row_idx, col_idx in ti.static(ti.ndrange(6,6)):
                 rhs_row_idx = q_idx_vec[row_idx]
                 rhs_col_idx = q_idx_vec[col_idx]
-                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dT_dq[i][row_idx, col_idx]
+                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
 
 
-    def partial_p_np(self):
-        """
-        Calculate $\partial q/\partial q$
-        :return:
-        """
-        for i in range(self.ELEMENT_NUM):
-            A_i = self.A[i].to_numpy()
-            ia, ib, ic = self.element[i].to_numpy()
-            a, b, c = self.node_pos[ia].to_numpy(), self.node_pos[ib].to_numpy(), \
-                      self.node_pos[ic].to_numpy()
-            D_i = np.column_stack([b - a, c - a])
-            F_i = np.dot(D_i, self.B[i]).astype(np.float64)
-            U, S, V = np.linalg.svd(F_i)
-
-            # Solve a linear equations
-            # Position dimension is 2
-            # A_tmp = np.array([[sig[0], sig[1]], [sig[1], sig[0]]])
-            dT_dF_np = np.zeros((4, 4))
-            for m, n in np.ndindex(self.dim, self.dim):
-                Omega_UV = np.zeros((2, 2))
-                Omega_UV[0, 1] = (U[m,0]*V[1,n]-U[m,1]*V[0,n]) / (S[0]+S[1])
-                Omega_UV[1, 0] = -Omega_UV[0, 1]
-                dT_df = U @ Omega_UV @ V
-                dT_df_vec = dT_df.reshape(-1, order='C')
-                dT_dF_np[:, 2*m+n] = dT_df_vec
-
-            # self.dT_dF[i].from_numpy(dT_dF_np)
-            dF_dq = A_i
-            # Strain constraint，4*6 matrix
-            self.dT_dq[i] = np.dot(dT_dF_np, dF_dq)
-            dT_dq_np = self.dT_dq[i].to_numpy()
-
-            # Element AT_dT_dq
-            AT_dT_dq_tmp = np.dot(A_i.T, dT_dq_np)
-            # self.AT_dT_dq[i] = np.dot(A_i.T, self.dT_dq[i])
-
-        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
-        self.rhs_dA.fill(0.)
+    def construct_L(self):
+        idx = 11
+        direct_idx = 0
         dim = self.dim
-        for i in range(self.ELEMENT_NUM):
-            weight = self.strain_weight[i]
-            ia, ib, ic = self.element[i]
-            ia_x, ia_y = ia * dim, ia * dim + 1
-            ib_x, ib_y = ib * dim, ib * dim + 1
-            ic_x, ic_y = ic * dim, ic * dim + 1
-            q_idx_vec = np.array([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
-            for row_idx in range(6):
-                for col_idx in range(6):
-                    rhs_row_idx = q_idx_vec[row_idx]
-                    rhs_col_idx = q_idx_vec[col_idx]
-                    self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * AT_dT_dq_tmp[
-                        row_idx, col_idx]
+        self.dL[idx*dim + direct_idx] = 1.
 
 
-    def diff_pd(self):
+    def diff_pd(self, itr_num:ti.i32):
         """
         The iterative method of DiffPD
         :return:
         """
-        self.partial_p_np()
+        self.partial_p()                # Calulate \partial p / \partial q, which is z
+        dA = self.rhs_dA.to_numpy()     # \Delta A in DiffPD iteration equation
+        par_L = self.dL.to_numpy()      # \partial L / \partial q in DiffPD iteration equation
+        z_np = self.z.to_numpy()
+        for itr in ti.static(range(itr_num)):
+            rhs_diff_np = dA @ z_np + par_L         # Right part of the DiffPD iteration equation
+            z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+            z_np = z_new_np
+        self.z.from_numpy(z_np)
 
-
-    def compute_L(self):
-        dim = self.dim
-        node_idx = 0
-        dim_idx = 0
-        self.dL[dim*node_idx+dim_idx] = 1.
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
+            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+        print('dq:', self.displace.to_numpy())
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -651,7 +601,6 @@ class SoftObject:
     def substep(self):
         self.construct_sn()
         self.warm_up()
-        np.savetxt('lhs.csv', self.lhs.to_numpy(), fmt='%f', delimiter=',')
         # Local sovle needs iteration
         for itr in ti.static(range(self.solve_iteration)):
             self.local_solve()
@@ -666,48 +615,42 @@ class SoftObject:
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
-        self.compute_L()
+        self.construct_L()
+        self.diff_pd(10)
 
-        self.partial_p_np()
+        """
         # DiffPD iterate z
+        self.partial_p()
+        # self.test_partial_p()
         dA = self.rhs_dA.to_numpy()
-        dL_np = self.dL.to_numpy()
+        dL = self.dL.to_numpy()
         z_np = self.z.to_numpy()
+        # print('AT_dT_dq:', self.AT_dT_dq.to_numpy())
         for itr in ti.static(range(10)):
-            rhs_diff_np = dA @ z_np + dL_np
+            rhs_diff_np = dA @ z_np + dL
             z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
             z_np = z_np_new
-            # for i in ti.static(self.fix_particle_list):
-            #     z[i*self.dim] = 0.
-            #     z[i*self.dim+1] = 0.
-            # for i in ti.static(self.grasp_particle_list):
-            #     z[i*self.dim] = 0.
-            #     z[i*self.dim+1] = 0.
+        # print(z)
+        # np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
+
+        # for itr in ti.static(range(10)):
+        #     rhs_diff_np = dA @ z + dL
+        #     z_new = self.pre_fact_lhs_solve(rhs_diff_np)
+        #     z = z_new
+        #     for i in ti.static(self.fix_particle_list):
+        #         z[i*self.dim] = 0.
+        #         z[i*self.dim+1] = 0.
+        #     for i in ti.static(self.grasp_particle_list):
+        #         z[i*self.dim] = 0.
+        #         z[i*self.dim+1] = 0.
         self.z.from_numpy(z_np)
 
-        # Get gradient of position
-        # The difference between the inertial position gradient!!!
-        dq = np.zeros(2*self.PARTICLE_NUM)
-        coeff_tmp = np.zeros(2*self.PARTICLE_NUM)
         for i in range(self.PARTICLE_NUM):
-            coeff_tmp[2*i] += self.node_mass[i] / self.dt**2
-            coeff_tmp[2*i+1] += self.node_mass[i] / self.dt**2
-        for i in ti.static(self.fix_particle_list):
-            coeff_tmp[2*i] += self.positional_mass
-            coeff_tmp[2*i+1] += self.positional_mass
-        for i in range(2*self.PARTICLE_NUM):
-            dq[i] = z_np[i] * coeff_tmp[i]
-        print('dq:', dq)
-
-        np.savetxt('dq.csv', dq, fmt='%f', delimiter=',')
-        np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
-
-        lhs_np = self.lhs.to_numpy()
-        dq_solve = np.linalg.solve(lhs_np+dA, dL_np)
-        for i in range(2*self.PARTICLE_NUM):
-            dq_solve[i] = dq_solve[i] * coeff_tmp[i]
-        print('dq_solve:', dq_solve)
-        np.savetxt('dq_solve.csv', dq_solve, fmt='%f', delimiter=',')
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
+            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
+        print('dq:', self.displace.to_numpy())
+        """
 
 
     @ti.kernel
@@ -757,7 +700,7 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
 
     marker_point = np.array([
@@ -782,8 +725,7 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    np.savetxt('Aq.csv', soft_obj.Aq.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
@@ -794,12 +736,13 @@ def main():
     window = soft_obj.window
     # while window.running:
     # Change the iteration number from 500 to 100
-    for i in range(1):
+    for i in range(100):
         soft_obj.substep()
 
     # Following lines for test!
-    # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    # print('z final:', soft_obj.z.to_numpy())
+    np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
+    exit(0)
 
 
 if __name__ == '__main__':
