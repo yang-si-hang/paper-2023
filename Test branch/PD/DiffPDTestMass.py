@@ -30,7 +30,7 @@ class SoftObject:
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
-        self.positional_mass = 1.e9
+        self.positional_mass = 0.
         self.grasp_mass = 0.
         self.marker_mass = 1.e9
         self.solve_iteration = 10
@@ -651,7 +651,7 @@ class SoftObject:
         dA = self.rhs_dA.to_numpy()
         dL_np = self.dL.to_numpy()
         z_np = self.z.to_numpy()
-        for itr in ti.static(range(20)):
+        for itr in ti.static(range(10)):
             rhs_diff_np = dA @ z_np + dL_np
             z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
             z_np = z_np_new
@@ -679,6 +679,13 @@ class SoftObject:
 
         np.savetxt('dq.csv', dq, fmt='%f', delimiter=',')
         np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
+
+        lhs_np = self.lhs.to_numpy()
+        dq_solve = np.linalg.solve(lhs_np+dA, dL_np)
+        for i in range(2*self.PARTICLE_NUM):
+            dq_solve[i] = dq_solve[i] * coeff_tmp[i]
+        print('dq_solve:', dq_solve)
+        np.savetxt('dq_solve.csv', dq_solve, fmt='%f', delimiter=',')
 
 
     @ti.kernel

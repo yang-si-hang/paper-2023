@@ -54,8 +54,11 @@ def mesh_init():
 
 
 def construct_mass():
-    for i in range(3):
-        node_mass[i] = 0.01/3
+    node_mass[0] = 0.01/3
+    node_mass[1] = 0.03/3
+    node_mass[2] = 0.01/3
+    # for i in range(3):
+    #     node_mass[i] = 0.01/3
 
 
 def precomputation():
@@ -202,10 +205,11 @@ def derivative():
     dA_np = Rhs_dA.to_numpy()
     dq_np = node_pos.grad.to_numpy().reshape(-1, order='C')
     z_np = z.to_numpy()
-    for itr in ti.static(range(10)):
+    for itr in ti.static(range(20)):
         rhs_diff_np = dA_np @ z_np + dq_np
         z_new_np = np.linalg.solve(Lhs.to_numpy(), rhs_diff_np)
         z_np = z_new_np
+    print('z:', z_np)
 
     # # Get gradient of position
     # dq = np.zeros(2 * 3)
@@ -215,10 +219,24 @@ def derivative():
     #     dq[idx1] = z_np[idx1] * node_mass[i] / dt ** 2
     # print('dq:', dq)
 
-    dL_f.from_numpy(z_np.transpose())
+    # dL_f.from_numpy(z_np.transpose())
     print('Node gradient: ', dq_np)
+    # print('Node gradient sum: ', dq_np.sum())
     # print('Delta A gradient:\n', dA_np)
-    print('Force gradient: ', dL_f.to_numpy())
+    # print('Force gradient: ', dL_f.to_numpy())
+    # print('Force gradient sum: ', dL_f.to_numpy().sum())
+
+
+    # dq_solve = np.linalg.solve(Lhs.to_numpy()+dA_np, np.array([0,0,1,0,0,0]))
+    dq_solve = np.linalg.solve(Lhs.to_numpy() + dA_np, dq_np)
+    dL_f.from_numpy(dq_solve.transpose())
+    print('dL_f:', dL_f.to_numpy())
+    print('dL_f sum:', dL_f.to_numpy().sum())
+    for i in range(3):
+        dq_solve[2*i] = dq_solve[2*i] * node_mass[i] / dt ** 2
+        dq_solve[2*i+1] = dq_solve[2*i+1] * node_mass[i] / dt ** 2
+    print('dq_solve:', dq_solve)
+    print('dq_solve sum:', dq_solve.sum())
 
 
 def warm_up():
@@ -318,7 +336,7 @@ def substep(pre_fact_Lhs_solve):
 
     # print('Node gradient', node_pos.grad.to_numpy())
     derivative()
-    update(1000.)
+    update(100.)
 
     # node_force[0] = ti.Vector([0., -9.8])
 
@@ -340,6 +358,8 @@ def substep(pre_fact_Lhs_solve):
 
 # @ti.kernel
 def update(learning_rate: ti.f32):
+    # print('node force last: ', node_force.to_numpy())
+    print('force gradient: ', dL_f.to_numpy())
     force_all_tmp = ti.Vector([0., 0.])
     for i in range(3):
         node_force[i][0] -= learning_rate*dL_f[2*i]
@@ -365,9 +385,7 @@ def main():
     s_Lhs_np = sparse.csc_matrix(Lhs_np)
     pre_fact_Lhs_solve = sparse.linalg.factorized(s_Lhs_np)
 
-
-
-    for i in range(1000):
+    for i in range(1):
         substep(pre_fact_Lhs_solve)
         print('Node postions:\n', node_pos.to_numpy())
         print('Gravity position: ', node_pos.to_numpy().sum(axis=0))

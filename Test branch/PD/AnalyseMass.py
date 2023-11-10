@@ -20,3 +20,4 @@ print('Aq = \n', Aq)
 print('dA = \n', dA)
 
 print('dx/dy=\n', np.linalg.solve(M+Aq+dA, M))
+np.savetxt('dx_dy.csv', np.linalg.solve(M+Aq+dA, M), delimiter=',')
