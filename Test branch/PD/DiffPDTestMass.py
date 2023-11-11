@@ -235,6 +235,7 @@ class SoftObject:
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
+                self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
 
         for i in ti.static(self.fix_particle_list):
             q_i_x_idx = i * dim
@@ -692,9 +693,9 @@ class SoftObject:
         for i in range(self.PARTICLE_NUM):
             coeff_tmp[2*i] += self.node_mass[i] / self.dt**2
             coeff_tmp[2*i+1] += self.node_mass[i] / self.dt**2
-        for i in ti.static(self.fix_particle_list):
-            coeff_tmp[2*i] += self.positional_mass
-            coeff_tmp[2*i+1] += self.positional_mass
+        # for i in ti.static(self.fix_particle_list):
+        #     coeff_tmp[2*i] += self.positional_mass
+        #     coeff_tmp[2*i+1] += self.positional_mass
         for i in range(2*self.PARTICLE_NUM):
             dq[i] = z_np[i] * coeff_tmp[i]
         print('dq:', dq)
@@ -702,6 +703,7 @@ class SoftObject:
         np.savetxt('dq.csv', dq, fmt='%f', delimiter=',')
         np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
 
+        # Use matrix solver to get z
         lhs_np = self.lhs.to_numpy()
         dq_solve = np.linalg.solve(lhs_np+dA, dL_np)
         for i in range(2*self.PARTICLE_NUM):
@@ -783,6 +785,7 @@ def main():
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
     np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # Aq is constraint matrix
     np.savetxt('Aq.csv', soft_obj.Aq.to_numpy(), fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
