@@ -1,5 +1,5 @@
 """
-Apply DiffPD in simulation with two triangles with normal distibution mass.
+Apply DiffPD in simulation with two triangles with weighted mass matrix.
 Test different mass of the particles.
 created on 11/07/2023
 """
@@ -25,13 +25,13 @@ class SoftObject:
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145e3
-        # self.E = 5.e5
-        self.E = 1.e0
+        self.E = 5.e5
+        # self.E = 1.e10
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
-        self.positional_weight = 0.
-        self.positional_mass = 0.
+        self.positional_weight = 1.e9
+        self.positional_mass = 1.e9
         self.grasp_mass = 0.
         self.marker_mass = 0.
         self.solve_iteration = 10
@@ -223,20 +223,6 @@ class SoftObject:
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                         self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
-        # Positional constraint
-        for par_idx in ti.static(self.fix_particle_list):
-            # A_i is identity dim*dim
-            A_i_position = ti.Matrix([[1., 0],[0., 1.]])
-            weight = self.positional_weight
-            q_i_x_idx = par_idx * dim
-            q_i_y_idx = par_idx * dim + 1
-            q_idx_vec = ti.Vector([q_i_x_idx, q_i_y_idx])
-            for A_row_idx, A_col_idx in ti.static(ti.ndrange(2, 2)):
-                lhs_row_idx = q_idx_vec[A_row_idx]
-                lhs_col_idx = q_idx_vec[A_col_idx]
-                self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
-                self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
-
         for i in ti.static(self.fix_particle_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
@@ -340,14 +326,6 @@ class SoftObject:
         # ti.loop_config(serialize=True)
         # for i in self.rhs:
         #     print('rhs:', self.rhs[i])
-
-        for par_idx in ti.static(self.fix_particle_list):
-            # B_i is identity dim*dim
-            weight = self.positional_weight
-            q_i_x_idx = par_idx * dim
-            q_i_y_idx = par_idx * dim + 1
-            self.rhs[q_i_x_idx] += weight * self.node_init_pos[par_idx].x
-            self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
 
         # The positional mass constraint of the rhs matrix need match the lhs matrix
         for i in ti.static(self.fix_particle_list):

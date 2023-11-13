@@ -550,7 +550,7 @@ class SoftObject:
         dim = self.dim
         node_idx = 1
         dim_idx = 0
-        self.L[dim*node_idx+dim_idx] = 1.
+        self.dL[dim*node_idx+dim_idx] = 1.
 
 
     def gui_set(self, pos, target, FOV=60):

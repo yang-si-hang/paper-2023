@@ -13,7 +13,7 @@ end
 A_position = zeros(8,8);
 for i=1:length(fix_par)
     idx = fix_par(i);
-    A_position(idx, idx) = 1.e15;
+    A_position(idx, idx) = 0.e15;
 end
 
 dx_dy = (original_M+A_position+Aq+dA) \ original_M
