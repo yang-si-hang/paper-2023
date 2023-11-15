@@ -103,8 +103,9 @@ arr_x = data[::2]
 arr_y = data[1::2]
 
 # 重塑为 10x10 的二维数组
-arr_x_reshaped = arr_x.reshape(20, 20)
-arr_y_reshaped = arr_y.reshape(20, 20)
+Nx, Ny = 11, 11
+arr_x_reshaped = arr_x.reshape(Nx,Ny)
+arr_y_reshaped = arr_y.reshape(Nx, Ny)
 
 # 相加两个矩阵
 arr_sum = arr_x_reshaped + arr_y_reshaped
