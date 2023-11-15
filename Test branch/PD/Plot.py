@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
 
 
 # # Case one -----------------------------------------------------------------------------------------
@@ -63,25 +64,80 @@ import matplotlib.pyplot as plt
 
 
 # Case two -----------------------------------------------------------------------------------------
+# This part can plot the dx/dy matrix with 2-dim heat map.
+# np.set_printoptions(precision=7, suppress=True, linewidth=200)
+# dx_dy = np.loadtxt('dx_dy.csv', delimiter=',')
+# print(dx_dy)
+# print('row sum = ', np.sum(dx_dy, axis=1))
+# print('row abs sum = ', np.sum(np.abs(dx_dy), axis=1))
+#
+# data = dx_dy
+# # 2D 热力图
+# fig, ax = plt.subplots(figsize=(8, 6))
+#
+# # 使用 imshow 显示热力图
+# cax = ax.imshow(data, cmap='viridis', interpolation='nearest')
+#
+# # 添加颜色条
+# cbar = fig.colorbar(cax, ax=ax)
+# cbar.set_label('Z Value')
+#
+# ax.set_xlabel('X Axis')
+# ax.set_ylabel('Y Axis')
+# ax.set_title('2D Heatmap Representing Z Values')
+#
+# plt.show()
+
+
+# Case three ---------------------------------------------------------------------------------------
+# This part analyse the manipulation of each node
 np.set_printoptions(precision=7, suppress=True, linewidth=200)
 dx_dy = np.loadtxt('dx_dy.csv', delimiter=',')
-print(dx_dy)
-print('row sum = ', np.sum(dx_dy, axis=1))
-print('row abs sum = ', np.sum(np.abs(dx_dy), axis=1))
+row_sum = np.sum(dx_dy, axis=0)
+print('row sum = ', row_sum)
+row_asc = np.argsort(row_sum)
+row_desc = row_asc[::-1]
+print('descending row index = ', row_desc)
 
-data = dx_dy
-# 2D 热力图
-fig, ax = plt.subplots(figsize=(8, 6))
+data = row_sum
+arr_x = data[::2]
+arr_y = data[1::2]
 
-# 使用 imshow 显示热力图
-cax = ax.imshow(data, cmap='viridis', interpolation='nearest')
+# 重塑为 10x10 的二维数组
+arr_x_reshaped = arr_x.reshape(20, 20)
+arr_y_reshaped = arr_y.reshape(20, 20)
 
-# 添加颜色条
-cbar = fig.colorbar(cax, ax=ax)
-cbar.set_label('Z Value')
+# 相加两个矩阵
+arr_sum = arr_x_reshaped + arr_y_reshaped
 
-ax.set_xlabel('X Axis')
-ax.set_ylabel('Y Axis')
-ax.set_title('2D Heatmap Representing Z Values')
+# 应用 3x3 的均值滤波
+filtered_arr = gaussian_filter(arr_sum, sigma=0.5, mode='nearest')
+
+# 绘制热图
+plt.figure(figsize=(12, 12))
+
+# 绘制偶数索引元素的热图
+plt.subplot(2, 2, 1)
+plt.imshow(arr_x_reshaped, cmap='plasma', interpolation='nearest')
+plt.title('Heatmap of X Dierction')
+plt.colorbar()
+
+# 绘制奇数索引元素的热图
+plt.subplot(2, 2, 2)
+plt.imshow(arr_y_reshaped, cmap='plasma', interpolation='nearest')
+plt.title('Heatmap of Y Direction')
+plt.colorbar()
+
+# 使用默认颜色映射绘制相加后的矩阵的热图
+plt.subplot(2, 2, 3)
+plt.imshow(arr_sum, cmap='plasma', interpolation='nearest')
+plt.title('Heatmap of Sum of X and Y Direction')
+plt.colorbar()
+
+# 绘制滤波后的矩阵的热图
+plt.subplot(2, 2, 4)
+plt.imshow(filtered_arr, cmap='plasma', interpolation='nearest')
+plt.title('Heatmap of 3x3 Mean Filtered Matrix')
+plt.colorbar()
 
 plt.show()

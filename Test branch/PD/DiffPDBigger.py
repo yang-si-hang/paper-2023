@@ -1,5 +1,6 @@
 """
 Apply differentiable PD in simulation.
+Mesh node is 20*20 in 2D.
 """
 
 import taichi as ti
@@ -722,7 +723,7 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.005)
     soft_obj.preset()
 
     marker_point = np.array([
