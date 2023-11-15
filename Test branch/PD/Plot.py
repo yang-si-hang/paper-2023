@@ -1,9 +1,8 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy.ndimage import gaussian_filter
 
-
-# # Case one -----------------------------------------------------------------------------------------
+# # Case one ---------------------------------------------------------------------------------------
 # # 创建一个 10x10 的 numpy 数组
 # raw_data = np.loadtxt('partial_displacement.csv')
 # partial_x = raw_data[::2]  # 从索引0开始，每两个取一个
