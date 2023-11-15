@@ -223,20 +223,6 @@ class SoftObject:
                         self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                         self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
 
-        # Positional constraint
-        for par_idx in ti.static(self.fix_particle_list):
-            # A_i is identity dim*dim
-            A_i_position = ti.Matrix([[1., 0],[0., 1.]])
-            weight = self.positional_weight
-            q_i_x_idx = par_idx * dim
-            q_i_y_idx = par_idx * dim + 1
-            q_idx_vec = ti.Vector([q_i_x_idx, q_i_y_idx])
-            for A_row_idx, A_col_idx in ti.static(ti.ndrange(2, 2)):
-                lhs_row_idx = q_idx_vec[A_row_idx]
-                lhs_col_idx = q_idx_vec[A_col_idx]
-                self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
-                self.Aq[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
-
         for i in ti.static(self.fix_particle_list):
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
@@ -340,14 +326,6 @@ class SoftObject:
         # ti.loop_config(serialize=True)
         # for i in self.rhs:
         #     print('rhs:', self.rhs[i])
-
-        for par_idx in ti.static(self.fix_particle_list):
-            # B_i is identity dim*dim
-            weight = self.positional_weight
-            q_i_x_idx = par_idx * dim
-            q_i_y_idx = par_idx * dim + 1
-            self.rhs[q_i_x_idx] += weight * self.node_init_pos[par_idx].x
-            self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
 
         # The positional mass constraint of the rhs matrix need match the lhs matrix
         for i in ti.static(self.fix_particle_list):
