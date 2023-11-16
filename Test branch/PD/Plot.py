@@ -104,7 +104,7 @@ arr_y = data[1::2]
 
 # 重塑为 10x10 的二维数组
 Nx, Ny = 11, 11
-arr_x_reshaped = arr_x.reshape(Nx,Ny)
+arr_x_reshaped = arr_x.reshape(Nx, Ny)
 arr_y_reshaped = arr_y.reshape(Nx, Ny)
 
 # 相加两个矩阵

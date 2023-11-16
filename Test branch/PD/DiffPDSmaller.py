@@ -38,6 +38,7 @@ class SoftObject:
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
+        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
@@ -151,7 +152,7 @@ class SoftObject:
             self.B[i] = B_i_inv.inverse()
 
 
-    @ti.kernel
+    # @ti.kernel
     def construct_volume(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
@@ -203,27 +204,72 @@ class SoftObject:
                 self.A[t*ELEMENT_NUM + i][3, 3] = b
                 self.A[t*ELEMENT_NUM + i][3, 5] = d
 
+            # A_i_np = np.zeros((4,6))
+            # A_i_np[0, 0] = -a - c
+            # A_i_np[0, 2] = a
+            # A_i_np[0, 4] = c
+            # A_i_np[1, 0] = -b - d
+            # A_i_np[1, 2] = b
+            # A_i_np[1, 4] = d
+            # A_i_np[2, 1] = -a - c
+            # A_i_np[2, 3] = a
+            # A_i_np[2, 5] = c
+            # A_i_np[3, 1] = -b - d
+            # A_i_np[3, 3] = b
+            # A_i_np[3, 5] = d
+            # np.savetxt(f'A_{i}.csv', A_i_np, fmt='%f', delimiter=',')
+
         for ele_idx in range(ELEMENT_NUM):
             ia, ib, ic = self.element[ele_idx]
             ia_x, ia_y = ia * dim, ia * dim + 1
             ib_x, ib_y = ib * dim, ib * dim + 1
             ic_x, ic_y = ic * dim, ic * dim + 1
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
-            for t in range(2):
-                A_i = self.A[t*ELEMENT_NUM + ele_idx]
-                for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
-                    lhs_row_idx = q_idx_vec[A_row_idx]
-                    lhs_col_idx = q_idx_vec[A_col_idx]
-                    for idx in range(dim**2):
-                        weight = 0.
-                        if t == 0:
-                            weight = self.strain_weight[ele_idx]
-                        else:
-                            weight = self.volume_weight[ele_idx]
-                        self.lhs[lhs_row_idx, lhs_col_idx] \
-                            += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-                        self.A_strain[lhs_row_idx, lhs_col_idx] \
-                            += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+            # for t in range(2):
+            #     A_i = self.A[t*ELEMENT_NUM + ele_idx]
+            #     for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
+            #         lhs_row_idx = q_idx_vec[A_row_idx]
+            #         lhs_col_idx = q_idx_vec[A_col_idx]
+            #         tmp = 0.
+            #         for idx in range(dim**2):
+            #             weight = 0.
+            #             if t == 0:
+            #                 weight = self.strain_weight[ele_idx]
+            #             else:
+            #                 weight = self.volume_weight[ele_idx]
+            #             tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+            #             # self.lhs[lhs_row_idx, lhs_col_idx] \
+            #             #     += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+            #             # self.A_strain[lhs_row_idx, lhs_col_idx] \
+            #             #     += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+            #             # print(lhs_row_idx, lhs_col_idx, weight * A_i[idx, A_row_idx] * A_i[idx,
+            #             # A_col_idx])
+            #         self.lhs[lhs_row_idx, lhs_col_idx] += tmp
+            #         self.A_strain[lhs_row_idx, lhs_col_idx] += tmp
+
+            # Strain constraint
+            A_i = self.A[ele_idx]
+            for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
+                lhs_row_idx = q_idx_vec[A_row_idx]
+                lhs_col_idx = q_idx_vec[A_col_idx]
+                tmp = 0.
+                for idx in range(dim ** 2):
+                    weight = self.strain_weight[ele_idx]
+                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                self.lhs[lhs_row_idx, lhs_col_idx] += tmp
+                self.A_strain[lhs_row_idx, lhs_col_idx] += tmp
+                # print(lhs_row_idx, lhs_col_idx, tmp)
+
+            # Volume constraint
+            A_i = self.A[ELEMENT_NUM + ele_idx]
+            for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
+                lhs_row_idx = q_idx_vec[A_row_idx]
+                lhs_col_idx = q_idx_vec[A_col_idx]
+                tmp = 0.
+                for idx in range(dim ** 2):
+                    weight = self.volume_weight[ele_idx]
+                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                self.lhs[lhs_row_idx, lhs_col_idx] += tmp
 
         # Positional constraint
         for par_idx in ti.static(self.fix_particle_list):
@@ -726,7 +772,7 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/2)
     soft_obj.preset()
 
     marker_point = np.array([
