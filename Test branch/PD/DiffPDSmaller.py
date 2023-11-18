@@ -564,6 +564,14 @@ class SoftObject:
         Store the data of DiffPD
         """
         self.partial_p()
+
+        # Store the data of dA in each element
+        for i in range(self.ELEMENT_NUM):
+            dA_tmp = np.zeros((6, 6))
+            for k, l in ti.ndrange(6, 6):
+                dA_tmp[k, l] = self.AT_dBp_dq[i][k, l]
+            np.savetxt(f'dA_{i}.csv', dA_tmp, fmt='%f', delimiter=',')
+
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
         mass_dim_np[0::2] = mass_np
