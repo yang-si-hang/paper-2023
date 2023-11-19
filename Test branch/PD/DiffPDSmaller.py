@@ -38,7 +38,8 @@ class SoftObject:
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
+        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
@@ -565,12 +566,12 @@ class SoftObject:
         """
         self.partial_p()
 
-        # Store the data of dA in each element
-        for i in range(self.ELEMENT_NUM):
-            dA_tmp = np.zeros((6, 6))
-            for k, l in ti.ndrange(6, 6):
-                dA_tmp[k, l] = self.AT_dBp_dq[i][k, l]
-            np.savetxt(f'dA_{i}.csv', dA_tmp, fmt='%f', delimiter=',')
+        # # Store the data of dA in each element
+        # for i in range(self.ELEMENT_NUM):
+        #     dA_tmp = np.zeros((4, 6))
+        #     for k, l in ti.ndrange(4, 6):
+        #         dA_tmp[k, l] = self.dBp_dq[i][k, l]
+        #     np.savetxt(f'dA_{i}.csv', dA_tmp, fmt='%f', delimiter=',')
 
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
@@ -780,7 +781,7 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/2)
+    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
 
     marker_point = np.array([
