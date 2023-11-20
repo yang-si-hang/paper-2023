@@ -1,6 +1,7 @@
 """
-Apply differentiable PD in simulation.
-Mesh node is 3*3 in 2D.
+Apply DiffPD in simulation.
+With leftside and downside positional constraint.
+This file is used to generate figures, which explanation of (\partial x/ \partial y) in paper.
 """
 
 import taichi as ti
@@ -11,10 +12,6 @@ from scipy import sparse
 from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
-import warnings
-# import pdb
-import signal
-import sys
 
 
 @ti.data_oriented
@@ -28,6 +25,7 @@ class SoftObject:
         self.nu = 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
+        self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e15
         self.positional_mass = 0.
         self.grasp_mass = 0.
@@ -85,13 +83,13 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-        
+
         self.dL.fill(0.)
         self.z.fill(1.)
 
         self.construct_B()
         self.construct_volume()
-        self.construct_mass()
+        self.construct_mass(self.area_sum[None])
 
         self.fix_particle_list = self.fix_particle_No()
         self.grasp_particle_list, _ = self.grasp_particle_No()
@@ -163,14 +161,21 @@ class SoftObject:
             self.strain_weight[i] = self.mu * 2 * element_volume_i
             self.volume_weight[i] = self.lam * self.dim * element_volume_i
 
+            self.area_sum[None] += self.element_volume[i]
+
 
     @ti.kernel
-    def construct_mass(self):
-        for i in range(self.ELEMENT_NUM):
-            ia, ib, ic = self.element[i]
-            self.node_mass[ia] += self.element_volume[i] * self.rho / 3
-            self.node_mass[ib] += self.element_volume[i] * self.rho / 3
-            self.node_mass[ic] += self.element_volume[i] * self.rho / 3
+    def construct_mass(self, area: ti.f64):
+        # # Mass distibuted with triagles area
+        # for i in range(self.ELEMENT_NUM):
+        #     ia, ib, ic = self.element[i]
+        #     self.node_mass[ia] += self.element_volume[i] * self.rho / 3
+        #     self.node_mass[ib] += self.element_volume[i] * self.rho / 3
+        #     self.node_mass[ic] += self.element_volume[i] * self.rho / 3
+
+        # Mass evenly distributed
+        mass_tmp = self.rho * area / self.PARTICLE_NUM
+        self.node_mass.fill(mass_tmp)
 
 
     @ti.kernel
@@ -205,48 +210,12 @@ class SoftObject:
                 self.A[t*ELEMENT_NUM + i][3, 3] = b
                 self.A[t*ELEMENT_NUM + i][3, 5] = d
 
-            # A_i_np = np.zeros((4,6))
-            # A_i_np[0, 0] = -a - c
-            # A_i_np[0, 2] = a
-            # A_i_np[0, 4] = c
-            # A_i_np[1, 0] = -b - d
-            # A_i_np[1, 2] = b
-            # A_i_np[1, 4] = d
-            # A_i_np[2, 1] = -a - c
-            # A_i_np[2, 3] = a
-            # A_i_np[2, 5] = c
-            # A_i_np[3, 1] = -b - d
-            # A_i_np[3, 3] = b
-            # A_i_np[3, 5] = d
-            # np.savetxt(f'A_{i}.csv', A_i_np, fmt='%f', delimiter=',')
-
         for ele_idx in range(ELEMENT_NUM):
             ia, ib, ic = self.element[ele_idx]
             ia_x, ia_y = ia * dim, ia * dim + 1
             ib_x, ib_y = ib * dim, ib * dim + 1
             ic_x, ic_y = ic * dim, ic * dim + 1
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
-            # for t in range(2):
-            #     A_i = self.A[t*ELEMENT_NUM + ele_idx]
-            #     for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
-            #         lhs_row_idx = q_idx_vec[A_row_idx]
-            #         lhs_col_idx = q_idx_vec[A_col_idx]
-            #         tmp = 0.
-            #         for idx in range(dim**2):
-            #             weight = 0.
-            #             if t == 0:
-            #                 weight = self.strain_weight[ele_idx]
-            #             else:
-            #                 weight = self.volume_weight[ele_idx]
-            #             tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-            #             # self.lhs[lhs_row_idx, lhs_col_idx] \
-            #             #     += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-            #             # self.A_strain[lhs_row_idx, lhs_col_idx] \
-            #             #     += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
-            #             # print(lhs_row_idx, lhs_col_idx, weight * A_i[idx, A_row_idx] * A_i[idx,
-            #             # A_col_idx])
-            #         self.lhs[lhs_row_idx, lhs_col_idx] += tmp
-            #         self.A_strain[lhs_row_idx, lhs_col_idx] += tmp
 
             # Strain constraint
             A_i = self.A[ele_idx]
@@ -458,7 +427,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0. + EPS)
+                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
@@ -565,14 +534,6 @@ class SoftObject:
         Store the data of DiffPD
         """
         self.partial_p()
-
-        # # Store the data of dA in each element
-        # for i in range(self.ELEMENT_NUM):
-        #     dA_tmp = np.zeros((4, 6))
-        #     for k, l in ti.ndrange(4, 6):
-        #         dA_tmp[k, l] = self.dBp_dq[i][k, l]
-        #     np.savetxt(f'dA_{i}.csv', dA_tmp, fmt='%f', delimiter=',')
-
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
         mass_dim_np[0::2] = mass_np
@@ -698,40 +659,6 @@ class SoftObject:
         # self.construct_L()
         self.diff_data()
         # self.diff_pd(10)
-
-        """
-        # DiffPD iterate z
-        self.partial_p()
-        # self.test_partial_p()
-        dA = self.rhs_dA.to_numpy()
-        dL = self.dL.to_numpy()
-        z_np = self.z.to_numpy()
-        # print('AT_dT_dq:', self.AT_dT_dq.to_numpy())
-        for itr in ti.static(range(10)):
-            rhs_diff_np = dA @ z_np + dL
-            z_np_new = self.pre_fact_lhs_solve(rhs_diff_np)
-            z_np = z_np_new
-        # print(z)
-        # np.savetxt('dA.csv', dA, fmt='%f', delimiter=',')
-
-        # for itr in ti.static(range(10)):
-        #     rhs_diff_np = dA @ z + dL
-        #     z_new = self.pre_fact_lhs_solve(rhs_diff_np)
-        #     z = z_new
-        #     for i in ti.static(self.fix_particle_list):
-        #         z[i*self.dim] = 0.
-        #         z[i*self.dim+1] = 0.
-        #     for i in ti.static(self.grasp_particle_list):
-        #         z[i*self.dim] = 0.
-        #         z[i*self.dim+1] = 0.
-        self.z.from_numpy(z_np)
-
-        for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*self.dim, i*self.dim+1
-            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
-            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
-        print('dq:', self.displace.to_numpy())
-        """
 
 
     @ti.kernel
