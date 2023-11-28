@@ -92,9 +92,20 @@ for l in cbar.ax.yaxis.get_ticklabels():
     l.set_family('Times New Roman')
     l.set_size(16)
 
-x, y = np.meshgrid(np.arange(0, Nx, 1), np.arange(0, Ny, 1))
+x, y = np.meshgrid(np.arange(0, Nx, 1), np.arange(-Ny+1, 0+1, 1))
 plt.subplot(1, 2, 2)
+delta = 1.2
+plt.xlim(0-delta, Nx-1 + delta)
+plt.ylim(0-delta, Ny-1 + delta)
+plt.xticks(np.arange(-1, 12, 1.))
+plt.yticks(np.arange(-1, 12, 1.))
+# ax = plt.gca()
+# ax.spines['top'].set_visible(False)
+# ax.spines['right'].set_visible(False)
+# ax.spines['left'].set_visible(False)
+# ax.spines['bottom'].set_visible(False)
 plt.quiver(x, -y, weight_sum_x_reshape, weight_sum_y_reshape, weight_sum_reshape,
-           cmap='viridis')
+             zorder=3)
+plt.grid(True, zorder=2)
 
 plt.show()
