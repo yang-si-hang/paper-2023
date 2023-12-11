@@ -141,3 +141,7 @@ plt.title('Heatmap of 3x3 Mean Filtered Matrix')
 plt.colorbar()
 
 plt.show()
+
+
+# Case four ----------------------------------------------------------------------------------------
+# This part analyse the manipulation of each node
