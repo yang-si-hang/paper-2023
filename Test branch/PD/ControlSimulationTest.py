@@ -2,6 +2,8 @@
 This file control an edge node to deform the soft object in PD simulation, which make a marker
 point on soft object move to a desired position.
 The controller is based on the DiffPD techonolgy.
+Test figures out the non-linear of the marker trajectory. Maybe the DiffPd calculation wrong! The
+solver calculates right.
 """
 
 import taichi as ti
@@ -84,6 +86,7 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.grad_dx_dy = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.dL.fill(0.)
         self.z.fill(1.)
@@ -231,7 +234,8 @@ class SoftObject:
             element_volume_i = abs((b - a).cross(c - a)) / 2
             self.element_volume[i] = element_volume_i
             self.strain_weight[i] = self.mu * 2 * element_volume_i
-            self.volume_weight[i] = self.lam * self.dim * element_volume_i
+            self.volume_weight[i] = 0.
+            # self.volume_weight[i] = self.lam * self.dim * element_volume_i
 
             self.area_sum[None] += self.element_volume[i]
 
@@ -553,7 +557,8 @@ class SoftObject:
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
-        np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        self.grad_dx_dy.from_numpy(dx_dy_np[self.marker_idx*2, :])
+        # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -576,6 +581,16 @@ class SoftObject:
             self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
             self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
         # print('dq:', self.displace.to_numpy())
+
+        # solve_A = dA + self.lhs.to_numpy()
+        # solve_B = par_L
+        # z_true_np = np.linalg.solve(solve_A, solve_B)
+        # displace_true = np.zeros([2*self.PARTICLE_NUM])
+        # for i in range(self.PARTICLE_NUM):
+        #     idx0, idx1 = i*self.dim, i*self.dim+1
+        #     displace_true[idx0] = z_true_np[idx0]*self.node_mass[i]/self.dt**2
+        #     displace_true[idx1] = z_true_np[idx1]*self.node_mass[i]/self.dt**2
+        # np.savetxt('displace_true.csv', displace_true, fmt='%e', delimiter=',')
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -659,15 +674,15 @@ class SoftObject:
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=True,
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
 
-        # self.diff_data()
+        self.diff_data()
         loss_tmp = self.construct_L()
         self.loss = loss_tmp.sum()
         print('Loss:', loss_tmp, 'Loss sum:', self.loss)
         print('marker pos:', self.node_pos[self.marker_idx])
-        self.diff_pd(10)
+        # self.diff_pd(10)
 
 
     def control_grasp(self):
@@ -676,9 +691,12 @@ class SoftObject:
         :return:
         """
         learning_rate = 5.e1
-        idx = self.grasp_particle_list[0]
-        # grad_grasp = self.displace.to_numpy()[-2:]
-        grad_grasp = self.displace.to_numpy()[idx*2:idx*2+2]
+        grasp_idx = self.grasp_particle_list[0]
+        marker_idx = self.marker_idx
+        # grad_grasp = self.grad_dx_dy.to_numpy()[idx*2:idx*2+2] * self.dL.to_numpy()[idx*2:idx*2+2]
+        grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
+                               self.grad_dx_dy.to_numpy()[grasp_idx*2+1]*self.dL.to_numpy()[marker_idx*2+1]])
+        # grad_grasp = self.displace.to_numpy()[idx*2:idx*2+2]
         self.grad_grasp_store = grad_grasp
         print('grad_grasp:', grad_grasp)
         self.GRASP_VEL[0] = -learning_rate * grad_grasp
@@ -762,7 +780,7 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(200):
+    for i in range(100):
         soft_obj.substep(i)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
@@ -777,7 +795,7 @@ def main():
     np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
     exit(0)
 
 
