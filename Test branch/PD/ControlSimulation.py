@@ -193,7 +193,8 @@ class SoftObject:
             for idx in range(self.PARTICLE_NUM):
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y
-                grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
+                # grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
+                grasp_flag_temp = (x_temp > L - EPS) and (z_temp < -W / 2 + EPS)
                 grasp_flag[idx] = grasp_flag_temp
 
         cal_grasp_constraint(L, W, seed_size)
@@ -210,6 +211,7 @@ class SoftObject:
                 grasp_ele_list.append(i)
 
         return grasp_particle_list, grasp_ele_list
+
 
 
     @ti.kernel
@@ -647,7 +649,7 @@ class SoftObject:
         self.show_preset()
 
 
-    def substep(self):
+    def substep(self, step_num):
         self.construct_sn()
         self.warm_up()
         # Local sovle needs iteration
@@ -660,11 +662,13 @@ class SoftObject:
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=True,
+                      itr_num=step_num)
 
         # self.diff_data()
         loss_tmp = self.construct_L()
-        print('Loss:', loss_tmp, 'Loss sum:', loss_tmp.sum())
+        self.loss = loss_tmp.sum()
+        print('Loss:', loss_tmp, 'Loss sum:', self.loss)
         print('marker pos:', self.node_pos[self.marker_idx])
         self.diff_pd(10)
 
@@ -675,7 +679,10 @@ class SoftObject:
         :return:
         """
         learning_rate = 5.e1
-        grad_grasp = self.displace.to_numpy()[-2:]
+        idx = self.grasp_particle_list[0]
+        # grad_grasp = self.displace.to_numpy()[-2:]
+        grad_grasp = self.displace.to_numpy()[idx*2:idx*2+2]
+        self.grad_grasp_store = grad_grasp
         print('grad_grasp:', grad_grasp)
         self.GRASP_VEL[0] = -learning_rate * grad_grasp
 
@@ -730,13 +737,6 @@ def main():
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
 
-    # marker_point = np.array([
-    #     [0.09, 0.041]
-    # ])
-    # node_nearest_idx = soft_obj.marker_constraint(marker_point)
-    # node_nearest_list = list(node_nearest_idx)
-    # node_marker_show = ti.Vector.field(3, dtype=ti.f32, shape=len(node_nearest_list))
-    # print('marker nearest node', node_nearest_list)
     print('grasp node idx', soft_obj.grasp_particle_list)
     print('marker node idx:', soft_obj.marker_idx)
     print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
@@ -765,60 +765,27 @@ def main():
     window = soft_obj.window
     # while window.running:
     # Change the iteration number from 500 to 100
+    loss_list = []
+    marker_pos_list = []
+    grasp_pos_list = []
+    grasp_grad_list = []
     for i in range(200):
-        soft_obj.substep()
+        soft_obj.substep(i)
         soft_obj.control_grasp()
+        loss_list.append(soft_obj.loss)
+        marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
+        grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
+        grasp_grad_list.append(soft_obj.grad_grasp_store)
 
+    # Save data
+    np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
-    np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
     exit(0)
-
-    soft_obj.lhs.fill(0.)
-    soft_obj.precomputation()
-    for i in ti.static(node_nearest_list):
-        q_i_x_idx = i * 2
-        q_i_y_idx = i * 2 + 1
-        soft_obj.lhs[q_i_x_idx, q_i_x_idx] += soft_obj.marker_mass
-        soft_obj.lhs[q_i_y_idx, q_i_y_idx] += soft_obj.marker_mass
-
-    lhs_np = soft_obj.lhs.to_numpy()
-    s_lhs_np = sparse.csr_matrix(lhs_np)
-    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-
-    soft_obj.GRASP_VEL[0] = ti.Vector([0., 0.])
-    # soft_obj.GRASP_VEL.x = 0.
-
-    for temp in range(900):
-        soft_obj.construct_sn()
-        soft_obj.warm_up()
-        for itr in ti.static(range(soft_obj.solve_iteration)):
-            soft_obj.local_solve()
-            soft_obj.construct_rhs()
-            for i in node_nearest_list:
-                pos_new_i = soft_obj.node_pos_new[i]
-                q_i_x_idx = i * 2
-                q_i_y_idx = i * 2 + 1
-                soft_obj.rhs[q_i_x_idx] += soft_obj.marker_mass * pos_new_i[0]
-                soft_obj.rhs[q_i_y_idx] += soft_obj.marker_mass * pos_new_i[1]
-            rhs_np = soft_obj.rhs.to_numpy()
-            # The solve step and update the position
-            node_pos_new_np = soft_obj.pre_fact_lhs_solve(rhs_np)
-            soft_obj.update_pos_new(node_pos_new_np)
-
-        for i in node_nearest_list:
-            soft_obj.node_pos_new[i] = soft_obj.node_pos[i] + ti.Vector([-0.005, 0.]) * soft_obj.dt
-        soft_obj.update_vel_pos()
-        soft_obj.gui_show(soft_obj.window, soft_obj.canvas, soft_obj.scene, SHOW_FLAG=True,
-                          WRITE_FLAG=False, itr_num=0)
-
-        j = 0
-        for i in node_nearest_list:
-            node_marker_show[j].x = soft_obj.node_pos[i].x
-            node_marker_show[j].y = 0.
-            node_marker_show[j].z = soft_obj.node_pos[i].y
-            print('node_pos:', soft_obj.node_pos[i])
-        soft_obj.scene.particles(node_marker_show, radius=0.001, color=(1., 0., 0.))
 
 
 if __name__ == '__main__':
