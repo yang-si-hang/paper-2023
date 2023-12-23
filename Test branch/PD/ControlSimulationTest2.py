@@ -1,10 +1,9 @@
 """
-This file control an edge node to deform the soft object in PD simulation, which make a marker
+* This file control an edge node to deform the soft object in PD simulation, which make a marker
 point on soft object move to a desired position.
-The controller is based on the DiffPD techonolgy.
--> Test figures out the non-linear of the marker trajectory. Maybe the DiffPd calculation wrong! The
-dx_dy solver calculates right.
-- The dx_dy solver doesn't use matrix multiplication, which is not correct.
+* The controller is based on the DiffPD techonolgy.
+* The feature point represented by local coordinates in the according element frame.
+* Loss is the curvature of the curve
 """
 
 import taichi as ti
@@ -39,8 +38,8 @@ class SoftObject:
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
+        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
@@ -105,6 +104,11 @@ class SoftObject:
         self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f32, shape=1)
         self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
         print('marker node desired pos:', self.marker_pos_desired[0])
+
+        # Feature points and node idx
+        self.feature_pos = ti.Vector.field(2, dtype=ti.f64, shape=3)
+        self.triangle_points_idx = None
+        self.feature_bary = None
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -532,11 +536,17 @@ class SoftObject:
         L measures the distance between the marker node and its desired position
         :return: Loss
         """
-        dim = self.dim
-        idx = self.marker_idx
-        desired_pos = self.marker_pos_desired[0]
-        current_pos = self.node_pos[idx]
-        L = (current_pos - desired_pos)**2
+        feature_1, feature_2, feature_3 = self.feature_pos[0], self.feature_pos[1], self.feature_pos[2]
+        kappa_1 = 1. / ti.norm(feature_1 - feature_2)
+        kappa_2 = 1. / ti.norm(feature_2 - feature_3)
+        kappa_3 = ti.norm(tm.cross(feature_1-feature_2, feature_2-feature_3))
+        desired_curvature = 0.
+        current_curvature = kappa_1 * kappa_2 * kappa_3
+        L = (current_curvature - desired_curvature)**2
+        dL_1 =
+        dL_2 =
+        dL_3 =
+        dL_sum =
         self.dL[idx*dim] = 2*(current_pos.x - desired_pos.x)
         self.dL[idx*dim + 1] = 0.
         # self.dL[idx*dim + 1] = 2*(current_pos.y - desired_pos.y)
@@ -689,6 +699,7 @@ class SoftObject:
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
+        self.node2feature_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
 
@@ -760,6 +771,35 @@ class SoftObject:
         return node_nearest.to_numpy()
 
 
+    def node2feature_pos(self):
+        """
+        Get the feature pos by weighted node in real time
+        """
+        weights_np = self.feature_bary.to_numpy()
+        for i in range(3):
+            idx = self.triangle_points_idx[i]
+            triangle_pos = np.array([self.node_init_pos[idx[0]].to_numpy(),
+                                     self.node_init_pos[idx[1]].to_numpy(),
+                                     self.node_init_pos[idx[2]].to_numpy()])
+            self.feature_pos[i].from_numpy(weights_np[i,:] @ triangle_pos)
+
+
+def barycentric_coordinates(vertices, point):
+    """
+    Calculate the barycentric coordinates of a given point within a triangle.
+    :param vertices: An array containing the three vertices of the triangle, shape (3, 2)
+    :param point: A point within the triangle, shape (2)
+    :return: The barycentric coordinates of the point, as (λ1, λ2, λ3)
+    """
+    A, B, C = vertices
+    P = point
+    M = np.array([A, B, C]).T
+    M_extend = np.vstack((M, np.ones([1,3])))
+    P_extend = np.append(P, 1.)
+    lambdas = np.linalg.solve(M_extend, P_extend)
+    return lambdas
+
+
 def main():
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size):
@@ -767,6 +807,28 @@ def main():
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
+
+    # Calculate the barycentric coordinates of feature points-----------------------------------------------------------
+    # Define the feature of cureve in 2D, radius is 0.015
+    curve_r = 0.015
+    feature_pos_init = np.array([[0.1-curve_r, 0.05],
+                            [0.1-curve_r/np.sqrt(2), 0.05-curve_r/np.sqrt(2)],
+                            [0.1, 0.05-curve_r]])
+    # Triangle idx in nodes set
+    triangle_points_idx = [[109, 119, 120],
+                           [98, 108, 109],
+                           [99, 109, 110]]
+    soft_obj.triangle_points_idx = triangle_points_idx
+    # Calculate the barycentric coordinates of feature points
+    weights = np.zeros([3, 3])
+    for i in range(3):
+        idx = triangle_points_idx[i]
+        triangle_pos = np.array([soft_obj.node_init_pos[idx[0]].to_numpy(),
+                                 soft_obj.node_init_pos[idx[1]].to_numpy(),
+                                 soft_obj.node_init_pos[idx[2]].to_numpy()])
+        weights[i,:] = barycentric_coordinates(triangle_pos, feature_pos_init[i,:])
+    soft_obj.feature_bary = weights
+
 
     print('grasp node idx', soft_obj.grasp_particle_list)
     print('marker node idx:', soft_obj.marker_idx)
@@ -812,7 +874,6 @@ def main():
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
-    exit(0)
 
 
 if __name__ == '__main__':
