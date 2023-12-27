@@ -87,8 +87,9 @@ class SoftObject:
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace_true = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-        self.grad_dx_dy = ti.field(ti.f64, shape=(2,2*self.PARTICLE_NUM))
+        self.grad_dx_dy = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM,2))
 
+        self.loss = None
         self.dL.fill(0.)
         self.z.fill(1.)
 
@@ -99,16 +100,25 @@ class SoftObject:
         self.construct_volume()
         self.construct_mass(self.area_sum[None])
 
-        # Determine the marker node idx
-        self.marker_idx = 42
-        self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f32, shape=1)
-        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
-        print('marker node desired pos:', self.marker_pos_desired[0])
+        # # Determine the marker node idx
+        # self.marker_idx = 42
+        # self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f32, shape=1)
+        # self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
+        # print('marker node desired pos:', self.marker_pos_desired[0])
 
         # Feature points and node idx
-        self.feature_pos = ti.Vector.field(2, dtype=ti.f64, shape=3)
-        self.triangle_points_idx = None
-        self.feature_bary = None
+        self.FEATURE_NUM = 3
+        self.feature_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.FEATURE_NUM)
+        self.triangle_points_idx = ti.Vector.field(3, dtype=ti.i32, shape=self.FEATURE_NUM)
+        self.feature_bary = ti.Vector.field(3, dtype=ti.f64, shape=self.FEATURE_NUM)
+
+        # Curvature feature
+        self.U = ti.Matrix([[0., 1.],
+                       [-1., 0.]])
+        self.dkappa1 = ti.Vector.field(2, dtype=ti.f64, shape=3)
+        self.dkappa2 = ti.Vector.field(2, dtype=ti.f64, shape=3)
+        self.dkappa3 = ti.Vector.field(2, dtype=ti.f64, shape=3)
+        self.dL_feature = ti.Vector.field(2, dtype=ti.f64, shape=3)
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -202,8 +212,8 @@ class SoftObject:
             for idx in range(self.PARTICLE_NUM):
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y
-                # grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
-                grasp_flag_temp = (x_temp > L - EPS) and (z_temp < -W / 2 + EPS)
+                grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
+                # grasp_flag_temp = (x_temp > L - EPS) and (z_temp < -W / 2 + EPS)
                 grasp_flag[idx] = grasp_flag_temp
 
         cal_grasp_constraint(L, W, seed_size)
@@ -260,7 +270,6 @@ class SoftObject:
         self.node_mass.fill(mass_tmp)
 
         for i in ti.static(self.grasp_particle_list):
-
             self.node_mass[i] += 1.e8
 
 
@@ -531,25 +540,51 @@ class SoftObject:
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
 
 
-    def construct_L(self):
+    @ti.kernel
+    def construct_L(self)->float:
         """
-        L measures the distance between the marker node and its desired position
-        :return: Loss
+        Calculate the loss and gradient of loss
+        :return: loss
         """
+        U = self.U
         feature_1, feature_2, feature_3 = self.feature_pos[0], self.feature_pos[1], self.feature_pos[2]
-        kappa_1 = 1. / ti.norm(feature_1 - feature_2)
-        kappa_2 = 1. / ti.norm(feature_2 - feature_3)
-        kappa_3 = ti.norm(tm.cross(feature_1-feature_2, feature_2-feature_3))
+        # f are intermediate variables
+        f1 = feature_1 - feature_2
+        f2 = feature_2 - feature_3
+
+        kappa_1 = 1. / f1.norm()
+        kappa_2 = 1. / f2.norm()
+        kappa_3 = tm.cross(f1, f2)
+
         desired_curvature = 0.
         current_curvature = kappa_1 * kappa_2 * kappa_3
         L = (current_curvature - desired_curvature)**2
-        dL_1 =
-        dL_2 =
-        dL_3 =
-        dL_sum =
-        self.dL[idx*dim] = 2*(current_pos.x - desired_pos.x)
-        self.dL[idx*dim + 1] = 0.
-        # self.dL[idx*dim + 1] = 2*(current_pos.y - desired_pos.y)
+
+        dL_0 = 2 * (current_curvature - desired_curvature)
+
+        self.dkappa1[0] = -kappa_1 ** 3 * f1
+        self.dkappa1[1] = kappa_1 ** 3 * f1
+        self.dkappa2[1] = -kappa_2 ** 3 * f2
+        self.dkappa2[2] = kappa_2 ** 3 * f2
+        self.dkappa3[0] = f2 @ U.transpose()
+        self.dkappa3[1] = f1 @ U - f2 @ U.transpose()
+        self.dkappa3[2] = -f1 @ U
+
+        self.dL_feature[0] = dL_0 * (self.dkappa1[0] * kappa_2 * kappa_3 + kappa_1 * self.dkappa2[0] * kappa_3 +
+                       kappa_1 * kappa_2 * self.dkappa3[0])
+        self.dL_feature[1] = dL_0 * (self.dkappa1[1] * kappa_2 * kappa_3 + kappa_1 * self.dkappa2[1] * kappa_3 +
+                       kappa_1 * kappa_2 * self.dkappa3[1])
+        self.dL_feature[2] = dL_0 * (self.dkappa1[2] * kappa_2 * kappa_3 + kappa_1 * self.dkappa2[2] * kappa_3 +
+                       kappa_1 * kappa_2 * self.dkappa3[2])
+
+        self.dL.fill(0.)
+        ti.loop_config(serialize=True)
+        for idx, i in ti.ndrange(3, 3):
+            # print('triangle points idx:', self.triangle_points_idx[idx][i])
+            # idx is the feature index, i is the triagnle node
+            self.dL[self.triangle_points_idx[idx][i]*2] += self.feature_bary[idx][i] * self.dL_feature[i][0]
+            self.dL[self.triangle_points_idx[idx][i]*2+1] += self.feature_bary[idx][i] * self.dL_feature[i][1]
+
         return L
 
 
@@ -557,6 +592,7 @@ class SoftObject:
         """
         Store the data of DiffPD
         """
+        grasp_idx = self.grasp_particle_list[0]
         self.partial_p()
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
@@ -570,7 +606,8 @@ class SoftObject:
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
-        self.grad_dx_dy.from_numpy(dx_dy_np[self.marker_idx*2:self.marker_idx*2+2, :])
+        # All nodes graddient to grasp node
+        self.grad_dx_dy.from_numpy(dx_dy_np[:, grasp_idx*2:grasp_idx*2+2])
         # np.savetxt('grad_dx_dy.npy', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
         # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
 
@@ -647,9 +684,14 @@ class SoftObject:
     def show_preset(self):
         self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
+        self.edge_show.from_numpy(self.edge_np)
+
         self.marker_pos = ti.Vector.field(3, dtype=ti.f32, shape=1)
         self.marker_pos_des_show = ti.Vector.field(3, dtype=ti.f32, shape=1)
-        self.edge_show.from_numpy(self.edge_np)
+
+        self.feature_pos_show = ti.Vector.field(3, dtype=ti.f32, shape=self.FEATURE_NUM)
+
+        self.grasp_pos_show = ti.Vector.field(3, dtype=ti.f32, shape=1)
 
 
     def gui_show(self, window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
@@ -660,18 +702,30 @@ class SoftObject:
             return
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
-        # the conversion of object particles, etc. the ggui of the taichi only support float32
+        # The conversion of object particles, etc. the ggui of the taichi only support float32
+        # The object information for GGUI
         self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1,
                                             np.zeros(self.PARTICLE_NUM), axis=1))
-        self.marker_pos[0] = self.node_show[self.marker_idx]
-        self.marker_pos_des_show[0] = ti.Vector(
-            [self.marker_pos_desired[0].x, 0., self.marker_pos_desired[0].y])
-
         scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
         scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
                     vertex_count=0)
-        scene.particles(self.marker_pos, radius=0.0012, color=(1., 0., 0.))
-        scene.particles(self.marker_pos_des_show, radius=0.0012, color=(0., 0., 1.))
+
+        # # The marker node information for GGUI
+        # self.marker_pos[0] = self.node_show[self.marker_idx]
+        # self.marker_pos_des_show[0] = ti.Vector(
+        #     [self.marker_pos_desired[0].x, 0., self.marker_pos_desired[0].y])
+        # scene.particles(self.marker_pos, radius=0.0012, color=(1., 0., 0.))
+        # scene.particles(self.marker_pos_des_show, radius=0.0012, color=(0., 0., 1.))
+
+        # The feature points information for GGUI
+        self.feature_pos_show.from_numpy(np.insert(self.feature_pos.to_numpy(dtype=np.float32), 1,
+                                                   np.zeros(self.FEATURE_NUM), axis=1))
+        scene.particles(self.feature_pos_show, radius=0.0012, color=(1., 0., 0.))
+
+        # The grasp point information for GGUI
+        self.grasp_pos_show[0] = self.node_show[self.grasp_particle_list[0]]
+        scene.particles(self.grasp_pos_show, radius=0.0012, color=(0., 1., 0.))
+
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
@@ -704,9 +758,10 @@ class SoftObject:
                       itr_num=step_num)
 
         loss_tmp = self.construct_L()
-        self.loss = loss_tmp.sum()
-        print('Loss:', loss_tmp, 'Loss sum:', self.loss)
-        print('marker pos:', self.node_pos[self.marker_idx])
+        self.loss = loss_tmp
+        print('Loss:', loss_tmp)
+        print('grasp pos:', self.node_pos[self.grasp_particle_list[0]])
+        print('feature pos:', self.feature_pos.to_numpy())
         self.diff_data()
         # self.diff_pd(10)
 
@@ -716,14 +771,14 @@ class SoftObject:
         Control the grasp point based the loss gradient
         :return:
         """
-        learning_rate = 5.e1
-        grasp_idx = self.grasp_particle_list[0]
-        marker_idx = self.marker_idx
+        learning_rate = 8.e-5
+        # grasp_idx = self.grasp_particle_list[0]
+        # marker_idx = self.marker_idx
         # grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
         #                        self.grad_dx_dy.to_numpy()[grasp_idx*2+1]*self.dL.to_numpy()[marker_idx*2+1]])
-        grad_grasp = (self.dL.to_numpy()[marker_idx*2:marker_idx*2+2] @
-                      self.grad_dx_dy.to_numpy()[:,grasp_idx*2:grasp_idx*2+2])
-        # grad_grasp = self.displace_true.to_numpy()[grasp_idx*2:grasp_idx*2+2]
+        # grad_grasp = (self.dL.to_numpy()[marker_idx*2:marker_idx*2+2] @
+        #               self.grad_dx_dy.to_numpy()[:,grasp_idx*2:grasp_idx*2+2])
+        grad_grasp = self.dL.to_numpy() @ self.grad_dx_dy.to_numpy()
         self.grad_grasp_store = grad_grasp
         print('grad_grasp:', grad_grasp)
         self.GRASP_VEL[0] = -learning_rate * grad_grasp
@@ -777,11 +832,13 @@ class SoftObject:
         """
         weights_np = self.feature_bary.to_numpy()
         for i in range(3):
-            idx = self.triangle_points_idx[i]
-            triangle_pos = np.array([self.node_init_pos[idx[0]].to_numpy(),
-                                     self.node_init_pos[idx[1]].to_numpy(),
-                                     self.node_init_pos[idx[2]].to_numpy()])
-            self.feature_pos[i].from_numpy(weights_np[i,:] @ triangle_pos)
+            idx1, idx2, idx3 = self.triangle_points_idx[i][0], self.triangle_points_idx[i][1], \
+                               self.triangle_points_idx[i][2]
+            triangle_pos = np.array([self.node_pos[idx1].to_numpy(),
+                                     self.node_pos[idx2].to_numpy(),
+                                     self.node_pos[idx3].to_numpy()])
+            pos_tmp = weights_np[i,:] @ triangle_pos
+            self.feature_pos[i] = ti.Vector([pos_tmp[0], pos_tmp[1]])
 
 
 def barycentric_coordinates(vertices, point):
@@ -808,6 +865,10 @@ def main():
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
 
+    print('grasp node idx: ', soft_obj.grasp_particle_list[0])
+    # print('marker node idx:', soft_obj.marker_idx)
+    # print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
+
     # Calculate the barycentric coordinates of feature points-----------------------------------------------------------
     # Define the feature of cureve in 2D, radius is 0.015
     curve_r = 0.015
@@ -815,24 +876,23 @@ def main():
                             [0.1-curve_r/np.sqrt(2), 0.05-curve_r/np.sqrt(2)],
                             [0.1, 0.05-curve_r]])
     # Triangle idx in nodes set
-    triangle_points_idx = [[109, 119, 120],
-                           [98, 108, 109],
-                           [99, 109, 110]]
-    soft_obj.triangle_points_idx = triangle_points_idx
+    triangle_points_idx_np = np.array([[108, 118, 119],
+                                       [97, 107, 108],
+                                       [98, 108, 109]])
+    soft_obj.triangle_points_idx.from_numpy(triangle_points_idx_np)
     # Calculate the barycentric coordinates of feature points
     weights = np.zeros([3, 3])
     for i in range(3):
-        idx = triangle_points_idx[i]
+        idx = triangle_points_idx_np[i]
         triangle_pos = np.array([soft_obj.node_init_pos[idx[0]].to_numpy(),
                                  soft_obj.node_init_pos[idx[1]].to_numpy(),
                                  soft_obj.node_init_pos[idx[2]].to_numpy()])
         weights[i,:] = barycentric_coordinates(triangle_pos, feature_pos_init[i,:])
-    soft_obj.feature_bary = weights
-
-
-    print('grasp node idx', soft_obj.grasp_particle_list)
-    print('marker node idx:', soft_obj.marker_idx)
-    print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
+    if np.any(weights < 0):
+        raise ValueError('feature points are not in the triangle!')
+    print('feature points barrycentric coordinates:', weights)
+    soft_obj.feature_bary.from_numpy(weights)
+    #-------------------------------------------------------------------------------------------------------------------
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -862,15 +922,15 @@ def main():
         soft_obj.substep(i)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
-        marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
+        # marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
         grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
         grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # Save data
-    np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
-    np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
-    np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
-    np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
+    # np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    # np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
