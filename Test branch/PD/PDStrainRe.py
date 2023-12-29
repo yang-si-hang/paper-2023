@@ -19,10 +19,12 @@ class SoftObject:
     def __init__(self, shape, seed_size):
         self.shape = shape
         self.seed_size = seed_size
-        self.dt = 1./120
+        # self.dt = 1./120
+        self.dt = 1. / 480
         self.rho = 1.145e3
-        self.E = 5.e5
-        self.nu = 0.4
+        # self.E = 5.e5
+        self.E = 5.e2
+        self.nu = 0.1
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.area_sum = ti.field(dtype=ti.f64, shape=())
@@ -100,13 +102,25 @@ class SoftObject:
             raise ValueError("Only 2D and 3D objects are supported.")
 
 
-    def mesh_object_2d(self, shape, seed_size):
+    @staticmethod
+    def mesh_object_2d(shape, seed_size):
+        """
+        Mesh the object
+        :param shape:
+        :param seed_size:
+        :return: node, edge and element with numpy array type
+        """
         L = shape[0]
         W = shape[1]
-        LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
-        WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
+        # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
+        LN_remain = int(1) if np.mod(L, seed_size) == 0 else int(0)
+        WN_remain = int(1) if np.mod(W, seed_size) == 0 else int(0)
+        LN = int(np.ceil(L / seed_size)) + LN_remain
+        WN = int(np.ceil(W / seed_size)) + WN_remain
+        # LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
+        # WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
 
-        # Generate the nodes' position
+        # Generate the nodes' position, place the origin at the center of left side
         xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
@@ -235,7 +249,7 @@ class SoftObject:
         self.node_mass.fill(mass_tmp)
 
         for i in ti.static(self.grasp_particle_list):
-            self.node_mass[i] += 1.e8
+            self.node_mass[i] += self.grasp_mass
 
 
     @ti.kernel
@@ -337,11 +351,11 @@ class SoftObject:
             self.sn[idx1] = pos[0] + dt * vel[0]
             self.sn[idx2] = pos[1] + dt * vel[1]
 
-        # Grasp node need special consideration
-        for i in ti.static(self.grasp_particle_list):
-            idx1, idx2 = dim*i, dim*i+1
-            self.sn[idx1] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][0]
-            self.sn[idx2] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][1]
+        # # Grasp node need special consideration
+        # for i in ti.static(self.grasp_particle_list):
+        #     idx1, idx2 = dim*i, dim*i+1
+        #     self.sn[idx1] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][0]
+        #     self.sn[idx2] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][1]
 
 
     @ti.kernel
@@ -440,7 +454,7 @@ class SoftObject:
             self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
 
         for i in ti.static(self.grasp_particle_list):
-            grasp_pos_next = self.sn[i]
+            grasp_pos_next = ti.Vector([self.sn[i*self.dim], self.sn[i*self.dim+1]])
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
             self.rhs[q_i_x_idx] += (grasp_pos_next[0] * self.grasp_mass)
@@ -488,12 +502,14 @@ class SoftObject:
 
         # set the light
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
-        # scene.point_light(pos=(0.01, 0, 3), color=(1., 1., 1.))
         scene.ambient_light((1., 1., 1.))
         return window, camera, scene
 
 
     def show_preset(self):
+        """
+        Define the data for GGUI
+        """
         self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
         self.marker_pos = ti.Vector.field(3, dtype=ti.f32, shape=1)
@@ -503,7 +519,7 @@ class SoftObject:
 
     def gui_show(self, window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
         """
-        Show the GUI
+        Show the GGUI
         """
         if SHOW_FLAG is False:
             return
@@ -512,15 +528,15 @@ class SoftObject:
         # the conversion of object particles, etc. the ggui of the taichi only support float32
         self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1,
                                             np.zeros(self.PARTICLE_NUM), axis=1))
-        self.marker_pos[0] = self.node_show[self.marker_idx]
-        self.marker_pos_des_show[0] = ti.Vector(
-            [self.marker_pos_desired[0].x, 0., self.marker_pos_desired[0].y])
+        # self.marker_pos[0] = self.node_show[self.marker_idx]
+        # self.marker_pos_des_show[0] = ti.Vector(
+        #     [self.marker_pos_desired[0].x, 0., self.marker_pos_desired[0].y])
 
         scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
         scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
                     vertex_count=0)
-        scene.particles(self.marker_pos, radius=0.0012, color=(1., 0., 0.))
-        scene.particles(self.marker_pos_des_show, radius=0.0012, color=(0., 0., 1.))
+        # scene.particles(self.marker_pos, radius=0.0012, color=(1., 0., 0.))
+        # scene.particles(self.marker_pos_des_show, radius=0.0012, color=(0., 0., 1.))
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
@@ -529,8 +545,12 @@ class SoftObject:
         window.show()
 
 
-    def preset(self):
-        self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
+    def preset_gui(self, camera_pos:list, camera_target:list):
+        """
+        Define the camera position & target
+        """
+        # self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
+        self.window, self.camera, self.scene = self.gui_set(pos=camera_pos, target=camera_target)
         self.canvas = self.window.get_canvas()
         self.show_preset()
 
@@ -548,7 +568,7 @@ class SoftObject:
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=True,
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
 
         # self.diff_data()
@@ -577,7 +597,7 @@ class SoftObject:
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
             if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
-                self.node_vel[i].x = 8.
+                self.node_vel[i].x = 5.
             else:
                 self.node_vel[i].x = 0.
 
@@ -587,12 +607,13 @@ def main():
         def __init__(self, shape, seed_size):
             super().__init__(shape, seed_size)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
-    soft_obj.preset()
+    # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
+    soft_obj = MyObject(shape=[8., 2.], seed_size=0.2)
+    soft_obj.preset_gui([4., 5, 0.], [4., 0., 0.])
 
-    print('grasp node idx', soft_obj.grasp_particle_list)
-    print('marker node idx:', soft_obj.marker_idx)
-    print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
+    # print('grasp node idx', soft_obj.grasp_particle_list)
+    # print('marker node idx:', soft_obj.marker_idx)
+    # print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -619,7 +640,7 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(100):
+    for i in range(500):
         # soft_obj.store_state()
         soft_obj.substep(i)
         # soft_obj.difference_grad()
