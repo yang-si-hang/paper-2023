@@ -1,6 +1,5 @@
 """
 Validation of the gradient of the curvature of three feature pos in 2D
-Gradient is wrong, need check!
 """
 
 import numpy as np

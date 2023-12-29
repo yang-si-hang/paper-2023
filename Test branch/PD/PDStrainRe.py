@@ -1,6 +1,6 @@
 """
-This file use difference method to validate the gradient of (dL/dy), which is derived by DiffPd
-method.
+This file is the implementation of the Projective Dynamics method with strain constraint.
+Rewrite the exerted force in the Implicit Euler integration
 """
 
 
@@ -44,6 +44,7 @@ class SoftObject:
         self.EDGE_NUM = edge_np.shape[0]
         self.ELEMENT_NUM = element_np.shape[0]
 
+        # Always the current node pos
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
         # Store the next node pos
@@ -76,38 +77,12 @@ class SoftObject:
         self.A_positional = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
-        # Following is diffPD
-        self.dBp_dF = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.dBp_dq = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        # \partial Bp / \partial q
-        self.AT_dBp_dq = ti.Matrix.field(6, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        # A^T * \partial Bp / \partial q
-        self.rhs_dA = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))            # \Delta A
-        self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-        self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-        self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-
-        self.dL.fill(0.)
-        self.z.fill(1.)
-
         self.fix_particle_list = self.fix_particle_No()
         self.grasp_particle_list, _ = self.grasp_particle_No()
 
         self.construct_B()
-        self.construct_volume()
+        self.construct_volume_weight()
         self.construct_mass(self.area_sum[None])
-
-        # Check the gradient of node position with difference method
-        self.delta = 1.e-5
-        self.node_pos_store = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_vel_store = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.grad_true = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-
-        # Determine the marker node idx
-        self.marker_idx = 42
-        self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f32, shape=1)
-        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
-        print('marker node desired pos:', self.marker_pos_desired[0])
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -221,7 +196,6 @@ class SoftObject:
         return grasp_particle_list, grasp_ele_list
 
 
-
     @ti.kernel
     def construct_B(self):
         for i in range(self.ELEMENT_NUM):
@@ -232,7 +206,10 @@ class SoftObject:
 
 
     # @ti.kernel
-    def construct_volume(self):
+    def construct_volume_weight(self):
+        """
+        Calulate the volume & strain weights of each element
+        """
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
             a, b, c = self.node_init_pos[ia], self.node_init_pos[ib], self.node_init_pos[ic]
@@ -278,7 +255,8 @@ class SoftObject:
             d = B_i[1, 1]
 
             for t in range(2):
-                # X_f@X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row(行优先).
+                # range(2) is the strain constraint and volume constraint
+                # X_f@X_g^{-1}=Aq is 2*2, and flatten to 4*1 by row (row first).
                 # q is cooridnate first, q=[q_ax, q_ay, q_bx, q_by, q_cx, q_cy]^T
                 self.A[t*ELEMENT_NUM + i][0, 0] = -a - c
                 self.A[t*ELEMENT_NUM + i][0, 2] = a
@@ -347,6 +325,9 @@ class SoftObject:
 
     @ti.kernel
     def construct_sn(self):
+        """
+        Construct sn in this step with "external force" (transfor to displacement increment)
+        """
         dim = self.dim
         dt = self.dt
         for i in range(self.PARTICLE_NUM):
@@ -355,6 +336,24 @@ class SoftObject:
             vel = self.node_vel[i]
             self.sn[idx1] = pos[0] + dt * vel[0]
             self.sn[idx2] = pos[1] + dt * vel[1]
+
+        # Grasp node need special consideration
+        for i in ti.static(self.grasp_particle_list):
+            idx1, idx2 = dim*i, dim*i+1
+            self.sn[idx1] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][0]
+            self.sn[idx2] = self.node_pos[i][0] + dt * self.GRASP_VEL[0][1]
+
+
+    @ti.kernel
+    def warm_up(self):
+        """
+        Warm start the solver, "pos_new" for local solver
+        """
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*dim, i*dim+1
+            self.node_pos_new[i].x = self.sn[idx0]
+            self.node_pos_new[i].y = self.sn[idx1]
 
 
     @ti.kernel
@@ -365,7 +364,7 @@ class SoftObject:
         for i in range(self.ELEMENT_NUM):
             # Strain constriant
             ia, ib, ic = self.element[i]
-            a, b, c = self.node_pos_new[ia], self.node_pos_new[ib], self.node_pos_new[ic]
+            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
             self.F[i] = F_i
@@ -441,23 +440,11 @@ class SoftObject:
             self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
 
         for i in ti.static(self.grasp_particle_list):
-            pos_new_i = self.node_pos_new[i]
+            grasp_pos_next = self.sn[i]
             q_i_x_idx = i * dim
             q_i_y_idx = i * dim + 1
-            self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-            self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
-
-
-    @ti.kernel
-    def warm_up(self):
-        """
-        Warm start the solver
-        """
-        dim = self.dim
-        for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*dim, i*dim+1
-            self.node_pos_new[i].x = self.sn[idx0]
-            self.node_pos_new[i].y = self.sn[idx1]
+            self.rhs[q_i_x_idx] += (grasp_pos_next[0] * self.grasp_mass)
+            self.rhs[q_i_y_idx] += (grasp_pos_next[1] * self.grasp_mass)
 
 
     @ti.kernel
@@ -471,118 +458,13 @@ class SoftObject:
     @ti.kernel
     def update_vel_pos(self):
         # ti.loop_config(serialize=True)
-        for i in ti.static(self.grasp_particle_list):
-            self.node_pos_next[i].x = self.node_pos[i].x + self.delta
+        # for i in ti.static(self.grasp_particle_list):
+        #     self.node_pos_next[i].x = self.node_pos[i].x + self.delta
 
         # ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_next[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_next[i]
-
-
-    @ti.kernel
-    def partial_p(self):
-        """
-        Calculate $\partial p/\partial q$
-        :return:
-        """
-        dim = self.dim
-        for i in range(self.ELEMENT_NUM):
-            A_i = self.A[i]
-            ia, ib ,ic = self.element[i]
-            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
-            D_i = ti.Matrix.cols([b-a, c-a])
-            F_i = ti.cast(D_i @ self.B[i], ti.f64)
-            # F = U @ sig @ V^T
-            U, sig, V = ti.svd(F_i, ti.f64)
-
-            # Solve a linear equations
-            # Position dimension is 2
-            for m,n in ti.ndrange(dim, dim):
-                # Subscript [0,1] due to the 2D
-                Omega_UV = ti.Matrix([[0., 0.], [0., 0.]])
-                Omega_UV[0, 1] = (U[m,0]*V[n,1] - U[m,1]*V[n,0]) / (sig[0,0] + sig[1,1])
-                Omega_UV[1, 0] = -Omega_UV[0, 1]
-                dBp_df = U @ Omega_UV @ V.transpose()
-                dBp_df_vec = ti.Vector([dBp_df[0,0], dBp_df[0,1], dBp_df[1,0], dBp_df[1,1]])
-                self.dBp_dF[i][:,dim*m+n] = dBp_df_vec
-
-            # Strain constraint，4*6 matrix
-            self.dBp_dq[i] = self.dBp_dF[i] @ A_i
-
-            # Element AT_dBp_dq
-            self.AT_dBp_dq[i] = A_i.transpose() @ self.dBp_dq[i]
-
-        # Construct \Delta A [(dim*PARTCLE_NUM)*(dim*PARTCLE_NUM)] which named in DiffPD
-        self.rhs_dA.fill(0.)
-        for i in range(self.ELEMENT_NUM):
-            weight = self.strain_weight[i]
-            ia, ib, ic = self.element[i]
-            ia_x, ia_y = ia * dim, ia * dim + 1
-            ib_x, ib_y = ib * dim, ib * dim + 1
-            ic_x, ic_y = ic * dim, ic * dim + 1
-            q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
-            for row_idx, col_idx in ti.static(ti.ndrange(6,6)):
-                rhs_row_idx = q_idx_vec[row_idx]
-                rhs_col_idx = q_idx_vec[col_idx]
-                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
-
-
-    def construct_L(self):
-        """
-        L measures the distance between the marker node and its desired position
-        :return: Loss
-        """
-        dim = self.dim
-        idx = self.marker_idx
-        desired_pos = self.marker_pos_desired[0]
-        current_pos = self.node_pos[idx]
-        L = (current_pos - desired_pos)**2
-        self.dL[idx*dim] = 2*(current_pos.x - desired_pos.x)
-        self.dL[idx*dim + 1] = 2*(current_pos.y - desired_pos.y)
-        return L
-
-
-    def diff_data(self):
-        """
-        Store the data of DiffPD
-        """
-        self.partial_p()
-        mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
-        mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
-        mass_dim_np[0::2] = mass_np
-        mass_dim_np[1::2] = mass_np
-        M_np = np.diag(mass_dim_np)
-        # np.savetxt('A_strain.csv', self.A_strain.to_numpy(), fmt='%f', delimiter=',')
-        # np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
-        # np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
-        # np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
-        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
-        B = M_np
-        dx_dy_np = np.linalg.solve(A, B)
-        np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
-
-
-    def diff_pd(self, itr_num:ti.i32):
-        """
-        The iterative method of DiffPD
-        :return:
-        """
-        self.partial_p()                    # Calulate \partial p / \partial q, which is z
-        dA = self.rhs_dA.to_numpy()         # \Delta A in DiffPD iteration equation
-        par_L = self.dL.to_numpy()          # \partial L / \partial q in DiffPD iteration equation
-        z_np = self.z.to_numpy()
-        for itr in ti.static(range(itr_num)):
-            rhs_diff_np = dA @ z_np + par_L         # Right part of the DiffPD iteration equation
-            z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
-            z_np = z_new_np
-        self.z.from_numpy(z_np)
-
-        for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*self.dim, i*self.dim+1
-            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
-            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
-        # print('dq:', self.displace.to_numpy())
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -652,16 +534,6 @@ class SoftObject:
         self.canvas = self.window.get_canvas()
         self.show_preset()
 
-    @ti.kernel
-    def store_state(self):
-        """
-        Store the node states in this time step
-        :return:
-        """
-        for i in range(self.PARTICLE_NUM):
-            self.node_pos_store[i] = self.node_pos[i]
-            self.node_vel_store[i] = self.node_vel[i]
-
 
     def substep(self, step_num):
         self.construct_sn()
@@ -679,7 +551,7 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=True,
                       itr_num=step_num)
 
-        self.diff_data()
+        # self.diff_data()
         # loss_tmp = self.construct_L()
         # self.loss = loss_tmp.sum()
         # print('Loss:', loss_tmp, 'Loss sum:', self.loss)
@@ -702,56 +574,12 @@ class SoftObject:
 
 
     @ti.kernel
-    def difference_grad(self):
-        """
-        Calculate the gradient of node position with difference method
-        :return:
-        """
-        for i in range(self.PARTICLE_NUM):
-            self.grad_true[2*i] = (self.node_pos[i][0] - self.node_pos_store[i][0]) / self.delta
-            self.grad_true[2*i+1] = (self.node_pos[i][1] - self.node_pos_store[i][0]) / self.delta
-
-
-    @ti.kernel
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
             if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
                 self.node_vel[i].x = 8.
             else:
                 self.node_vel[i].x = 0.
-
-
-    def marker_constraint(self, marker_point_np:ti.types.ndarray()):
-        N = marker_point_np.shape[0]
-        marker_point = ti.Vector.field(2, dtype=ti.f64, shape=N)
-        marker_point.from_numpy(marker_point_np)
-        # the nearest node No. of the marker point
-        node_nearest = ti.ndarray(dtype=ti.i32, shape=N)
-
-        sorts = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-        dists = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
-
-        @ti.kernel
-        def points_knn(point:ti.types.vector(2, dtype=ti.f64)):
-            """
-            Find the K-th nearest nodes No. and the weights.
-            :param point: ti.Vector
-            :return:
-            """
-            sorts.fill(0)
-            dists.fill(0.)
-            for i in range(self.PARTICLE_NUM):
-                sorts[i] = i
-                dists[i] = (self.node_init_pos[i] - point).norm()
-
-        for i in range(N):
-            points_knn(marker_point[i])
-            ti.algorithms.parallel_sort(dists, sorts)
-            sorts_host = sorts.to_numpy()
-            nearest_idx = sorts_host[0]
-            node_nearest[i] = nearest_idx
-
-        return node_nearest.to_numpy()
 
 
 def main():
@@ -782,6 +610,7 @@ def main():
     # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    soft_obj.init_vel()
 
     window = soft_obj.window
     # while window.running:
@@ -790,25 +619,25 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(1):
-        soft_obj.store_state()
+    for i in range(100):
+        # soft_obj.store_state()
         soft_obj.substep(i)
-        soft_obj.difference_grad()
-        np.savetxt('grad_dx_dy_true.csv', soft_obj.grad_true.to_numpy(), fmt='%f', delimiter=',')
+        # soft_obj.difference_grad()
+        # np.savetxt('grad_dx_dy_true.csv', soft_obj.grad_true.to_numpy(), fmt='%f', delimiter=',')
         # soft_obj.control_grasp()
         # loss_list.append(soft_obj.loss)
-        marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
-        grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
-        grasp_grad_list.append(soft_obj.grad_grasp_store)
+        # marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
+        # grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
+        # grasp_grad_list.append(soft_obj.grad_grasp_store)
 
-    # Save data
-    np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
-    np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
-    np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
-    np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
+    # # Save data
+    # np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    # np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
 
 
 if __name__ == '__main__':
