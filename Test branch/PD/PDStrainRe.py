@@ -12,6 +12,7 @@ from scipy import sparse
 from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import factorized
+from decimal import Decimal, getcontext
 
 
 @ti.data_oriented
@@ -21,14 +22,14 @@ class SoftObject:
         self.seed_size = seed_size
         # self.dt = 1./120
         self.dt = 1. / 480
-        self.rho = 1.145e3
+        # self.rho = 1.145e3
+        self.rho = 1.e1
         # self.E = 5.e5
-        self.E = 5.e2
-        self.nu = 0.1
+        self.E, self.nu = 5.e2, 0.1
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.area_sum = ti.field(dtype=ti.f64, shape=())
-        self.positional_weight = 1.e15
+        self.positional_weight = 1.e5
         # self.positional_mass = 0.
         self.grasp_mass = 0.
         self.marker_mass = 0.
@@ -85,6 +86,7 @@ class SoftObject:
         self.construct_B()
         self.construct_volume_weight()
         self.construct_mass(self.area_sum[None])
+        print('area sum:', self.area_sum[None])
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -113,8 +115,8 @@ class SoftObject:
         L = shape[0]
         W = shape[1]
         # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
-        LN_remain = int(1) if np.mod(L, seed_size) == 0 else int(0)
-        WN_remain = int(1) if np.mod(W, seed_size) == 0 else int(0)
+        LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)
+        WN_remain = int(1) if np.mod(W, seed_size) < 1.e-8 else int(0)
         LN = int(np.ceil(L / seed_size)) + LN_remain
         WN = int(np.ceil(W / seed_size)) + WN_remain
         # LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
@@ -608,8 +610,8 @@ def main():
             super().__init__(shape, seed_size)
 
     # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
-    soft_obj = MyObject(shape=[8., 2.], seed_size=0.2)
-    soft_obj.preset_gui([4., 5, 0.], [4., 0., 0.])
+    soft_obj = MyObject(shape=[0.4, 0.2], seed_size=0.02)
+    soft_obj.preset_gui([0.2, 0.6, 0.], [0.2, 0., 0.])
 
     # print('grasp node idx', soft_obj.grasp_particle_list)
     # print('marker node idx:', soft_obj.marker_idx)
@@ -628,7 +630,8 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    exit(0)
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.init_vel()

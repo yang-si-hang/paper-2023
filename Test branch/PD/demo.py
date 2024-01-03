@@ -1,4 +1,6 @@
-
+"""
+This file change the mass distribution
+"""
 # Acknowledgement: ti example fem99.py
 # Demo 3
 
@@ -98,11 +100,14 @@ def init_mesh():  # generate two triangles
 @ti.kernel
 def precomputation():
     dimp = dim+1
-    for e_it in range(NF):
-        ia, ib, ic = f2v[e_it]
-        mass[ia] += volume/dimp * rho
-        mass[ib] += volume/dimp * rho
-        mass[ic] += volume/dimp * rho
+    # for e_it in range(NF):
+    #     ia, ib, ic = f2v[e_it]
+    #     mass[ia] += volume/dimp * rho
+    #     mass[ib] += volume/dimp * rho
+    #     mass[ic] += volume/dimp * rho
+
+    for p_it in range(NV):
+        mass[p_it] = volume * NF * rho / NV
 
     # Construct A_i matrix for every element / Build A for all the constraints:
     # Strain constraints and area constraints
@@ -431,6 +436,11 @@ pre_fact_lhs_solve = factorized(s_lhs_matrix_np)
 print("sparse lhs matrix:\n", s_lhs_matrix_np)
 
 initinfo()
+
+# Print information
+# np.savetxt('demo_node_mass.csv', mass.to_numpy(), fmt='%e', delimiter=',')
+np.savetxt('demo_lhs_np', lhs_matrix_np, fmt='%f', delimiter=',')
+exit(0)
 
 gui = ti.GUI('Projective Dynamics Demo3 v0.2')
 # wait = input("PRESS ENTER TO CONTINUE.")
