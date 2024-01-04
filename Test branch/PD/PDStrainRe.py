@@ -116,7 +116,7 @@ class SoftObject:
         L = shape[0]
         W = shape[1]
         # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
-        LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)
+        LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)          # 1e-8 due to the precision problem
         WN_remain = int(1) if np.mod(W, seed_size) < 1.e-8 else int(0)
         LN = int(np.ceil(L / seed_size)) + LN_remain
         WN = int(np.ceil(W / seed_size)) + WN_remain
@@ -128,7 +128,8 @@ class SoftObject:
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
-        node += np.array([0.2, 0.5])
+        # node += np.array([0.2, 0.5])
+        # node += np.array([0.1, 0.])
 
         # Generate the elements' index
         tri = Delaunay(node)
@@ -623,7 +624,7 @@ def main():
 
     # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj = MyObject(shape=[0.4, 0.2], seed_size=0.02)
-    soft_obj.preset_gui([0.2+0.2, 0.6, 0.4], [0.2+0.2, 0., 0.4])
+    soft_obj.preset_gui([0.2+0.2, 0.6, 0.], [0.2+0.2, 0., 0.])
 
     # print('grasp node idx', soft_obj.grasp_particle_list)
     # print('marker node idx:', soft_obj.marker_idx)
@@ -642,7 +643,7 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # np.savetxt('lhs_test.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.init_vel()
@@ -660,7 +661,7 @@ def main():
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), fmt='%f', delimiter=',')
         # Bp_np = np.zeros((soft_obj.PARTICLE_NUM*2, 4))
         # soft_obj.store_Bp(Bp_np)
-        # np.savetxt('Bp.csv', Bp_np, fmt='%f', delimiter=',')
+        # np.savetxt('Bp_test.csv', Bp_np, fmt='%f', delimiter=',')
         # soft_obj.difference_grad()
         # np.savetxt('grad_dx_dy_true.csv', soft_obj.grad_true.to_numpy(), fmt='%f', delimiter=',')
         # soft_obj.control_grasp()
