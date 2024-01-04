@@ -70,7 +70,8 @@ def init_pos():
     # 初始化节点位置
     for i, j in ti.ndrange(N + 1, W + 1):
         k = i*(W+1)+j
-        pos[k] = ti.Vector([i/N*0.4, j/W*0.2]) + ti.Vector([0.2, 0.4]) # 0.2, 0.4 - 0.6,0.6  0.02*0.02
+        # pos[k] = ti.Vector([i/N*0.4, j/W*0.2]) + ti.Vector([0.2, 0.4]) # 0.2, 0.4 - 0.6,0.6  0.02*0.02
+        pos[k] = ti.Vector([i / N * 0.4, j / W * 0.2]) + ti.Vector([0., 0.4])
         # pos[k] = ti.Vector([i / N * 0.4, j / W * 0.2]) + ti.Vector([-0.1, 0.])
         pos_init[k] = pos[k]
         vel[k] = ti.Vector([0, 0])
@@ -304,7 +305,8 @@ def warm_up():
 @ti.kernel
 def initinfo():
     for i in range(NV):
-        if (pos[i][0] > 0.401):
+        # if (pos[i][0] > 0.401):
+        if (pos[i][0] > 0.399):
             vel[i][0] = 5
         elif (pos[i][0] < 0.399):
             vel[i][0] = 0
@@ -448,6 +450,7 @@ print("sparse lhs matrix:\n", s_lhs_matrix_np)
 initinfo()
 
 # Print information
+np.savetxt('demo_node_pos_init.csv', pos_init.to_numpy(), fmt='%f', delimiter=',')
 np.savetxt('demo_node_mass.csv', mass.to_numpy(), fmt='%e', delimiter=',')
 np.savetxt('demo_lhs_np.csv', lhs_matrix_np, fmt='%f', delimiter=',')
 # exit(0)

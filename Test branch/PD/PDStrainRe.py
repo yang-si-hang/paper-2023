@@ -1,6 +1,7 @@
 """
 This file is the implementation of the Projective Dynamics method with strain constraint.
 Rewrite the exerted force in the Implicit Euler integration
+- The difference with "demo3.py" is the which particles are implied velocity.
 """
 
 
@@ -129,7 +130,7 @@ class SoftObject:
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
         # node += np.array([0.2, 0.5])
-        # node += np.array([0.1, 0.])
+        node += np.array([0.1, 0.])
 
         # Generate the elements' index
         tri = Delaunay(node)
@@ -167,7 +168,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0.2 + EPS)# or (z_temp > W/2 - EPS)
+                fix_flag_temp = (x_temp < 0.1 + EPS)# or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
