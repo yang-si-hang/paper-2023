@@ -29,7 +29,7 @@ class SoftObject:
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.area_sum = ti.field(dtype=ti.f64, shape=())
-        self.positional_weight = 1.e5
+        self.positional_weight = 1.e4
         # self.positional_mass = 0.
         self.grasp_mass = 0.
         self.marker_mass = 0.
@@ -81,12 +81,13 @@ class SoftObject:
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.fix_particle_list = self.fix_particle_No()
-        self.grasp_particle_list, _ = self.grasp_particle_No()
+        # self.grasp_particle_list, _ = self.grasp_particle_No()
+        self.grasp_particle_list = [230]
 
         self.construct_B()
         self.construct_volume_weight()
         self.construct_mass(self.area_sum[None])
-        print('area sum:', self.area_sum[None])
+        # print('area sum:', self.area_sum[None])
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -127,6 +128,7 @@ class SoftObject:
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
+        node += np.array([0.2, 0.5])
 
         # Generate the elements' index
         tri = Delaunay(node)
@@ -164,7 +166,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
+                fix_flag_temp = (x_temp < 0.2 + EPS)# or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
@@ -381,6 +383,7 @@ class SoftObject:
             # Strain constriant
             ia, ib, ic = self.element[i]
             a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            # a, b, c = self.node_pos_new[ia], self.node_pos_new[ib], self.node_pos_new[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
             self.F[i] = F_i
@@ -604,6 +607,15 @@ class SoftObject:
                 self.node_vel[i].x = 0.
 
 
+    def store_Bp(self, Bp_np:ti.types.ndarray()):
+        for i in range(self.PARTICLE_NUM*2):
+            Bp_i = self.Bp[i]
+            Bp_np[i, 0] = Bp_i[0, 0]
+            Bp_np[i, 1] = Bp_i[0, 1]
+            Bp_np[i, 2] = Bp_i[1, 0]
+            Bp_np[i, 3] = Bp_i[1, 1]
+
+
 def main():
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size):
@@ -611,7 +623,7 @@ def main():
 
     # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj = MyObject(shape=[0.4, 0.2], seed_size=0.02)
-    soft_obj.preset_gui([0.2, 0.6, 0.], [0.2, 0., 0.])
+    soft_obj.preset_gui([0.2+0.2, 0.6, 0.4], [0.2+0.2, 0., 0.4])
 
     # print('grasp node idx', soft_obj.grasp_particle_list)
     # print('marker node idx:', soft_obj.marker_idx)
@@ -622,7 +634,7 @@ def main():
     # for i in range(4):
     #     np.savetxt(f'A{i}.csv', soft_obj.A[i].to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy())
-    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy())
+    np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy())
     # np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
     # np.savetxt('edge.csv', soft_obj.edge.to_numpy(), fmt='%d')
     # np.savetxt('B0.csv', soft_obj.B[0].to_numpy(), fmt='%f', delimiter=',')
@@ -631,7 +643,6 @@ def main():
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
     np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    exit(0)
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.init_vel()
@@ -646,6 +657,10 @@ def main():
     for i in range(500):
         # soft_obj.store_state()
         soft_obj.substep(i)
+        # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), fmt='%f', delimiter=',')
+        # Bp_np = np.zeros((soft_obj.PARTICLE_NUM*2, 4))
+        # soft_obj.store_Bp(Bp_np)
+        # np.savetxt('Bp.csv', Bp_np, fmt='%f', delimiter=',')
         # soft_obj.difference_grad()
         # np.savetxt('grad_dx_dy_true.csv', soft_obj.grad_true.to_numpy(), fmt='%f', delimiter=',')
         # soft_obj.control_grasp()

@@ -71,6 +71,7 @@ def init_pos():
     for i, j in ti.ndrange(N + 1, W + 1):
         k = i*(W+1)+j
         pos[k] = ti.Vector([i/N*0.4, j/W*0.2]) + ti.Vector([0.2, 0.4]) # 0.2, 0.4 - 0.6,0.6  0.02*0.02
+        # pos[k] = ti.Vector([i / N * 0.4, j / W * 0.2]) + ti.Vector([-0.1, 0.])
         pos_init[k] = pos[k]
         vel[k] = ti.Vector([0, 0])
         if i == 0:
@@ -425,6 +426,15 @@ def paint_phi(gui):
     gui.lines(c, a, color=0xffffff, radius=0.5)
 
 
+def store_Bp(Bp_np:ti.types.ndarray()):
+    for i in range(NV*2):
+        Bp_i = Bp[i]
+        Bp_np[i, 0] = Bp_i[0, 0]
+        Bp_np[i, 1] = Bp_i[0, 1]
+        Bp_np[i, 2] = Bp_i[1, 0]
+        Bp_np[i, 3] = Bp_i[1, 1]
+
+
 frame_counter = 0
 init_mesh()
 init_pos()
@@ -438,9 +448,9 @@ print("sparse lhs matrix:\n", s_lhs_matrix_np)
 initinfo()
 
 # Print information
-# np.savetxt('demo_node_mass.csv', mass.to_numpy(), fmt='%e', delimiter=',')
-np.savetxt('demo_lhs_np', lhs_matrix_np, fmt='%f', delimiter=',')
-exit(0)
+np.savetxt('demo_node_mass.csv', mass.to_numpy(), fmt='%e', delimiter=',')
+np.savetxt('demo_lhs_np.csv', lhs_matrix_np, fmt='%f', delimiter=',')
+# exit(0)
 
 gui = ti.GUI('Projective Dynamics Demo3 v0.2')
 # wait = input("PRESS ENTER TO CONTINUE.")
@@ -507,6 +517,11 @@ while frame_counter < 500:
         # check_boundary_points()
         # if residual < solver_stop_residual:
         #   break
+
+    np.savetxt('demo_rhs_np.csv', rhs_np, fmt='%f', delimiter=',')
+    # Bp_np = np.zeros((NV*2, 4))
+    # store_Bp(Bp_np)
+    # np.savetxt('demo_Bp.csv', Bp_np, fmt='%f', delimiter=',')
 
     # Update velocity and positions
     update_velocity_pos()
