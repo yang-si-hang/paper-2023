@@ -1,7 +1,7 @@
 """
 This file is an *example file* that implement the Projective Dynamics method with strain & volume constraint.
 Rewrite the exerted force in the Implicit Euler integration.
-- The difference with "demo3.py" is the which particles are implied velocity. So please attention to the function "init_vel"
+- The PD simulation is motivated by grasping node with a constant velocity.
 """
 
 
@@ -22,7 +22,9 @@ class SoftObject:
         self.E, self.nu = 5.e2, 0.1
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e4
+        self.grasp_mass = 1.e4
         self.solve_iteration = 10
+        self.GRASP_VEL = ti.Vector([0.1, 0.])
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -65,16 +67,17 @@ class SoftObject:
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.fix_particle_list = self.fix_particle_No()
+        self.grasp_particle_list, self.grasp_ele_list = self.grasp_particle_No()
 
         self.construct_B()
         self.construct_volume_weight()
         self.construct_mass(self.area_sum[None])
-        # print('area sum:', self.area_sum[None])
 
         # Print the information
         print('Particle number:', self.PARTICLE_NUM)
         print('Element number:', self.ELEMENT_NUM)
         print('Edge number:', self.EDGE_NUM)
+        print('Grasp particle list:', self.grasp_particle_list)
 
 
     def mesh_object(self):
@@ -109,7 +112,7 @@ class SoftObject:
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
-        node += np.array([0.1, 0.])
+        # node += np.array([0.1, 0.])
 
         # Generate the elements' index
         tri = Delaunay(node)
@@ -147,7 +150,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0.1 + EPS)# or (z_temp > W/2 - EPS)
+                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
@@ -158,6 +161,41 @@ class SoftObject:
         fix_particle_list = list(fix_particle_set)
 
         return fix_particle_list
+    
+
+    def grasp_particle_No(self):
+        """
+        Find the particle No. & element No. of grasp constraint
+        """
+        grasp_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        L = self.shape[0]
+        W = self.shape[1]
+        seed_size = self.seed_size
+
+        @ti.kernel
+        def cal_grasp_constraint(L: float, W: float, seed_size: float):
+            EPS = seed_size / 3
+            for idx in range(self.PARTICLE_NUM):
+                x_temp = self.node_init_pos[idx].x
+                z_temp = self.node_init_pos[idx].y
+                # grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
+                grasp_flag_temp = (x_temp > L - EPS) and (z_temp < -W / 2 + EPS)
+                grasp_flag[idx] = grasp_flag_temp
+
+        cal_grasp_constraint(L, W, seed_size)
+        grasp_particle_set = set()
+        for i in range(self.PARTICLE_NUM):
+            if grasp_flag[i]:
+                grasp_particle_set.add(i)
+        grasp_particle_list = list(grasp_particle_set)
+        grasp_idx = grasp_particle_list[0]
+        grasp_ele_list = []
+        for i in range(self.ELEMENT_NUM):
+            ele_temp = self.element[i].to_numpy()
+            if grasp_idx in ele_temp:
+                grasp_ele_list.append(i)
+
+        return grasp_particle_list, grasp_ele_list
 
 
     @ti.kernel
@@ -197,6 +235,9 @@ class SoftObject:
         # Mass evenly distributed
         mass_tmp = self.rho * area / self.PARTICLE_NUM
         self.node_mass.fill(mass_tmp)
+
+        for i in ti.static(self.grasp_particle_list):
+            self.node_mass[i] = self.grasp_mass
 
 
     @ti.kernel
@@ -291,6 +332,10 @@ class SoftObject:
             vel = self.node_vel[i]
             self.sn[idx1] = pos[0] + dt * vel[0]
             self.sn[idx2] = pos[1] + dt * vel[1]
+        
+        for i in ti.static(self.grasp_particle_list):
+            self.sn[i*dim] += self.GRASP_VEL[0] * dt
+            self.sn[i*dim+1] += self.GRASP_VEL[1] * dt
     
     
     @ti.kernel
@@ -395,6 +440,9 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
+        for i in ti.static(self.grasp_particle_list):
+            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL * self.dt
+
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
@@ -505,10 +553,12 @@ def main():
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    soft_obj.init_vel()
+    # soft_obj.init_vel()
 
     for i in range(500):
         soft_obj.substep(i)
+        # for g_idx in ti.static(soft_obj.grasp_particle_list):
+        #     print('Grasp pos:',soft_obj.node_pos[g_idx].x, soft_obj.node_pos[g_idx].y)
 
 
 if __name__ == '__main__':
