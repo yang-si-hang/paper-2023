@@ -1,5 +1,5 @@
 """
-This file is an example file that implement the Projective Dynamics method with strain & volume constraint.
+This file is an *example file* that implement the Projective Dynamics method with strain & volume constraint.
 Rewrite the exerted force in the Implicit Euler integration.
 - The difference with "demo3.py" is the which particles are implied velocity. So please attention to the function "init_vel"
 """
@@ -7,13 +7,9 @@ Rewrite the exerted force in the Implicit Euler integration.
 
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
-import taichi.math as tm
 import numpy as np
 from scipy import sparse
 from scipy.spatial import Delaunay
-from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import factorized
-from decimal import Decimal, getcontext
 
 
 @ti.data_oriented
@@ -297,6 +293,17 @@ class SoftObject:
             vel = self.node_vel[i]
             self.sn[idx1] = pos[0] + dt * vel[0]
             self.sn[idx2] = pos[1] + dt * vel[1]
+    
+    
+    def warm_start(self):
+        """
+        Warm start the solution with "node_pos"
+        """
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx1, idx2 = dim*i, dim*i+1
+            self.node_pos_new[i].x = self.node_pos[idx1]
+            self.node_pos_new[i].y = self.node_pos[idx2]
 
 
     @ti.kernel
@@ -463,6 +470,7 @@ class SoftObject:
 
     def substep(self, step_num):
         self.construct_sn()
+        self.warm_start()
         # Local sovle needs iteration
         for itr in ti.static(range(self.solve_iteration)):
             self.local_solve()
