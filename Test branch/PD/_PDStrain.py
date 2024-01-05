@@ -34,11 +34,11 @@ class SoftObject:
         self.EDGE_NUM = edge_np.shape[0]
         self.ELEMENT_NUM = element_np.shape[0]
 
-        # Always the current node pos
+        # Always the node pos in time step
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
-        # Store the next node pos
-        self.node_pos_next = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        # For local solver
+        self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos.from_numpy(node_np.astype(np.float32))
@@ -73,9 +73,9 @@ class SoftObject:
         # print('area sum:', self.area_sum[None])
 
         # Print the information
-        print('Particle number: ', self.PARTICLE_NUM)
-        print('Element number: ', self.ELEMENT_NUM)
-        print('Edge number: ', self.EDGE_NUM)
+        print('Particle number:', self.PARTICLE_NUM)
+        print('Element number:', self.ELEMENT_NUM)
+        print('Edge number:', self.EDGE_NUM)
 
 
     def mesh_object(self):
@@ -110,7 +110,6 @@ class SoftObject:
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
-        # node += np.array([0.2, 0.5])
         node += np.array([0.1, 0.])
 
         # Generate the elements' index
@@ -295,15 +294,16 @@ class SoftObject:
             self.sn[idx2] = pos[1] + dt * vel[1]
     
     
+    @ti.kernel
     def warm_start(self):
         """
         Warm start the solution with "node_pos"
         """
         dim = self.dim
         for i in range(self.PARTICLE_NUM):
-            idx1, idx2 = dim*i, dim*i+1
-            self.node_pos_new[i].x = self.node_pos[idx1]
-            self.node_pos_new[i].y = self.node_pos[idx2]
+            # idx1, idx2 = dim*i, dim*i+1
+            self.node_pos_new[i].x = self.node_pos[i].x
+            self.node_pos_new[i].y = self.node_pos[i].y
 
 
     @ti.kernel
@@ -314,7 +314,7 @@ class SoftObject:
         for i in range(self.ELEMENT_NUM):
             # Strain constriant
             ia, ib, ic = self.element[i]
-            a, b, c = self.node_pos[ia], self.node_pos[ib], self.node_pos[ic]
+            a, b, c = self.node_pos_new[ia], self.node_pos_new[ib], self.node_pos_new[ic]
             D_i = ti.Matrix.cols([b-a, c-a])
             F_i = ti.cast(D_i @ self.B[i], ti.f64)
             self.F[i] = F_i
@@ -390,15 +390,15 @@ class SoftObject:
     def update_pos_new(self, sol:ti.types.ndarray()):
         for i in range(self.PARTICLE_NUM):
             idx0, idx1 = i*self.dim, i*self.dim+1
-            self.node_pos_next[i].x = sol[idx0]
-            self.node_pos_next[i].y = sol[idx1]
+            self.node_pos_new[i].x = sol[idx0]
+            self.node_pos_new[i].y = sol[idx1]
 
 
     @ti.kernel
     def update_vel_pos(self):
         for i in range(self.PARTICLE_NUM):
-            self.node_vel[i] = (self.node_pos_next[i] - self.node_pos[i]) / self.dt
-            self.node_pos[i] = self.node_pos_next[i]
+            self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
+            self.node_pos[i] = self.node_pos_new[i]
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -478,7 +478,6 @@ class SoftObject:
             rhs_np = self.rhs.to_numpy()
             node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(node_pos_new_np)
-            # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
@@ -508,8 +507,6 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.init_vel()
-
-    window = soft_obj.window
 
     for i in range(500):
         soft_obj.substep(i)
