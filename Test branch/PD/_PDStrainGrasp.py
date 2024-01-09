@@ -343,9 +343,7 @@ class SoftObject:
         """
         Warm start the solution with "node_pos"
         """
-        dim = self.dim
         for i in range(self.PARTICLE_NUM):
-            # idx1, idx2 = dim*i, dim*i+1
             self.node_pos_new[i].x = self.node_pos[i].x
             self.node_pos_new[i].y = self.node_pos[i].y
 
