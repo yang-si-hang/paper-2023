@@ -561,7 +561,7 @@ class SoftObject:
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         self.grad_dx_dy.from_numpy(dx_dy_np[self.marker_idx*2:self.marker_idx*2+2, :])
-        # np.savetxt('grad_dx_dy.npy', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('grad_dx_dy.csv', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
         # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
 
         # A_tmp = A

@@ -24,9 +24,10 @@ class SoftObject:
         self.E, self.nu = 5.e5, 0.4
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e10
-        self.grasp_mass = 0.
-        self.solve_iteration = 10
-        self.GRASP_VEL = ti.Vector([0., 0.])
+        self.grasp_mass = 1.e6
+        self.solve_iteration = 50
+        self.EPS = 1.e-4
+        self.GRASP_VEL = ti.Vector([0., 0.]) + ti.Vector([1., 0.])*self.EPS
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -81,22 +82,24 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.grad_finite = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.dL.fill(0.)
         self.z.fill(1.)
+
+        self.fix_particle_list = self.fix_particle_No()
+        # self.grasp_particle_list, _ = self.grasp_particle_No()
+        self.grasp_particle_list = [10]
 
         self.construct_B()
         self.construct_volume()
         self.construct_mass(self.area_sum[None])
 
-        self.fix_particle_list = self.fix_particle_No()
-        self.grasp_particle_list, _ = self.grasp_particle_No()
-
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
         print('Element number: ', self.ELEMENT_NUM)
         print('Edge number: ', self.EDGE_NUM)
-        # print('Grasp particle No.: ', self.grasp_particle_list)
+        print('Grasp particle No.: ', self.grasp_particle_list)
 
 
     def mesh_object(self):
@@ -108,7 +111,8 @@ class SoftObject:
             raise ValueError("Only 2D and 3D objects are supported.")
 
 
-    def mesh_object_2d(self, shape, seed_size):
+    @staticmethod
+    def mesh_object_2d(shape, seed_size):
         L = shape[0]
         W = shape[1]
         LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
@@ -333,8 +337,10 @@ class SoftObject:
             self.sn[idx2] = pos[1] + dt * vel[1]
 
         for i in ti.static(self.grasp_particle_list):
-            self.sn[i*dim] += self.GRASP_VEL[0] * dt
-            self.sn[i*dim+1] += self.GRASP_VEL[1] * dt
+            # self.sn[i*dim] += self.GRASP_VEL[0] * dt
+            # self.sn[i*dim+1] += self.GRASP_VEL[1] * dt
+            self.sn[i*dim] += self.GRASP_VEL[0]
+            self.sn[i*dim+1] += self.GRASP_VEL[1]
 
 
     @ti.kernel
@@ -440,8 +446,9 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
-        # for i in ti.static(self.grasp_particle_list):
-        #     self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL * self.dt
+        for i in ti.static(self.grasp_particle_list):
+            # self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL * self.dt
+            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL
 
         # ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
@@ -522,6 +529,9 @@ class SoftObject:
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        for i in self.grasp_particle_list:
+            idx = i*self.dim
+            np.savetxt('dx_dy_grasp.csv', dx_dy_np[:, idx], fmt='%.9f', delimiter=',')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -546,6 +556,18 @@ class SoftObject:
         print('dq:', self.displace.to_numpy())
 
 
+    @ti.kernel
+    def cal_grad(self):
+        """
+        Calculate the gradient of the soft object deformation by finite difference method
+        :return:
+        """
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*self.dim, i*self.dim+1
+            self.grad_finite[idx0] = (self.node_pos[i].x - self.node_init_pos[i].x) / self.EPS
+            self.grad_finite[idx1] = (self.node_pos[i].y - self.node_init_pos[i].y) / self.EPS
+
+
     def substep(self):
         self.construct_sn()
         self.warm_up()
@@ -564,8 +586,13 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
         # self.construct_L()
-        self.diff_data()
+        # self.diff_data()
         # self.diff_pd(10)
+
+
+    def valid_grad(self):
+        self.construct_sn()
+        self.warm_up()
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -670,19 +697,21 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # soft_obj.init_vel()
-    # print(soft_obj.node_pos[0])
-    # soft_obj.GRASP_VEL = ti.Vector([0., 0.])
-
     window = soft_obj.window
     # while window.running:
     # Change the iteration number from 500 to 100
+
+    soft_obj.diff_data()
+
     for i in range(1):
         soft_obj.substep()
 
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
+
+    soft_obj.cal_grad()
+    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.9f', delimiter=',')
 
 
 if __name__ == '__main__':
