@@ -1,5 +1,5 @@
 """
-This file to validate the error of the DiffPD method.
+This file to validate the error of the DiffPD method. The ground truth calculated by finite difference method.
 Apply DiffPD in simulation with a grasping node.
 With leftside positional constraint.
 """
@@ -12,7 +12,6 @@ import numpy as np
 from scipy import sparse
 from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import factorized
 
 
 @ti.data_oriented
@@ -451,9 +450,8 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
-        for i in ti.static(self.grasp_particle_list):
-            # self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL * self.dt
-            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL
+        # for i in ti.static(self.grasp_particle_list):
+        #     self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL
 
         # ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
@@ -728,15 +726,10 @@ def main():
     np.savetxt('node_pos.csv', soft_obj.node_pos.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.9f', delimiter=',')
 
-    # Following lines for test!
-    # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
-
     soft_obj.cal_grad()
-    grad_finite_np = (soft_obj.node_pos.to_numpy() - soft_obj.node_init_pos.to_numpy())/soft_obj.EPS
     np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('grad_finite.csv', grad_finite_np, fmt='%.9f', delimiter=',')
-    np.savetxt('displace_grasp.csv', soft_obj.grad_finite.to_numpy()*soft_obj.EPS, fmt='%.15f', delimiter=',')
+    # np.savetxt('displace_grasp.csv', soft_obj.grad_finite.to_numpy()*soft_obj.EPS, fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':

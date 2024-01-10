@@ -8,9 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-loss = np.loadtxt('loss1.csv', delimiter=',')
-grasp_pos = np.loadtxt('grasp_pos1.csv', delimiter=',')
-marker_pos = np.loadtxt('marker_pos1.csv', delimiter=',')
+loss = np.loadtxt('loss2.csv', delimiter=',')
+grasp_pos = np.loadtxt('grasp_pos2.csv', delimiter=',')
+marker_pos = np.loadtxt('marker_pos2.csv', delimiter=',')
 
 fig, axs = plt.subplots(3, 1, figsize=(10, 12), dpi=100)
 plt.rcParams['font.family'] = 'Times New Roman'  # 设置刻度标签的字体

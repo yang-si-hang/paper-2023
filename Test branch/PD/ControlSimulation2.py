@@ -12,7 +12,6 @@ import numpy as np
 from scipy import sparse
 from scipy.spatial import Delaunay
 from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import factorized
 
 
 @ti.data_oriented
@@ -46,12 +45,12 @@ class SoftObject:
         self.ELEMENT_NUM = element_np.shape[0]
 
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         # For local sovler & rhs construction
         self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos.from_numpy(node_np.astype(np.float32))
+        self.node_init_pos.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
 
         self.edge = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
@@ -123,7 +122,7 @@ class SoftObject:
         print('Particle number:', self.PARTICLE_NUM)
         print('Element number:', self.ELEMENT_NUM)
         print('Edge number:', self.EDGE_NUM)
-        # print('Grasp particle No.: ', self.grasp_particle_list)
+        print('Grasp particle No.: ', self.grasp_particle_list)
 
 
     def mesh_object(self):
@@ -443,20 +442,21 @@ class SoftObject:
                 self.rhs[q_ic_x_idx] += AT_Bp[4]
                 self.rhs[q_ic_y_idx] += AT_Bp[5]
 
+        # Positional constraint
+        weight_p = self.positional_weight
         for par_idx in ti.static(self.fix_particle_list):
             # B_i is identity dim*dim
-            weight = self.positional_weight
             q_i_x_idx = par_idx * dim
             q_i_y_idx = par_idx * dim + 1
-            self.rhs[q_i_x_idx] += weight * self.node_init_pos[par_idx].x
-            self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
+            self.rhs[q_i_x_idx] += weight_p * self.node_init_pos[par_idx].x
+            self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
 
-        for i in ti.static(self.grasp_particle_list):
-            pos_new_i = self.node_pos_new[i]
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-            self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
+        # for i in ti.static(self.grasp_particle_list):
+        #     pos_new_i = self.node_pos_new[i]
+        #     q_i_x_idx = i * dim
+        #     q_i_y_idx = i * dim + 1
+        #     self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
+        #     self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
 
 
     @ti.kernel
@@ -603,7 +603,7 @@ class SoftObject:
         np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
         np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
         np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
-        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
+        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         # All nodes graddient to grasp node
@@ -772,7 +772,7 @@ class SoftObject:
         Control the grasp point based the loss gradient
         :return:
         """
-        learning_rate = 5.e-4
+        learning_rate = 5.e-2
         # grasp_idx = self.grasp_particle_list[0]
         # marker_idx = self.marker_idx
         # grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
@@ -923,7 +923,7 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(1):
+    for i in range(500):
         soft_obj.substep(i)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
@@ -932,10 +932,10 @@ def main():
         grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # Save data
-    # np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
-    # np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
-    # np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
-    # np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
+    # np.savetxt('loss1.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    # np.savetxt('marker_pos1.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_pos1.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_grad1.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')

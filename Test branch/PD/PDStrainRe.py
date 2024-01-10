@@ -672,10 +672,10 @@ def main():
         # grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # # Save data
-    # np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
-    # np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
-    # np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
-    # np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
+    # np.savetxt('loss1.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    # np.savetxt('marker_pos1.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_pos1.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    # np.savetxt('grasp_grad1.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
