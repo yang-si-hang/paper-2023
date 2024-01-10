@@ -22,16 +22,22 @@ error_x_reshape = error_x.reshape(Nx, Ny)
 error_y_reshape = error_y.reshape(Nx, Ny)
 
 # 2D 热力图
-fig, ax = plt.subplots(figsize=(8, 6))
+grad_finite_grasp_x = grad_finite_grasp[::2]
+grad_finite_grasp_y = grad_finite_grasp[1::2]
+
+grad_finite_grasp_x_reshape = grad_finite_grasp_x.reshape(Nx, Ny)
+grad_finite_grasp_y_reshape = grad_finite_grasp_y.reshape(Nx, Ny)
+
+fig, ax = plt.subplots(figsize=(16, 6))
 plt.axis('off')
 plt.grid(True)
 
 plt.subplot(1, 2, 1)
-plt.imshow(error_x_reshape, cmap='viridis', interpolation='nearest')
+plt.imshow(np.abs(grad_finite_grasp_x_reshape), cmap='Greys', interpolation='nearest')
 cbar = plt.colorbar()
 
 plt.subplot(1, 2, 2)
-plt.imshow(error_y_reshape, cmap='viridis', interpolation='nearest')
+plt.imshow(np.abs(grad_finite_grasp_y_reshape), cmap='Greys', interpolation='nearest')
 cbar = plt.colorbar()
 
 plt.show()

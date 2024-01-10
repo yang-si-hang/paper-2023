@@ -1,11 +1,12 @@
 """
-Apply DiffPD in simulation with some nodes are applied velocity.
+This file to validate the error of the DiffPD method.
+Apply DiffPD in simulation with a grasping node.
 With leftside positional constraint.
 """
 
 
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
@@ -20,20 +21,21 @@ class SoftObject:
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
-        self.rho = 1.145e3
+        # self.rho = 1.145e3
+        self.rho = 1.145
         self.E, self.nu = 5.e5, 0.4
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e10
-        self.grasp_mass = 1.e6
+        self.grasp_mass = 1.e5
         self.solve_iteration = 50
-        self.EPS = 1.e-4
+        self.EPS = 1.e-9
         self.GRASP_VEL = ti.Vector([0., 0.]) + ti.Vector([1., 0.])*self.EPS
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('node.csv', node_np, fmt='%.15f', delimiter=',')
         # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
@@ -43,13 +45,15 @@ class SoftObject:
 
         # Always the node pos in time step
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         # For local solver
         self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos.from_numpy(node_np.astype(np.float32))
+        self.node_init_pos.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
+
+        # SoftObject.print_node(self)
 
         self.edge = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
         self.edge.from_numpy(edge_np.astype(np.int32))
@@ -82,7 +86,7 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
-        self.grad_finite = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.grad_finite = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
 
         self.dL.fill(0.)
         self.z.fill(1.)
@@ -216,7 +220,7 @@ class SoftObject:
             self.B[i] = B_i_inv.inverse()
 
 
-    # @ti.kernel
+    @ti.kernel
     def construct_volume(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
@@ -287,27 +291,27 @@ class SoftObject:
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
 
             # Strain constraint
+            weight_s = self.strain_weight[ele_idx]
             A_i = self.A[ele_idx]
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 tmp = 0.
                 for idx in range(dim ** 2):
-                    weight = self.strain_weight[ele_idx]
-                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    tmp += weight_s * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += tmp
                 self.A_strain[lhs_row_idx, lhs_col_idx] += tmp
                 # print(lhs_row_idx, lhs_col_idx, tmp)
 
             # Volume constraint
+            weight_v = self.volume_weight[ele_idx]
             A_i = self.A[ELEMENT_NUM + ele_idx]
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 tmp = 0.
                 for idx in range(dim ** 2):
-                    weight = self.volume_weight[ele_idx]
-                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    tmp += weight_v * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += tmp
 
         # Positional constraint
@@ -427,13 +431,14 @@ class SoftObject:
                 self.rhs[q_ic_x_idx] += AT_Bp[4]
                 self.rhs[q_ic_y_idx] += AT_Bp[5]
 
+        # Postional constraint
+        weight_p = self.positional_weight
         for par_idx in ti.static(self.fix_particle_list):
             # B_i is identity dim*dim
-            weight = self.positional_weight
             q_i_x_idx = par_idx * dim
             q_i_y_idx = par_idx * dim + 1
-            self.rhs[q_i_x_idx] += weight * self.node_init_pos[par_idx].x
-            self.rhs[q_i_y_idx] += weight * self.node_init_pos[par_idx].y
+            self.rhs[q_i_x_idx] += weight_p * self.node_init_pos[par_idx].x
+            self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
 
 
     @ti.kernel
@@ -525,7 +530,7 @@ class SoftObject:
         np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
         np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
         np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
-        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
+        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
@@ -556,16 +561,17 @@ class SoftObject:
         print('dq:', self.displace.to_numpy())
 
 
-    @ti.kernel
+    # @ti.kernel
     def cal_grad(self):
         """
         Calculate the gradient of the soft object deformation by finite difference method
         :return:
         """
         for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*self.dim, i*self.dim+1
-            self.grad_finite[idx0] = (self.node_pos[i].x - self.node_init_pos[i].x) / self.EPS
-            self.grad_finite[idx1] = (self.node_pos[i].y - self.node_init_pos[i].y) / self.EPS
+            # idx0, idx1 = i*self.dim, i*self.dim+1
+            # self.grad_finite[idx0] = (self.node_pos[i].x - self.node_init_pos[i].x) / self.EPS
+            # self.grad_finite[idx1] = (self.node_pos[i].y - self.node_init_pos[i].y) / self.EPS
+            self.grad_finite[i] = (self.node_pos[i] - self.node_init_pos[i]) / self.EPS
 
 
     def substep(self):
@@ -590,9 +596,16 @@ class SoftObject:
         # self.diff_pd(10)
 
 
-    def valid_grad(self):
-        self.construct_sn()
-        self.warm_up()
+    def print_node(self):
+        print('Init node pos:')
+        for i in range(self.PARTICLE_NUM):
+            print(f'{self.node_init_pos[i].x:.15f}, {self.node_init_pos[i].y:.15f}')
+
+        print('--------------------------------------')
+
+        print('Node pos:')
+        for i in range(self.PARTICLE_NUM):
+            print(f'{self.node_pos[i].x:.15f}, {self.node_pos[i].y:.15f}')
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -680,6 +693,14 @@ def main():
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
 
+    # Print information
+    # soft_obj.print_node()
+    print('Area sum: ', soft_obj.area_sum[None])
+    np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.15f', delimiter=',')
+
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     # for i in range(4):
@@ -693,25 +714,29 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-
-    window = soft_obj.window
-    # while window.running:
-    # Change the iteration number from 500 to 100
 
     soft_obj.diff_data()
 
     for i in range(1):
         soft_obj.substep()
 
+    # soft_obj.print_node()
+
+    np.savetxt('node_pos.csv', soft_obj.node_pos.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.9f', delimiter=',')
+
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
 
     soft_obj.cal_grad()
-    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.9f', delimiter=',')
+    grad_finite_np = (soft_obj.node_pos.to_numpy() - soft_obj.node_init_pos.to_numpy())/soft_obj.EPS
+    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('grad_finite.csv', grad_finite_np, fmt='%.9f', delimiter=',')
+    np.savetxt('displace_grasp.csv', soft_obj.grad_finite.to_numpy()*soft_obj.EPS, fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':

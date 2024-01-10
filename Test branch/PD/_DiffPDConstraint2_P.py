@@ -22,7 +22,7 @@ node_dis_y_reshape = node_dis_y.reshape(Nx, Ny)
 node_dis_norm = np.sqrt(node_dis_x_reshape**2 + node_dis_y_reshape**2)
 
 # 2D 热力图
-fig, ax = plt.subplots(figsize=(8, 6))
+fig, ax = plt.subplots(figsize=(16, 6))
 plt.axis('off')
 plt.grid(True)
 
