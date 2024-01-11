@@ -28,7 +28,7 @@ class SoftObject:
         self.grasp_mass = 1.e5
         self.solve_iteration = 50
         self.EPS = 1.e-9
-        self.GRASP_VEL = ti.Vector([0., 0.]) + ti.Vector([1., 0.])*self.EPS
+        self.GRASP_VEL = ti.Vector([0., 0.]) + ti.Vector([0., 1.])*self.EPS
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -463,7 +463,6 @@ class SoftObject:
     def partial_p(self):
         """
         Calculate $\partial q/\partial q$
-        :return:
         """
         dim = self.dim
         for i in range(self.ELEMENT_NUM):

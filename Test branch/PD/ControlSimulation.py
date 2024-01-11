@@ -19,30 +19,29 @@ class SoftObject:
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
-        self.rho = 1.145e3
-        self.E = 5.e5
-        self.nu = 0.4
+        self.rho = 1.145
+        self.E, self.nu = 5.e5, 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.GRASP_VEL[0] = ti.Vector([0., 0.])
         self.area_sum = ti.field(dtype=ti.f64, shape=())
-        self.positional_weight = 1.e15
-        # self.positional_mass = 0.
-        self.grasp_mass = 1.e8
+        self.positional_weight = 1.e10
+        self.grasp_mass = 1.e5
         self.solve_iteration = 10
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
+        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = edge_np.shape[0]
         self.ELEMENT_NUM = element_np.shape[0]
 
+        # Always the node pos in time step
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         # For local sovler & rhs construction
@@ -98,7 +97,7 @@ class SoftObject:
 
         # Determine the marker node idx
         self.marker_idx = 42
-        self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f32, shape=1)
+        self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
         self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
         print('marker node desired pos:', self.marker_pos_desired[0])
 
@@ -458,20 +457,23 @@ class SoftObject:
     @ti.kernel
     def update_vel_pos(self):
         # ti.loop_config(serialize=True)
-        # for i in ti.static(self.grasp_particle_list):
-        #     self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
+        for i in ti.static(self.grasp_particle_list):
+            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL[0] * self.dt
 
         # ti.loop_config(serialize=True)
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
 
+        for i in ti.static(self.grasp_particle_list):
+            self.node_vel[i] = ti.Vector([0., 0.])
+            # self.node_pos[i] += self.GRASP_VEL[0] * self.dt
+
 
     @ti.kernel
     def partial_p(self):
         """
         Calculate $\partial p/\partial q$
-        :return:
         """
         dim = self.dim
         for i in range(self.ELEMENT_NUM):
@@ -524,10 +526,11 @@ class SoftObject:
         idx = self.marker_idx
         desired_pos = self.marker_pos_desired[0]
         current_pos = self.node_pos[idx]
-        L = (current_pos - desired_pos)**2
+        error = current_pos - desired_pos
+        L = error.norm()**2
         self.dL[idx*dim] = 2*(current_pos.x - desired_pos.x)
         self.dL[idx*dim + 1] = 2*(current_pos.y - desired_pos.y)
-        return L
+        return error, L
 
 
     def diff_data(self):
@@ -548,8 +551,9 @@ class SoftObject:
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
-        np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
         self.grasp_dx_dy.from_numpy(dx_dy_np[:, grasp_idx*2:grasp_idx*2+2])
+        # np.savetxt('dx_dy_grasp_x.csv', dx_dy_np[:,grasp_idx*2+1].reshape(-1,2), fmt='%.15f', delimiter=',')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -589,12 +593,13 @@ class SoftObject:
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
+        print('Grasp pos:', self.node_pos[self.grasp_particle_list[0]])
 
         # self.diff_data()
-        loss_tmp = self.construct_L()
-        self.loss = loss_tmp.sum()
-        print('Loss:', loss_tmp, 'Loss sum:', self.loss)
-        print('marker pos:', self.node_pos[self.marker_idx])
+        error, loss_tmp = self.construct_L()
+        self.loss = loss_tmp
+        print('Error:', error, 'Loss:', loss_tmp)
+        # print('marker pos:', self.node_pos[self.marker_idx])
         # self.diff_pd(10)
         self.diff_data()
 
@@ -604,14 +609,17 @@ class SoftObject:
         Control the grasp point based the loss gradient
         :return:
         """
-        learning_rate = 5.e-1
+        learning_rate = 2.e1
         idx = self.grasp_particle_list[0]
         # grad_grasp = self.displace.to_numpy()[-2:]
         # grad_grasp = self.displace.to_numpy()[idx*2:idx*2+2]
         grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
         self.grad_grasp_store = grad_grasp
+        # print('dL:', self.dL.to_numpy())
+        # print('grasp_dx_dy:', self.grasp_dx_dy.to_numpy())
         print('grad_grasp:', grad_grasp)
         self.GRASP_VEL[0] = -learning_rate * grad_grasp
+        print('Grasp increment:', self.GRASP_VEL[0]*self.dt)
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -720,9 +728,6 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    window = soft_obj.window
-    # while window.running:
-    # Change the iteration number from 500 to 100
     loss_list = []
     marker_pos_list = []
     grasp_pos_list = []
@@ -743,7 +748,6 @@ def main():
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
     np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
-    exit(0)
 
 
 if __name__ == '__main__':

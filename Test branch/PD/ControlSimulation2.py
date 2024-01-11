@@ -20,16 +20,13 @@ class SoftObject:
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
-        self.rho = 1.145e3
-        self.E = 5.e5
-        self.nu = 0.4
+        self.rho = 1.145
+        self.E, self.nu = 5.e5, 0.4
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
         # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
         self.area_sum = ti.field(dtype=ti.f64, shape=())
-        self.positional_weight = 1.e15
-        # self.positional_mass = 0.
-        self.grasp_mass = 0.
-        self.marker_mass = 0.
+        self.positional_weight = 1.e10
+        self.grasp_mass = 1.e5
         self.solve_iteration = 10
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
@@ -92,7 +89,8 @@ class SoftObject:
         self.z.fill(1.)
 
         self.fix_particle_list = self.fix_particle_No()
-        self.grasp_particle_list, _ = self.grasp_particle_No()
+        # self.grasp_particle_list, _ = self.grasp_particle_No()
+        self.grasp_particle_list = [120]
 
         self.construct_B()
         self.construct_volume()
@@ -112,7 +110,7 @@ class SoftObject:
 
         # Curvature feature
         self.U = ti.Matrix([[0., 1.],
-                       [-1., 0.]])
+                            [-1., 0.]])
         self.dkappa1 = ti.Vector.field(2, dtype=ti.f64, shape=3)
         self.dkappa2 = ti.Vector.field(2, dtype=ti.f64, shape=3)
         self.dkappa3 = ti.Vector.field(2, dtype=ti.f64, shape=3)
@@ -268,7 +266,7 @@ class SoftObject:
         self.node_mass.fill(mass_tmp)
 
         for i in ti.static(self.grasp_particle_list):
-            self.node_mass[i] += 1.e8
+            self.node_mass[i] = self.grasp_mass
 
 
     @ti.kernel
@@ -311,27 +309,27 @@ class SoftObject:
             q_idx_vec = ti.Vector([ia_x, ia_y, ib_x, ib_y, ic_x, ic_y])
 
             # Strain constraint
+            weight_s = self.strain_weight[ele_idx]
             A_i = self.A[ele_idx]
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 tmp = 0.
                 for idx in range(dim ** 2):
-                    weight = self.strain_weight[ele_idx]
-                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    tmp += weight_s * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += tmp
                 self.A_strain[lhs_row_idx, lhs_col_idx] += tmp
                 # print(lhs_row_idx, lhs_col_idx, tmp)
 
             # Volume constraint
+            weight_v = self.volume_weight[ele_idx]
             A_i = self.A[ELEMENT_NUM + ele_idx]
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 tmp = 0.
                 for idx in range(dim ** 2):
-                    weight = self.volume_weight[ele_idx]
-                    tmp += weight * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    tmp += weight_v * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += tmp
 
         # Positional constraint
@@ -348,12 +346,6 @@ class SoftObject:
                 self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
                 self.A_positional[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
 
-        # for i in ti.static(self.grasp_particle_list):
-        #     q_i_x_idx = i * 2
-        #     q_i_y_idx = i * 2 + 1
-        #     self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-        #     self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
-
 
     @ti.kernel
     def construct_sn(self):
@@ -365,6 +357,22 @@ class SoftObject:
             vel = self.node_vel[i]
             self.sn[idx1] = pos[0] + dt * vel[0]
             self.sn[idx2] = pos[1] + dt * vel[1]
+
+        for i in ti.static(self.grasp_particle_list):
+            self.sn[i*dim] += self.GRASP_VEL[0].x * dt
+            self.sn[i*dim+1] += self.GRASP_VEL[0].y * dt
+
+
+    @ti.kernel
+    def warm_up(self):
+        """
+        Warm start the solver
+        """
+        dim = self.dim
+        for i in range(self.PARTICLE_NUM):
+            idx0, idx1 = i*dim, i*dim+1
+            self.node_pos_new[i].x = self.sn[idx0]
+            self.node_pos_new[i].y = self.sn[idx1]
 
 
     @ti.kernel
@@ -451,25 +459,6 @@ class SoftObject:
             self.rhs[q_i_x_idx] += weight_p * self.node_init_pos[par_idx].x
             self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
 
-        # for i in ti.static(self.grasp_particle_list):
-        #     pos_new_i = self.node_pos_new[i]
-        #     q_i_x_idx = i * dim
-        #     q_i_y_idx = i * dim + 1
-        #     self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-        #     self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
-
-
-    @ti.kernel
-    def warm_up(self):
-        """
-        Warm start the solver
-        """
-        dim = self.dim
-        for i in range(self.PARTICLE_NUM):
-            idx0, idx1 = i*dim, i*dim+1
-            self.node_pos_new[i].x = self.sn[idx0]
-            self.node_pos_new[i].y = self.sn[idx1]
-
 
     @ti.kernel
     def update_pos_new(self, sol:ti.types.ndarray()):
@@ -490,12 +479,14 @@ class SoftObject:
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
 
+        for i in ti.static(self.fix_particle_list):
+            self.node_vel[i] = ti.Vector([0., 0.])
+
 
     @ti.kernel
     def partial_p(self):
         """
         Calculate $\partial p/\partial q$
-        :return:
         """
         dim = self.dim
         for i in range(self.ELEMENT_NUM):
@@ -654,6 +645,56 @@ class SoftObject:
         np.savetxt('displace_true.csv', self.displace_true.to_numpy(), fmt='%e', delimiter=',')
 
 
+    def substep(self, step_num):
+        self.construct_sn()
+        self.warm_up()
+        # Local sovle needs iteration
+        for itr in ti.static(range(self.solve_iteration)):
+            self.local_solve()
+            self.construct_rhs()
+            rhs_np = self.rhs.to_numpy()
+            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
+            self.update_pos_new(node_pos_new_np)
+            # print(f'itr: {itr}, {node_pos_new_np}')
+
+        self.update_vel_pos()
+        self.node2feature_pos()
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
+                      itr_num=step_num)
+
+        loss_tmp = self.construct_L()
+        self.loss = loss_tmp
+        print('Loss feature:', self.dL_feature.to_numpy())
+        print('Loss:', loss_tmp)
+        print('grasp pos:', self.node_pos[self.grasp_particle_list[0]])
+        # print('feature pos:', self.feature_pos.to_numpy())
+        self.diff_data()
+        # self.diff_pd(10)
+
+
+    def control_grasp(self):
+        """
+        Control the grasp point based the loss gradient
+        :return:
+        """
+        learning_rate = 5.e-2
+        # grasp_idx = self.grasp_particle_list[0]
+        # marker_idx = self.marker_idx
+        # grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
+        #                        self.grad_dx_dy.to_numpy()[grasp_idx*2+1]*self.dL.to_numpy()[marker_idx*2+1]])
+        # grad_grasp = (self.dL.to_numpy()[marker_idx*2:marker_idx*2+2] @
+        #               self.grad_dx_dy.to_numpy()[:,grasp_idx*2:grasp_idx*2+2])
+        np.savetxt('dL.csv', self.dL.to_numpy(), fmt='%f', delimiter=',')
+        np.savetxt('grad_dx_dy.csv', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
+        grad_grasp = self.dL.to_numpy() @ self.grad_dx_dy.to_numpy()
+        # grad_grasp = np.array([-50, -50])
+        self.grad_grasp_store = grad_grasp
+        print('grad_grasp:', grad_grasp)
+        if self.GRASP_VEL[0].norm() < 0.1:
+            self.GRASP_VEL[0] = -learning_rate * grad_grasp * 10
+        self.GRASP_VEL[0] = -learning_rate * grad_grasp
+
+
     # GGUI setting
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
@@ -738,55 +779,6 @@ class SoftObject:
         self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
         self.canvas = self.window.get_canvas()
         self.show_preset()
-
-
-    def substep(self, step_num):
-        self.construct_sn()
-        self.warm_up()
-        # Local sovle needs iteration
-        for itr in ti.static(range(self.solve_iteration)):
-            self.local_solve()
-            self.construct_rhs()
-            rhs_np = self.rhs.to_numpy()
-            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
-            self.update_pos_new(node_pos_new_np)
-            # print(f'itr: {itr}, {node_pos_new_np}')
-
-        self.update_vel_pos()
-        self.node2feature_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
-                      itr_num=step_num)
-
-        loss_tmp = self.construct_L()
-        self.loss = loss_tmp
-        print('Loss feature:', self.dL_feature.to_numpy())
-        print('Loss:', loss_tmp)
-        print('grasp pos:', self.node_pos[self.grasp_particle_list[0]])
-        # print('feature pos:', self.feature_pos.to_numpy())
-        self.diff_data()
-        # self.diff_pd(10)
-
-
-    def control_grasp(self):
-        """
-        Control the grasp point based the loss gradient
-        :return:
-        """
-        learning_rate = 5.e-2
-        # grasp_idx = self.grasp_particle_list[0]
-        # marker_idx = self.marker_idx
-        # grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
-        #                        self.grad_dx_dy.to_numpy()[grasp_idx*2+1]*self.dL.to_numpy()[marker_idx*2+1]])
-        # grad_grasp = (self.dL.to_numpy()[marker_idx*2:marker_idx*2+2] @
-        #               self.grad_dx_dy.to_numpy()[:,grasp_idx*2:grasp_idx*2+2])
-        np.savetxt('dL.csv', self.dL.to_numpy(), fmt='%f', delimiter=',')
-        np.savetxt('grad_dx_dy.csv', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
-        grad_grasp = self.dL.to_numpy() @ self.grad_dx_dy.to_numpy()
-        # grad_grasp = np.array([-50, -50])
-        self.grad_grasp_store = grad_grasp
-        print('grad_grasp:', grad_grasp)
-        self.GRASP_VEL[0] = -learning_rate * grad_grasp
-        pass
 
 
     @ti.kernel
@@ -923,7 +915,7 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(500):
+    for i in range(200):
         soft_obj.substep(i)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
