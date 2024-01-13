@@ -5,7 +5,7 @@ The controller is based on the *grad function solver* or *DiffPD techonolgy*.
 """
 
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
@@ -598,8 +598,8 @@ class SoftObject:
         self.loss = loss_tmp
         print('Error:', error, 'Loss:', loss_tmp)
         # print('marker pos:', self.node_pos[self.marker_idx])
-        # self.diff_pd(10)
-        self.diff_data()
+        self.diff_pd(10)
+        # self.diff_data()
 
 
     def control_grasp(self):
@@ -608,11 +608,11 @@ class SoftObject:
         """
         learning_rate = 2.e1
         # Use diff_pd() to calculate the gradient
-        # idx = self.grasp_particle_list[0]
-        # grad_grasp = np.array([self.grad_y[idx].x, self.grad_y[idx].y])
+        idx = self.grasp_particle_list[0]
+        grad_grasp = np.array([self.grad_y[idx].x, self.grad_y[idx].y])
 
-        # Use diff_data() to calculate the gradient
-        grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
+        # # Use diff_data() to calculate the gradient
+        # grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
         self.grad_grasp_store = grad_grasp
         # print('dL:', self.dL.to_numpy())
         # print('grasp_dx_dy:', self.grasp_dx_dy.to_numpy())
