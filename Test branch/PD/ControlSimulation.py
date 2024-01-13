@@ -1,7 +1,7 @@
 """
 This file control an edge node to deform the soft object in PD simulation, which make a marker
 point on soft object move to a desired position.
-The controller is based on the DiffPD techonolgy.
+The controller is based on the *grad function solver* or *DiffPD techonolgy*.
 """
 
 import taichi as ti
@@ -82,6 +82,7 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.grad_y = ti.Vector.field(2, dtype=ti.f64, shape=2*self.PARTICLE_NUM)
         self.grasp_dx_dy = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2))
 
         self.dL.fill(0.)
@@ -223,7 +224,7 @@ class SoftObject:
             self.B[i] = B_i_inv.inverse()
 
 
-    # @ti.kernel
+    @ti.kernel
     def construct_volume(self):
         for i in range(self.ELEMENT_NUM):
             ia, ib, ic = self.element[i]
@@ -559,7 +560,6 @@ class SoftObject:
     def diff_pd(self, itr_num:ti.i32):
         """
         The iterative method of DiffPD
-        :return:
         """
         self.partial_p()                    # Calulate \partial p / \partial q, which is z
         dA = self.rhs_dA.to_numpy()         # \Delta A in DiffPD iteration equation
@@ -573,9 +573,8 @@ class SoftObject:
 
         for i in range(self.PARTICLE_NUM):
             idx0, idx1 = i*self.dim, i*self.dim+1
-            self.displace[idx0] = z_np[idx0]*self.node_mass[i]/self.dt**2
-            self.displace[idx1] = z_np[idx1]*self.node_mass[i]/self.dt**2
-        # print('dq:', self.displace.to_numpy())
+            self.grad_y[i].x = self.z[idx0]*self.node_mass[i]/self.dt**2
+            self.grad_y[i].y = self.z[idx1]*self.node_mass[i]/self.dt**2
 
 
     def substep(self, step_num):
@@ -595,7 +594,6 @@ class SoftObject:
                       itr_num=step_num)
         print('Grasp pos:', self.node_pos[self.grasp_particle_list[0]])
 
-        # self.diff_data()
         error, loss_tmp = self.construct_L()
         self.loss = loss_tmp
         print('Error:', error, 'Loss:', loss_tmp)
@@ -607,12 +605,13 @@ class SoftObject:
     def control_grasp(self):
         """
         Control the grasp point based the loss gradient
-        :return:
         """
         learning_rate = 2.e1
-        idx = self.grasp_particle_list[0]
-        # grad_grasp = self.displace.to_numpy()[-2:]
-        # grad_grasp = self.displace.to_numpy()[idx*2:idx*2+2]
+        # Use diff_pd() to calculate the gradient
+        # idx = self.grasp_particle_list[0]
+        # grad_grasp = np.array([self.grad_y[idx].x, self.grad_y[idx].y])
+
+        # Use diff_data() to calculate the gradient
         grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
         self.grad_grasp_store = grad_grasp
         # print('dL:', self.dL.to_numpy())
