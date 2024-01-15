@@ -26,7 +26,8 @@ class SoftObject:
         self.GRASP_VEL[0] = ti.Vector([0., 0.])
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e10
-        self.grasp_mass = 0.            #1.e5
+        self.vel_weight = 1.e10
+        # self.grasp_mass = 0.            #1.e5
         self.solve_iteration = 10
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
@@ -70,6 +71,7 @@ class SoftObject:
         self.lhs = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.A_strain = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.A_positional = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
+        self.A_velocity = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2*self.PARTICLE_NUM))
         self.rhs = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
 
         # Following is diffPD
@@ -86,7 +88,7 @@ class SoftObject:
         self.grasp_dx_dy = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2))
 
         self.dL.fill(0.)
-        self.z.fill(1.)
+        self.z.fill(0.)
 
         self.fix_particle_list = self.fix_particle_No()
         # self.grasp_particle_list, _ = self.grasp_particle_No()
@@ -230,12 +232,11 @@ class SoftObject:
             ia, ib, ic = self.element[i]
             a, b, c = self.node_init_pos[ia], self.node_init_pos[ib], self.node_init_pos[ic]
             element_volume_i = abs((b - a).cross(c - a)) / 2
+            self.area_sum[None] += element_volume_i
             self.element_volume[i] = element_volume_i
             self.strain_weight[i] = self.mu * 2 * element_volume_i
             # self.volume_weight[i] = self.lam * self.dim * element_volume_i
             self.volume_weight[i] = 0.
-
-            self.area_sum[None] += self.element_volume[i]
 
 
     @ti.kernel
@@ -308,14 +309,14 @@ class SoftObject:
                 # print(lhs_row_idx, lhs_col_idx, tmp)
 
             # Volume constraint
-            weight_v = self.volume_weight[ele_idx]
+            weight_vol = self.volume_weight[ele_idx]
             A_i = self.A[ELEMENT_NUM + ele_idx]
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6,6)):
                 lhs_row_idx = q_idx_vec[A_row_idx]
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 tmp = 0.
                 for idx in range(dim ** 2):
-                    tmp += weight_v * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
+                    tmp += weight_vol * A_i[idx, A_row_idx] * A_i[idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += tmp
 
         # Positional constraint
@@ -331,6 +332,19 @@ class SoftObject:
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
                 self.A_positional[lhs_row_idx, lhs_col_idx] += weight * A_i_position[A_row_idx, A_col_idx]
+
+        # Velocity constraint
+        for par_idx in ti.static(self.grasp_particle_list):
+            A_i_velocity = ti.Matrix([[1., 0],[0., 1.]])
+            ATA_i_velocity = A_i_velocity.transpose() @ A_i_velocity
+            weight_v = self.vel_weight
+            q_i_x_idx, q_i_y_idx = par_idx * dim, par_idx * dim + 1
+            q_idx_vec = ti.Vector([q_i_x_idx, q_i_y_idx])
+            for A_row_idx, A_col_idx in ti.static(ti.ndrange(2, 2)):
+                lhs_row_idx = q_idx_vec[A_row_idx]
+                lhs_col_idx = q_idx_vec[A_col_idx]
+                self.lhs[lhs_row_idx, lhs_col_idx] += weight_v * ATA_i_velocity[A_row_idx, A_col_idx]
+                self.A_velocity[lhs_row_idx, lhs_col_idx] += weight_v * ATA_i_velocity[A_row_idx, A_col_idx]
 
 
     @ti.kernel
@@ -348,9 +362,9 @@ class SoftObject:
         #     self.sn[i*dim] += self.GRASP_VEL[0].x * dt
         #     self.sn[i*dim+1] += self.GRASP_VEL[0].y * dt
         
-        for i in ti.static(self.grasp_particle_list):
-            self.sn[i*dim] += self.GRASP_VEL[0].x
-            self.sn[i*dim+1] += self.GRASP_VEL[0].y
+        # for i in ti.static(self.grasp_particle_list):
+        #     self.sn[i*dim] += self.GRASP_VEL[0].x
+        #     self.sn[i*dim+1] += self.GRASP_VEL[0].y
 
 
     @ti.kernel
@@ -449,6 +463,12 @@ class SoftObject:
             self.rhs[q_i_x_idx] += weight_p * self.node_init_pos[par_idx].x
             self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
 
+        # Velocity constraint
+        weight_v = self.vel_weight
+        for par_idx in ti.static(self.grasp_particle_list):
+            q_i_x_idx, q_i_y_idx = par_idx * dim, par_idx * dim + 1
+            self.rhs[q_i_x_idx] += weight_v * (self.node_pos[par_idx].x + self.GRASP_VEL[0].x * self.dt)
+            self.rhs[q_i_y_idx] += weight_v * (self.node_pos[par_idx].y + self.GRASP_VEL[0].y * self.dt)
 
 
     @ti.kernel
@@ -521,6 +541,19 @@ class SoftObject:
                 rhs_col_idx = q_idx_vec[col_idx]
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[i][row_idx, col_idx]
 
+        # # Velocity constraint, Positional constriant is 0
+        # weight_v = self.vel_weight
+        # A_i_velocity = ti.Matrix([[1., 0], [0., 1.]])
+        # dBp_dq_velocity = ti.Matrix([[1., 0], [0., 1]])
+        # AT_dBp_dq_velocity = A_i_velocity.transpose() @ dBp_dq_velocity
+        # for par_idx in ti.static(self.grasp_particle_list):
+        #     q_i_x_idx, q_i_y_idx = par_idx * dim, par_idx * dim + 1
+        #     q_idx_vec = ti.Vector([q_i_x_idx, q_i_y_idx])
+        #     for row_idx, col_idx in ti.static(ti.ndrange(2,2)):
+        #         rhs_row_idx = q_idx_vec[row_idx]
+        #         rhs_col_idx = q_idx_vec[col_idx]
+        #         self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight_v * AT_dBp_dq_velocity[row_idx, col_idx]
+
 
     def construct_L(self):
         """
@@ -558,7 +591,7 @@ class SoftObject:
         dx_dy_np = np.linalg.solve(A, B)
         # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
         self.grasp_dx_dy.from_numpy(dx_dy_np[:, grasp_idx*2:grasp_idx*2+2])
-        # np.savetxt('dx_dy_grasp_x.csv', dx_dy_np[:,grasp_idx*2+1].reshape(-1,2), fmt='%.15f', delimiter=',')
+        np.savetxt('dx_dy_grasp_x.csv', dx_dy_np[:,grasp_idx*2+1].reshape(-1,2), fmt='%.15f', delimiter=',')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -603,8 +636,9 @@ class SoftObject:
         self.loss = loss_tmp
         print('Error:', error, 'Loss:', loss_tmp)
         # print('marker pos:', self.node_pos[self.marker_idx])
-        self.diff_pd(10)
-        # self.diff_data()
+        # self.diff_pd(20)
+        self.diff_data()
+        exit(0)
 
 
     def control_grasp(self):
@@ -612,19 +646,19 @@ class SoftObject:
         Control the grasp point based the loss gradient
         """
         # learning_rate = 2.e1
-        learning_rate = 5.e8
-        # Use diff_pd() to calculate the gradient
-        idx = self.grasp_particle_list[0]
-        grad_grasp = np.array([self.grad_y[idx].x, self.grad_y[idx].y], dtype=np.float64)
+        learning_rate = 5.e5
+        # # Use diff_pd() to calculate the gradient
+        # idx = self.grasp_particle_list[0]
+        # grad_grasp = np.array([self.grad_y[idx].x, self.grad_y[idx].y], dtype=np.float64)
         # print(f'grad grasp: {self.grad_y[idx].x:.15f}')
 
-        # # Use diff_data() to calculate the gradient
-        # grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
+        # Use diff_data() to calculate the gradient
+        grad_grasp = self.dL.to_numpy() @ self.grasp_dx_dy.to_numpy()
         self.grad_grasp_store = grad_grasp
         # print('dL:', self.dL.to_numpy())
         # print('grasp_dx_dy:', self.grasp_dx_dy.to_numpy())
         print(f'grad_grasp:[{grad_grasp[0]:.15f},{grad_grasp[1]:.15f}]')
-        self.GRASP_VEL[0] += -learning_rate * grad_grasp
+        self.GRASP_VEL[0] = -learning_rate * grad_grasp
         # print('Grasp increment:', self.GRASP_VEL[0]*self.dt)
         print('Grasp increment:', self.GRASP_VEL[0])
 
@@ -745,7 +779,7 @@ def main():
         loss_list.append(soft_obj.loss)
         marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
         grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
-        grasp_grad_list.append(soft_obj.grad_grasp_store)
+        # grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # Save data
     np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
@@ -754,7 +788,7 @@ def main():
     np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('partial_displacement.csv', soft_obj.displace.to_numpy(), fmt='%f', delimiter=',')
 
 
 if __name__ == '__main__':
