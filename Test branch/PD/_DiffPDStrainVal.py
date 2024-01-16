@@ -86,6 +86,7 @@ class SoftObject:
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.grad_finite = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.grad_diffdata = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
 
         self.dL.fill(0.)
         self.z.fill(1.)
@@ -523,17 +524,18 @@ class SoftObject:
         mass_dim_np[0::2] = mass_np
         mass_dim_np[1::2] = mass_np
         M_np = np.diag(mass_dim_np)
-        np.savetxt('A_strain.csv', self.A_strain.to_numpy(), fmt='%f', delimiter=',')
-        np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
-        np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
-        np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('A_strain.csv', self.A_strain.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
+        # np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
-        np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
         for i in self.grasp_particle_list:
-            idx = i*self.dim
-            np.savetxt('dx_dy_grasp.csv', dx_dy_np[:, idx], fmt='%.9f', delimiter=',')
+            idx = i*self.dim + 1
+            self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, 2))
+            np.savetxt('dx_dy_grasp.csv', dx_dy_np[:, idx].reshape(-1, 2), fmt='%.15f', delimiter=',')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -558,11 +560,10 @@ class SoftObject:
         print('dq:', self.displace.to_numpy())
 
 
-    # @ti.kernel
+    @ti.kernel
     def cal_grad(self):
         """
         Calculate the gradient of the soft object deformation by finite difference method
-        :return:
         """
         for i in range(self.PARTICLE_NUM):
             # idx0, idx1 = i*self.dim, i*self.dim+1
@@ -658,10 +659,6 @@ class SoftObject:
         # scene.particles(particle_test, radius=0.005, color=(0., 1., 0.))
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
-        # if pos[440].x > 0.144014:
-        # window.save_image(f'Figure/{E}-{nu}.png')
-        # exit(0)
-        # if WRITE_FLAG is True and itr_num % 10 == 0:
         if WRITE_FLAG is True:
             window.save_image(f'FigureWrite/{itr_num}.png')
         window.show()
@@ -693,10 +690,10 @@ def main():
     # Print information
     # soft_obj.print_node()
     print('Area sum: ', soft_obj.area_sum[None])
-    np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.15f', delimiter=',')
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -711,7 +708,7 @@ def main():
     # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
     # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
     # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
@@ -720,15 +717,17 @@ def main():
     for i in range(1):
         soft_obj.substep()
 
-    # soft_obj.print_node()
-
-    np.savetxt('node_pos.csv', soft_obj.node_pos.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('node_pos.csv', soft_obj.node_pos.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%.9f', delimiter=',')
 
     soft_obj.cal_grad()
     np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('grad_finite.csv', grad_finite_np, fmt='%.9f', delimiter=',')
     # np.savetxt('displace_grasp.csv', soft_obj.grad_finite.to_numpy()*soft_obj.EPS, fmt='%.15f', delimiter=',')
+
+    grad_error = soft_obj.grad_diffdata.to_numpy()-soft_obj.grad_finite.to_numpy()
+    np.savetxt('grad_error.csv', grad_error, fmt='%.15f', delimiter=',')
+    np.savetxt('grad_error_relative.csv', grad_error/soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':
