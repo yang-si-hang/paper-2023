@@ -590,7 +590,7 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
         # self.construct_L()
-        # self.diff_data()
+        self.diff_data()
         # self.diff_pd(10)
 
 
@@ -726,8 +726,8 @@ def main():
     # np.savetxt('displace_grasp.csv', soft_obj.grad_finite.to_numpy()*soft_obj.EPS, fmt='%.15f', delimiter=',')
 
     grad_error = soft_obj.grad_diffdata.to_numpy()-soft_obj.grad_finite.to_numpy()
-    np.savetxt('grad_error.csv', grad_error, fmt='%.15f', delimiter=',')
-    np.savetxt('grad_error_relative.csv', grad_error/soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('grad_error.csv', grad_error, fmt='%.15f', delimiter=',')
+    # np.savetxt('grad_error_relative.csv', grad_error/soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':
