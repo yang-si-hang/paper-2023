@@ -45,11 +45,11 @@ class SoftObject:
         self.ELEMENT_NUM = element_np.shape[0]
 
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(2, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos.from_numpy(node_np.astype(np.float32))
+        self.node_init_pos.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
 
         self.edge = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
@@ -427,7 +427,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
+                fix_flag_temp = (x_temp < 0. + EPS) or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
@@ -539,10 +539,10 @@ class SoftObject:
         mass_dim_np[0::2] = mass_np
         mass_dim_np[1::2] = mass_np
         M_np = np.diag(mass_dim_np)
-        np.savetxt('A_strain.csv', self.A_strain.to_numpy(), fmt='%f', delimiter=',')
-        np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
-        np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
-        np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('A_strain.csv', self.A_strain.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
+        # np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
@@ -670,39 +670,6 @@ class SoftObject:
                 self.node_vel[i].x = 0.
 
 
-    def marker_constraint(self, marker_point_np:ti.types.ndarray()):
-        N = marker_point_np.shape[0]
-        marker_point = ti.Vector.field(2, dtype=ti.f64, shape=N)
-        marker_point.from_numpy(marker_point_np)
-        # the nearest node No. of the marker point
-        node_nearest = ti.ndarray(dtype=ti.i32, shape=N)
-
-        sorts = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-        dists = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
-
-        @ti.kernel
-        def points_knn(point:ti.types.vector(2, dtype=ti.f64)):
-            """
-            Find the K-th nearest nodes No. and the weights.
-            :param point: ti.Vector
-            :return:
-            """
-            sorts.fill(0)
-            dists.fill(0.)
-            for i in range(self.PARTICLE_NUM):
-                sorts[i] = i
-                dists[i] = (self.node_init_pos[i] - point).norm()
-
-        for i in range(N):
-            points_knn(marker_point[i])
-            ti.algorithms.parallel_sort(dists, sorts)
-            sorts_host = sorts.to_numpy()
-            nearest_idx = sorts_host[0]
-            node_nearest[i] = nearest_idx
-
-        return node_nearest.to_numpy()
-
-
 def main():
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size):
@@ -710,15 +677,6 @@ def main():
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
     soft_obj.preset()
-
-    marker_point = np.array([
-        [0.09, 0.041]
-    ])
-    node_nearest_idx = soft_obj.marker_constraint(marker_point)
-    node_nearest_list = list(node_nearest_idx)
-    node_marker_show = ti.Vector.field(3, dtype=ti.f32, shape=len(node_nearest_list))
-    print('marker nearest node', node_nearest_list)
-    print('grasp node', soft_obj.grasp_particle_list)
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -737,13 +695,8 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # soft_obj.init_vel()
-    # print(soft_obj.node_pos[0])
     # soft_obj.GRASP_VEL = ti.Vector([0., 0.])
 
-    window = soft_obj.window
-    # while window.running:
-    # Change the iteration number from 500 to 100
     for i in range(1):
         soft_obj.substep()
 
