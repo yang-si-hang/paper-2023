@@ -535,28 +535,33 @@ class SoftObject:
         S_det = ti.Matrix([[feature_1[0], feature_1[1], 1.],
                            [feature_2[0], feature_2[1], 1.],
                            [feature_3[0], feature_3[1], 1.]])
-        
-        S = - S_det.determinant() / 2.
+
+        S = S_det.determinant() / 2.
         f2 = (feature_1 - feature_3).norm()
 
-        curvature = 4 * S / f2 ** 3
+        curvature = 4 * S**2 / f2 ** 3
+        print('S', S, 'f2', f2, 'h', 2*S/f2, 'curvature', curvature)
+        # print('feature_1', feature_1, 'feature_2', feature_2, 'feature_3', feature_3)
         desired_curvature = 0.
         L = (curvature - desired_curvature)**2
+        dL_curv = 2 * (curvature - desired_curvature)
 
         dS = ti.Matrix.zero(ti.f64, 3, 2)
-        dS[0, 0] = feature_2[1] - feature_3[1] / 2.
-        dS[0, 1] = feature_3[0] - feature_2[0] / 2.
-        dS[1, 0] = feature_3[1] - feature_1[1] / 2.
-        dS[1, 1] = feature_1[0] - feature_3[0] / 2.
-        dS[2, 0] = feature_1[1] - feature_2[1] / 2.
-        dS[2, 1] = feature_2[0] - feature_1[0] / 2.
-        dS = dS * (-1.)
+        dS[0, 0] = (feature_2[1] - feature_3[1]) / 2.
+        dS[1, 0] = (feature_3[1] - feature_1[1]) / 2.
+        dS[2, 0] = (feature_1[1] - feature_2[1]) / 2.
+        dS[0, 1] = (feature_3[0] - feature_2[0]) / 2.
+        dS[1, 1] = (feature_1[0] - feature_3[0]) / 2.
+        dS[2, 1] = (feature_2[0] - feature_1[0]) / 2.
         
         df2 = ti.Matrix.zero(ti.f64, 3, 2)
         df2[0, :] = (feature_1 - feature_3) / f2
-        df2[1, :] = - (feature_1 - feature_3) / f2
+        df2[2, :] = - (feature_1 - feature_3) / f2
 
-        self.dL_feature[None] = 2*(curvature - desired_curvature)*4*(2*S*dS/f2**3 - 3*S**2*df2/f2**4)
+        self.dL_feature[None] = 4*(2*S*dS/f2**3 - 3*S**2*df2/f2**4)
+        # print('dS', dS)
+        # print('df2', df2)
+        # print('dL feature', self.dL_feature[None])
 
         # kappa_1 = 1. / f1.norm()
         # kappa_2 = 1. / f2.norm()
@@ -699,7 +704,7 @@ class SoftObject:
         Control the grasp point based the loss gradient
         :return:
         """
-        learning_rate = 5.e-2
+        learning_rate = 1.e1
         # grasp_idx = self.grasp_particle_list[0]
         # marker_idx = self.marker_idx
         # grad_grasp = np.array([self.grad_dx_dy.to_numpy()[grasp_idx*2]*self.dL.to_numpy()[marker_idx*2],
@@ -709,11 +714,11 @@ class SoftObject:
         # np.savetxt('dL.csv', self.dL.to_numpy(), fmt='%f', delimiter=',')
         # np.savetxt('grad_dx_dy.csv', self.grad_dx_dy.to_numpy(), fmt='%f', delimiter=',')
         grad_grasp = self.dL.to_numpy() @ self.grad_dx_dy.to_numpy()
-        grad_grasp = np.array([-2., -2.])
+        # grad_grasp = np.array([-2., -2.])
         self.grad_grasp_store = grad_grasp
         print('grad_grasp:', grad_grasp)
-        if self.GRASP_VEL[0].norm() < 0.1:
-            self.GRASP_VEL[0] = -learning_rate * grad_grasp * 10
+        # if self.GRASP_VEL[0].norm() < 0.1:
+        #     self.GRASP_VEL[0] = -learning_rate * grad_grasp * 10
         self.GRASP_VEL[0] = -learning_rate * grad_grasp
 
 
@@ -798,7 +803,7 @@ class SoftObject:
 
 
     def preset(self):
-        self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.5, 0.], target=[0.1, 0., 0.])
+        self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
         self.canvas = self.window.get_canvas()
         self.show_preset()
 
@@ -855,8 +860,8 @@ def main():
     # Define the feature of cureve in 2D, radius is 0.015
     curve_r = 0.015
     feature_pos_init = np.array([[0.1-curve_r, 0.05],
-                            [0.1-curve_r/np.sqrt(2), 0.05-curve_r/np.sqrt(2)],
-                            [0.1, 0.05-curve_r]])
+                                 [0.1-curve_r/np.sqrt(2), 0.05-curve_r/np.sqrt(2)],
+                                 [0.1, 0.05-curve_r]])
     # Triangle idx in nodes set
     triangle_points_idx_np = np.array([[108, 118, 119],
                                        [97, 107, 108],
@@ -896,14 +901,17 @@ def main():
     loss_list = []
     grasp_pos_list = []
     grasp_grad_list = []
+    feature_pos_list = []
     for i in range(200):
         soft_obj.substep(i)
         soft_obj.control_grasp()
+        feature_pos_list.append(soft_obj.feature_pos.to_numpy().ravel())
         loss_list.append(soft_obj.loss)
         grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
         grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # Save data
+    np.savetxt('feature_pos.csv', np.array(feature_pos_list), fmt='%e', delimiter=',')
     # np.savetxt('loss1.csv', np.array(loss_list), fmt='%e', delimiter=',')
     # np.savetxt('marker_pos1.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
     # np.savetxt('grasp_pos1.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
