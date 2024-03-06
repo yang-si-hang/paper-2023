@@ -13,8 +13,11 @@ os.chdir(script_dir)            # 改变当前工作目录
 def mesh_data(shape, seed_size):
     L = shape[0]
     W = shape[1]
-    LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
-    WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
+    # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
+    LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)  # 1e-8 due to the precision problem
+    WN_remain = int(1) if np.mod(W, seed_size) < 1.e-8 else int(0)
+    LN = int(np.ceil(L / seed_size)) + LN_remain
+    WN = int(np.ceil(W / seed_size)) + WN_remain
 
     xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(0, W, WN))
     xx_pad = xx.flatten()
@@ -24,6 +27,7 @@ def mesh_data(shape, seed_size):
     tri = Delaunay(node)
     
     element = tri.simplices
+    element += 1
 
     edge_set = set()
     for simplices in element:
