@@ -21,7 +21,8 @@ def mesh_data(shape, seed_size):
     LN = int(np.ceil(L / seed_size)) + LN_remain
     WN = int(np.ceil(W / seed_size)) + WN_remain
 
-    xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(0, W, WN))
+    # xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(0, W, WN))
+    xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
     xx_pad = xx.flatten()
     yy_pad = yy.flatten()
     node = np.array([xx_pad, yy_pad]).T
@@ -56,7 +57,8 @@ def write_vtk(file_path, points, polygons):
         # 写入点信息
         file.write(f"POINTS {len(points)} float\n")
         for point in points:
-            file.write(f"{' '.join(map(str, point))} \n")
+            # file.write(f"{' '.join(map(str, point))} \n")
+            file.write(' '.join(f"{x:.5f}" for x in point) + " \n")
 
         # 写入多边形信息
         polygon_size = sum(len(polygon) + 1 for polygon in polygons)  # +1 因为每个多边形前都有一个表示顶点数的数字

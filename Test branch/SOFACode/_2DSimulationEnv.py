@@ -37,9 +37,6 @@ def createScene(root):
     root.addObject('CollisionResponse', name='Response', response='PenalityContactResponse')
     root.addObject('MinProximityIntersection', name='Proximity', alarmDistance=0.8, contactDistance=0.5)
 
-    config_node = root.addChild("Config")
-    config_node.addObject("OglSceneFrame", style="Arrows", alignment="TopRight")
-
     obj = root.addChild('object')
     obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
@@ -53,14 +50,10 @@ def createScene(root):
     obj.addObject('FixedConstraint', indices="0 1 2 3 4 5 6 7 8 9 10")
     obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='100', poissonRatio='0.3', method='large')
     # obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e4', poissonRatio='0.3', method='large')
-    # obj.addObject('TriangleBendingSprings', name='FEM-Bend', stiffness='100', damping='1.0')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
-    # obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices='120', keyTimes=[0., 5., 10.],
-    #               movements=[0., 0., 0., 0.01, 0., 0., 0.02, 0., 0.])
     obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices='120')
-    # obj.addObject('PartialLinearMovementConstraint', name='cnt', template="Vec3", indices='120')
 
     obj_visu = obj.addChild('VisualModel')
     obj_visu.loader = obj_visu.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', triangulate='true',
@@ -112,12 +105,12 @@ def main():
     # pp = 0.01 * np.random.random()
     # add_move(linear_mov, dt, np.array([pp, 0., 0.]))
 
-    for itr in range(1, 5, 1):
+    for itr in range(1, 10, 1):
         print(f'{root.time.value}:{root.object.dofs.position.value[120]}')
         pp = pp = 0.01 * np.random.random()
         add_move(linear_mov, dt, np.array([pp, 0., 0.]))
 
-        save_pos(dofs, script_dir+f'/node_data/node_pos_{itr}.csv')
+        # save_pos(dofs, script_dir+f'/node_data/node_pos_{itr}.csv')
 
         Sofa.Simulation.animate(root, dt)
 
