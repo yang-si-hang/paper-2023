@@ -55,7 +55,7 @@ def createScene(root):
     obj.addObject('BoxROI', name='box', box=[-X_EPS, -0.06, -0.1, X_EPS, 0.06, 0.1])
     obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
 
-    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='100', poissonRatio='0.3', method='large')
+    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e5', poissonRatio='0.4', method='large')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
