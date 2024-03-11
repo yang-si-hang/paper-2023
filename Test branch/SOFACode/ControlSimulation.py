@@ -141,6 +141,7 @@ class SoftObject:
                 edge_set.add(edge_temp)
 
         edge = np.array(list(edge_set))
+        # np.savetxt('edge.csv', edge, fmt='%d', delimiter=',')
 
         return node, edge, element
 
@@ -716,7 +717,7 @@ def main():
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/10)
     soft_obj.preset()
 
-    print('grasp node idx', soft_obj.grasp_particle_list)
+    print('grasp node idx:', soft_obj.grasp_particle_list)
     print('marker node idx:', soft_obj.marker_idx)
     print('marker node pos:', soft_obj.node_init_pos[soft_obj.marker_idx])
 
@@ -729,18 +730,18 @@ def main():
     marker_pos_list = []
     grasp_pos_list = []
     grasp_grad_list = []
-    for i in range(20):
+    for i in range(1000):
         soft_obj.substep(i)
-        soft_obj.control_grasp(2.e1)
+        soft_obj.control_grasp(2.e0)
         loss_list.append(soft_obj.loss)
         marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx].to_numpy())
         grasp_pos_list.append(soft_obj.node_pos[soft_obj.grasp_particle_list[0]].to_numpy())
         grasp_grad_list.append(soft_obj.grad_grasp_store)
 
     # Save data
-    # np.savetxt('loss1.csv', np.array(loss_list), fmt='%e', delimiter=',')
-    # np.savetxt('marker_pos1.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
-    # np.savetxt('grasp_pos1.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
+    np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
     # np.savetxt('grasp_grad.csv', np.array(grasp_grad_list), fmt='%f', delimiter=',')
     # # Following lines for test!
     # # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')

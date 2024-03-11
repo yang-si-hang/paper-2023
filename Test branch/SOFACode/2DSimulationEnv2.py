@@ -41,7 +41,7 @@ def createScene(root):
 
     obj = root.addChild('object')
     # Rayleigh阻尼影响了软体振动
-    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.8', rayleighMass='0.8')
+    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
 
     obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
@@ -50,21 +50,21 @@ def createScene(root):
     obj.addObject('TriangleSetTopologyModifier', name='modifier')
     obj.addObject('TriangleSetGeometryAlgorithms', name='geomalgo')#, tempate='Vec3')
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')#, massDensity='0.1')
-    obj.addObject('FixedConstraint', indices=[0, 33, 66, 99, 11, 44, 77, 110, 22, 55, 88])
+
+    X_EPS = 1.e-3
+    obj.addObject('BoxROI', name='box', box=[-X_EPS, -0.06, -0.1, X_EPS, 0.06, 0.1])
+    obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
+
     obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='100', poissonRatio='0.3', method='large')
-    # obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e4', poissonRatio='0.3', method='large')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
-    # Need change the indices to !!! #######################################################################################
-    obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices='10')
+    # Need change the indices to be equal with manipualtion index ######################################################
+    obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[10])
 
-    obj_visu = obj.addChild('VisualModel')
-    obj_visu.loader = obj_visu.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', triangulate='true',
-                                         scale=1.)
-    obj_visu.addObject('OglModel', name='model', src='@loader', scale3d=[1.]*3, color=[0., 1., 0.], updateNormals=False)
-    # obj_visu.addObject('RigidMapping')
-    obj_visu.addObject('IdentityMapping')
+    # obj_visu = obj.addChild('VisualModel')
+    # obj_visu.addObject('OglModel', name='visual')
+    # obj_visu.addObject('IdentityMapping', input='@..', output='@visual')
 
 
 def add_move(handle, dt, movement):
@@ -90,12 +90,6 @@ def save_pos(handle, path):
     np.savetxt(f'{path}', node_pos, '%.6f')
 
 
-class Controller:
-    def __init__(self, manipulate:list, marker:list):
-        self.mani_idx = manipulate
-        self.marker_idx = marker
-
-
 def main():
     manipulate_idx = 10
     marker_idx = 42
@@ -107,10 +101,8 @@ def main():
             self.marker_idx = marker
             self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
 
-            print('Particle number: ', self.PARTICLE_NUM)
-            print('Element number: ', self.ELEMENT_NUM)
-            print('Edge number: ', self.EDGE_NUM)
-            print('Fixed node idx', self.fix_particle_list)
+            print('Particle number:', self.PARTICLE_NUM, '|', 'Element number:', self.ELEMENT_NUM, '|','Edge number:', self.EDGE_NUM)
+            print('Fixed node idx:', self.fix_particle_list)
             print('marker node desired pos:', self.marker_pos_desired[0])
 
 
@@ -153,9 +145,8 @@ def main():
 
     soft = MyObject(shape=[0.1, 0.1], seed_size=0.1/10, manipulate=[manipulate_idx], marker=marker_idx)
 
-    print('grasp node idx', soft.grasp_particle_list)
-    print('marker node idx:', soft.marker_idx)
-    print('marker node pos:', soft.node_init_pos[soft.marker_idx])
+    print('grasp node idx:', soft.grasp_particle_list, '|','marker node idx:', soft.marker_idx)
+    print('marker node initial pos:', soft.node_init_pos[soft.marker_idx])
 
     soft.precomputation()
     lhs_np = soft.lhs.to_numpy()
@@ -181,7 +172,7 @@ def main():
     dofs = obj.getObject('dofs')
     linear_mov = obj.getObject('cnt')
 
-    for itr in range(1, 300, 1):
+    for itr in range(1, 1000, 1):
         print(f'Time：{root.time.value:.3f}---------------------------------------')
         print(f'Marker pos:{root.object.dofs.position.value[marker_idx]}')
         print(f'Grasp pos:{root.object.dofs.position.value[manipulate_idx]}')
@@ -189,7 +180,7 @@ def main():
         marker_pos_2d = marker_pos[0:2]
 
         soft.substep(marker_pos_2d)
-        action_2d = soft.control_grasp(2.e1)
+        action_2d = soft.control_grasp(2.e0)
         action = np.append(action_2d, 0.)
         loss_list.append(soft.loss)
         marker_pos_tmp = copy.deepcopy(dofs.findData('position').value[marker_idx][0:2])
@@ -201,6 +192,8 @@ def main():
 
         Sofa.Simulation.animate(root, dt)
 
+        save_pos(dofs, f'./data/pos_{itr}.csv')
+
     np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
     np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
     np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
@@ -209,7 +202,7 @@ def main():
     movements = linear_mov.movements.value
     # print(f'{times}, {movements}')
 
-    Sofa.Gui.GUIManager.MainLoop(root)
+    # Sofa.Gui.GUIManager.MainLoop(root)
     Sofa.Gui.GUIManager.closeGUI()
     print("End of simulation.")
 
