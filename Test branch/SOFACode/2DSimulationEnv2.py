@@ -2,7 +2,7 @@
 Construct a 2D square simulation scene by SOFA
 Apply node movement in every simulation step
 """
-
+import time
 
 import Sofa
 import SofaRuntime
@@ -101,12 +101,17 @@ def main():
             self.marker_idx = marker
             self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
 
+            self.dmarker = ti.Vector.field(2*self.PARTICLE_NUM, dtype=ti.f64, shape=2)
+            self.j_model = ti.field(ti.f64, shape=(2, 2))
+            self.j_est = ti.field(ti.f64, shape=4)
+            self.j_est.from_numpy(np.array([0.25, 0., 0., 0.55]))
+
             print('Particle number:', self.PARTICLE_NUM, '|', 'Element number:', self.ELEMENT_NUM, '|','Edge number:', self.EDGE_NUM)
             print('Fixed node idx:', self.fix_particle_list)
             print('marker node desired pos:', self.marker_pos_desired[0])
 
 
-        def construct_L(self, sofa_pos):
+        def con_sofa_loss(self, sofa_pos):
             dim = self.dim
             idx = self.marker_idx
             desired_pos = self.marker_pos_desired[0]
@@ -116,6 +121,50 @@ def main():
             self.dL[idx * dim] = 2 * (current_pos[0] - desired_pos.x)
             self.dL[idx * dim + 1] = 2 * (current_pos[1] - desired_pos.y)
             return error, L
+
+
+        def diff_jacobian(self, itr_num):
+            self.partial_p()            # 应该可以不要
+            dA = self.rhs_dA.to_numpy()
+            z_all = np.zeros((2, 2*self.PARTICLE_NUM))
+
+            z_np = np.ones((2 * self.PARTICLE_NUM))
+            par_L = np.zeros((2*self.PARTICLE_NUM))
+            idx = self.marker_idx*2
+            par_L[idx] = 1.
+
+            for itr in ti.static(range(itr_num)):
+                rhs_diff_np = dA @ z_np + par_L
+                z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+                z_np = z_new_np
+
+            z_all[0,:] = z_np
+
+            z_np = np.ones((2 * self.PARTICLE_NUM))
+            par_L = np.zeros((2*self.PARTICLE_NUM))
+            idx = self.marker_idx*2+1
+            par_L[idx] = 1.
+
+            for itr in ti.static(range(itr_num)):
+                rhs_diff_np = dA @ z_np + par_L
+                z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+                z_np = z_new_np
+
+            z_all[1,:] = z_np
+
+            grasp_idx = self.grasp_particle_list[0]
+            marker_mass = self.node_mass[grasp_idx]
+            self.j_model.from_numpy(z_all[:,grasp_idx*2:grasp_idx*2+2] * marker_mass / self.dt**2)
+
+
+        def jacobian_est(self, delta_marker, delta_grasp, factor):
+            W = np.array([[delta_grasp[0], delta_grasp[1], 0., 0.],
+                          [0., 0., delta_grasp[0], delta_grasp[1]]])
+            e = W @ self.j_est.to_numpy() - delta_marker
+            j_est_new = self.j_est.to_numpy() - factor*W.transpose()@e
+            self.j_est.from_numpy(j_est_new)
+
+            return e
 
 
         def control_grasp(self, learning_rate):
@@ -137,15 +186,17 @@ def main():
 
             self.update_vel_pos()
 
-            error, loss_tmp = self.construct_L(sofa_pos)
+            error, loss_tmp = self.con_sofa_loss(sofa_pos)
             self.loss = loss_tmp
             print('Error:', error, 'Loss:', loss_tmp)
             self.diff_pd(10)
+            # Model jacobian
+            self.diff_jacobian(10)
 
 
     soft = MyObject(shape=[0.1, 0.1], seed_size=0.1/10, manipulate=[manipulate_idx], marker=marker_idx)
 
-    print('grasp node idx:', soft.grasp_particle_list, '|','marker node idx:', soft.marker_idx)
+    print('grasp node idx:', soft.grasp_particle_list, '|', 'marker node idx:', soft.marker_idx)
     print('marker node initial pos:', soft.node_init_pos[soft.marker_idx])
 
     soft.precomputation()
@@ -156,6 +207,10 @@ def main():
     loss_list = []
     marker_pos_list = []
     grasp_pos_list = []
+    delta_marker_pos_list = []
+    delta_grasp_pos_list = []
+    jacobian_model_list = []
+    jacobian_est_list = []
 
     #######################################################################
 
@@ -163,16 +218,19 @@ def main():
     createScene(root)
 
     Sofa.Simulation.init(root)
-    Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
-    Sofa.Gui.GUIManager.createGUI(root, __file__)
-    Sofa.Gui.GUIManager.SetDimension(1080, 800)
+    # Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
+    # Sofa.Gui.GUIManager.createGUI(root, __file__)
+    # Sofa.Gui.GUIManager.SetDimension(1080, 800)
 
     dt = root.dt.value
     obj = root.getChild('object')
     dofs = obj.getObject('dofs')
     linear_mov = obj.getObject('cnt')
 
-    for itr in range(1, 1000, 1):
+    marker_pos_last = copy.deepcopy(dofs.findData('position').value[marker_idx][0:2])
+    manipulate_pos_last = copy.deepcopy(dofs.findData('position').value[manipulate_idx][0:2])
+
+    for itr in range(1, 500, 1):
         print(f'Time：{root.time.value:.3f}---------------------------------------')
         print(f'Marker pos:{root.object.dofs.position.value[marker_idx]}')
         print(f'Grasp pos:{root.object.dofs.position.value[manipulate_idx]}')
@@ -181,29 +239,46 @@ def main():
 
         soft.substep(marker_pos_2d)
         action_2d = soft.control_grasp(2.e0)
+        jacobian_model_list.append(soft.j_model.to_numpy().flatten())
+
         action = np.append(action_2d, 0.)
         loss_list.append(soft.loss)
         marker_pos_tmp = copy.deepcopy(dofs.findData('position').value[marker_idx][0:2])
-        manipulate_pos_tmp = copy.deepcopy(dofs.findData('position').value[manipulate_idx][:])
+        manipulate_pos_tmp = copy.deepcopy(dofs.findData('position').value[manipulate_idx][0:2])
+
+        delta_marker_pos = marker_pos_tmp - marker_pos_last
+        delta_grasp_pos = manipulate_pos_tmp - manipulate_pos_last
+        marker_pos_last = marker_pos_tmp
+        manipulate_pos_last = manipulate_pos_tmp
+
         marker_pos_list.append(marker_pos_tmp)
         grasp_pos_list.append(manipulate_pos_tmp)
+        delta_marker_pos_list.append(delta_marker_pos)
+        delta_grasp_pos_list.append(delta_grasp_pos)
 
+        # Estimated jacobian
+        jacobian_error = soft.jacobian_est(delta_marker_pos, delta_grasp_pos, 1.e6)
+        # print('jacobian error:', jacobian_error)
+        jacobian_est_list.append(soft.j_est.to_numpy())
         add_move(linear_mov, dt, action)
-
         Sofa.Simulation.animate(root, dt)
 
-        save_pos(dofs, f'./data/pos_{itr}.csv')
+        # save_pos(dofs, f'./data/pos_{itr}.csv')
 
     np.savetxt('loss.csv', np.array(loss_list), fmt='%e', delimiter=',')
     np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%e', delimiter=',')
     np.savetxt('grasp_pos.csv', np.array(grasp_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('delta_marker_pos.csv', np.array(delta_marker_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('delta_grasp_pos.csv', np.array(delta_grasp_pos_list), fmt='%e', delimiter=',')
+    np.savetxt('jacobian_model.csv', np.array(jacobian_model_list), fmt='%e', delimiter=',')
+    np.savetxt('jacobian_est.csv', np.array(jacobian_est_list), fmt='%e', delimiter=',')
 
-    times = linear_mov.keyTimes.value
-    movements = linear_mov.movements.value
+    # times = linear_mov.keyTimes.value
+    # movements = linear_mov.movements.value
     # print(f'{times}, {movements}')
 
     # Sofa.Gui.GUIManager.MainLoop(root)
-    Sofa.Gui.GUIManager.closeGUI()
+    # Sofa.Gui.GUIManager.closeGUI()
     print("End of simulation.")
 
 
