@@ -1,9 +1,10 @@
 """
 Construct a 2D square simulation scene by SOFA
 Apply node movement in every simulation step
+Action increment is calculated by DiffPD. Deformation jacobian matrix can be calculated by DiffPD or estimated by Adaptive cpntroller
 """
-import time
 
+import time
 import Sofa
 import SofaRuntime
 import Sofa.Gui
@@ -41,7 +42,7 @@ def createScene(root):
 
     obj = root.addChild('object')
     # Rayleigh阻尼影响了软体振动
-    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
+    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.5', rayleighMass='0.5')
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
 
     obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
@@ -55,7 +56,7 @@ def createScene(root):
     obj.addObject('BoxROI', name='box', box=[-X_EPS, -0.06, -0.1, X_EPS, 0.06, 0.1])
     obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
 
-    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e5', poissonRatio='0.4', method='large')
+    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e2', poissonRatio='0.4', method='large')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
@@ -230,7 +231,7 @@ def main():
     marker_pos_last = copy.deepcopy(dofs.findData('position').value[marker_idx][0:2])
     manipulate_pos_last = copy.deepcopy(dofs.findData('position').value[manipulate_idx][0:2])
 
-    for itr in range(1, 500, 1):
+    for itr in range(1, 1000, 1):
         print(f'Time：{root.time.value:.3f}---------------------------------------')
         print(f'Marker pos:{root.object.dofs.position.value[marker_idx]}')
         print(f'Grasp pos:{root.object.dofs.position.value[manipulate_idx]}')
@@ -238,7 +239,7 @@ def main():
         marker_pos_2d = marker_pos[0:2]
 
         soft.substep(marker_pos_2d)
-        action_2d = soft.control_grasp(2.e0)
+        action_2d = soft.control_grasp(2.e1)
         jacobian_model_list.append(soft.j_model.to_numpy().flatten())
 
         action = np.append(action_2d, 0.)

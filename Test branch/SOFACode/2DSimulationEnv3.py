@@ -41,7 +41,7 @@ def createScene(root):
 
     obj = root.addChild('object')
     # Rayleigh阻尼影响了软体振动
-    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
+    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.5', rayleighMass='0.5')
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
 
     obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
@@ -103,7 +103,7 @@ def main():
 
             self.dmarker = ti.Vector.field(2*self.PARTICLE_NUM, dtype=ti.f64, shape=2)
             self.j_model = ti.field(ti.f64, shape=(2, 2))
-            self.j_est = ti.field(ti.f64, shape=4)
+            self.j_est = ti.field(ti.f64, shape=(2,2))
             # self.j_est.from_numpy(np.array([0.25, 0., 0., 0.55]))
 
             print('Particle number:', self.PARTICLE_NUM, '|', 'Element number:', self.ELEMENT_NUM, '|','Edge number:', self.EDGE_NUM)
@@ -158,11 +158,14 @@ def main():
 
 
         def jacobian_est(self, delta_marker, delta_grasp, factor):
+            print('delta_grasp', delta_grasp)
+            print('delta_marker', delta_marker_pos)
             W = np.array([[delta_grasp[0], delta_grasp[1], 0., 0.],
                           [0., 0., delta_grasp[0], delta_grasp[1]]])
-            e = W @ self.j_est.to_numpy() - delta_marker
-            j_est_new = self.j_est.to_numpy() - factor*W.transpose()@e
-            self.j_est.from_numpy(j_est_new)
+            a = self.j_est.to_numpy().flatten()
+            e = W @ a - delta_marker
+            a_update = a - factor*W.transpose()@e
+            self.j_est.from_numpy(a_update.reshape((2, 2)))
 
             return e
 
@@ -178,12 +181,12 @@ def main():
             """
             idx = self.marker_idx
             dL_j_np = self.dL.to_numpy()[idx*2:idx*2+2]
-            grad_grasp = dL_j_np @ self.j_est.to_numpy().reshape((2,2))
+            grad_grasp = dL_j_np @ self.j_est.to_numpy()
 
             self.grad_grasp_store = grad_grasp
-            print('grad_grasp:', grad_grasp)
+            print('Grad grasp:', grad_grasp)
             self.GRASP_VEL[0] = -learning_rate * grad_grasp
-            print('Grasp increment:', self.GRASP_VEL[0] * self.dt)
+            print('Action increment:', self.GRASP_VEL[0] * self.dt)
 
             return self.GRASP_VEL[0].to_numpy()*self.dt
 
@@ -204,8 +207,8 @@ def main():
 
             error, loss_tmp = self.con_sofa_loss(sofa_pos)
             self.loss = loss_tmp
-            print('Error:', error, 'Loss:', loss_tmp)
-            self.diff_pd(10)
+            print('Pos error:', error, '|', 'Loss:', loss_tmp)
+            # self.diff_pd(10)
             # Model jacobian
             self.diff_jacobian(10)
 
@@ -227,6 +230,7 @@ def main():
     delta_grasp_pos_list = []
     jacobian_model_list = []
     jacobian_est_list = []
+    jacobian_error_list = []
 
     #######################################################################
 
@@ -250,17 +254,17 @@ def main():
     marker_pos_2d = dofs.position.value[marker_idx][0:2]
 
     soft.substep(marker_pos_2d)
-    soft.j_est.from_numpy(soft.j_model.to_numpy().flatten())
+    soft.j_est.from_numpy(soft.j_model.to_numpy())
 
-    for itr in range(1, 5000, 1):
+    for itr in range(1, 1000, 1):
         print(f'Time：{root.time.value:.3f}---------------------------------------')
-        print(f'Marker pos:{root.object.dofs.position.value[marker_idx]}')
-        print(f'Grasp pos:{root.object.dofs.position.value[manipulate_idx]}')
+        # print(f'Marker pos:{root.object.dofs.position.value[marker_idx][0:2]}')
+        # print(f'Grasp pos:{root.object.dofs.position.value[manipulate_idx][0:2]}')
         marker_pos = dofs.position.value[marker_idx]
         marker_pos_2d = marker_pos[0:2]
 
         soft.substep(marker_pos_2d)
-        action_2d = soft.control_grasp_j(2.e0)
+        action_2d = soft.control_grasp_j(5.e1)
         jacobian_model_list.append(soft.j_model.to_numpy().flatten())
 
         action = np.append(action_2d, 0.)
@@ -279,9 +283,10 @@ def main():
         delta_grasp_pos_list.append(delta_grasp_pos)
 
         # Estimated jacobian
-        jacobian_error = soft.jacobian_est(delta_marker_pos, delta_grasp_pos, 5.e6)
-        # print('jacobian error:', jacobian_error)
-        jacobian_est_list.append(soft.j_est.to_numpy())
+        jacobian_error = soft.jacobian_est(delta_marker_pos, delta_grasp_pos, 2.e6)
+        print('jacobian error:', jacobian_error)
+        jacobian_est_list.append(soft.j_est.to_numpy().flatten())
+        jacobian_error_list.append(jacobian_error)
         add_move(linear_mov, dt, action)
         Sofa.Simulation.animate(root, dt)
 
@@ -294,6 +299,7 @@ def main():
     np.savetxt('delta_grasp_pos.csv', np.array(delta_grasp_pos_list), fmt='%e', delimiter=',')
     np.savetxt('jacobian_model.csv', np.array(jacobian_model_list), fmt='%e', delimiter=',')
     np.savetxt('jacobian_est.csv', np.array(jacobian_est_list), fmt='%e', delimiter=',')
+    np.savetxt('jacobian_error.csv', np.array(jacobian_error_list), fmt='%e', delimiter=',')
 
     # times = linear_mov.keyTimes.value
     # movements = linear_mov.movements.value
