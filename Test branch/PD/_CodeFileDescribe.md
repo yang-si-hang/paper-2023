@@ -1,6 +1,16 @@
 This file want to describe all code files.
 
-#### _PDStrain.py
+### _PDStrain.py
 An **example file** that implement the Projective Dynamics method with strain & volume constraint.
 
-#### _PDStrainGrasp.py
+### _PDStrainGrasp.py
+
+### _ControlSimulation.py
+Control an edge node to deform the soft object in PD simulation, which make a marker
+point on soft object move to a desired position.
+The controller is based on the *grad function solver* or *DiffPD techonolgy*.
+
+### ControlMultiPoints.py
+Minimize the loss with multi grasping points by DiffPD.
+
+### 

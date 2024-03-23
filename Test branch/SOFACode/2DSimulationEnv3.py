@@ -254,7 +254,8 @@ def main():
     marker_pos_2d = dofs.position.value[marker_idx][0:2]
 
     soft.substep(marker_pos_2d)
-    soft.j_est.from_numpy(soft.j_model.to_numpy())
+    # soft.j_est.from_numpy(soft.j_model.to_numpy())
+    soft.j_est.from_numpy(np.array([[1, 0],[0, 1]]))
 
     for itr in range(1, 1000, 1):
         print(f'Time：{root.time.value:.3f}---------------------------------------')
@@ -264,7 +265,7 @@ def main():
         marker_pos_2d = marker_pos[0:2]
 
         soft.substep(marker_pos_2d)
-        action_2d = soft.control_grasp_j(5.e1)
+        action_2d = soft.control_grasp_j(2.e1)
         jacobian_model_list.append(soft.j_model.to_numpy().flatten())
 
         action = np.append(action_2d, 0.)
