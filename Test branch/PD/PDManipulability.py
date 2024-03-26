@@ -84,9 +84,9 @@ class SoftObject:
         self.z.fill(1.)
 
         self.fix_particle_list = self.fix_particle_No()
-        self.mani_list = [10]
-        # self.mani_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 32, 43, 54, 65, 76, 87, 98, 109,
-        #                   111, 112, 113, 114, 115, 116, 117, 118, 119, 120]
+        # self.mani_list = [10]
+        self.mani_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 32, 43, 54, 65, 76, 87, 98, 109,
+                          111, 112, 113, 114, 115, 116, 117, 118, 119, 120]
         self.MANI_N = len(self.mani_list)
         self.mani_ti = ti.field(int, shape=self.MANI_N)
         self.mani_ti.from_numpy(np.array(self.mani_list))
@@ -489,7 +489,7 @@ class SoftObject:
 
     def re_diff_data(self, idx):
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
-        mass_np[idx] += self.mani_mass
+        mass_np[idx] += self.mani_mass/self.dt**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
         mass_dim_np[0::2] = mass_np
         mass_dim_np[1::2] = mass_np
