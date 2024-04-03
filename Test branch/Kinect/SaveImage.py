@@ -3,11 +3,13 @@ import numpy as np
 import pyk4a
 from pyk4a import PyK4A, Config
 
+
 def get_color_image_from_kinect():
     # 创建Kinect对象并打开设备
     k4a = PyK4A(Config(color_resolution=pyk4a.ColorResolution.RES_720P))
     k4a.start()
 
+    # 获取彩色相机内参
     cam_calib = k4a.calibration
     color_camera_intrinsics = cam_calib.get_camera_matrix(pyk4a.CalibrationType.COLOR)
     print("彩色相机内参:", color_camera_intrinsics)
@@ -32,6 +34,7 @@ def get_color_image_from_kinect():
     k4a.stop()
 
     return color_image
+
 
 if __name__ == "__main__":
     img = get_color_image_from_kinect()
