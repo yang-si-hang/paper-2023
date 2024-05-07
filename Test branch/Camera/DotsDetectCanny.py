@@ -1,5 +1,6 @@
 """
-This code for detecting red dots.
+This code for detecting black dots on red soft object.
+Filting red component --> Canny edge detection --> Find contours.
 """
 
 
@@ -38,7 +39,7 @@ lower_red_2 = np.array([156, 43, 46])
 upper_red_2 = np.array([180, 255, 255])
 
 
-@profile
+# @profile
 def main():
     try:
         for i in range(100):  # 按Q键退出
