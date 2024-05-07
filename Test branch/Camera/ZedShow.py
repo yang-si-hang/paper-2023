@@ -7,7 +7,7 @@ def main():
 
     # 设置相机配置
     init_params = sl.InitParameters()
-    init_params.camera_resolution = sl.RESOLUTION.HD1080  # 设置相机分辨率为HD720
+    init_params.camera_resolution = sl.RESOLUTION.HD1080  # 设置相机分辨率为HD1080
     init_params.camera_fps = 30  # 设置相机的帧率为30 fps
 
     # 打开相机
