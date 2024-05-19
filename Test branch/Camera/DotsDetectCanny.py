@@ -42,7 +42,7 @@ upper_red_2 = np.array([180, 255, 255])
 # @profile
 def main():
     try:
-        for i in range(100):  # 按Q键退出
+        while True:  # 按Q键退出
             time_start = time.time()
             # 捕获图像
             if zed.grab() == sl.ERROR_CODE.SUCCESS:

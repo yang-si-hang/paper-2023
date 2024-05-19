@@ -15,7 +15,7 @@ from scipy.sparse.linalg import spsolve
 
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size):
+    def __init__(self, shape, seed_size, contact_idx:list):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./100
@@ -31,11 +31,12 @@ class SoftObject:
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
-        node_np, edge_np, element_np = self.mesh_object()
+        node_np, edge_np, element_np, tri = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
         # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
         # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
+        self.tri = tri
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = edge_np.shape[0]
@@ -84,13 +85,14 @@ class SoftObject:
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.grad_y = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)         # Gradient of the loss respect to y
         self.grasp_dx_dy = ti.field(ti.f64, shape=(2*self.PARTICLE_NUM, 2))
+        self.loss = None
 
         self.dL.fill(0.)
         self.z.fill(1.)
 
         self.fix_particle_list = self.fix_particle_No()
         # self.grasp_particle_list, _ = self.grasp_particle_No()
-        self.grasp_particle_list = [10]
+        self.grasp_particle_list = contact_idx
 
         self.construct_B()
         self.construct_volume()
@@ -143,7 +145,7 @@ class SoftObject:
         edge = np.array(list(edge_set))
         # np.savetxt('edge.csv', edge, fmt='%d', delimiter=',')
 
-        return node, edge, element
+        return node, edge, element, tri
 
 
     def mesh_object_3d(self):

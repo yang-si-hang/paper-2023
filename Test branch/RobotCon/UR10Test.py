@@ -9,7 +9,7 @@ import time
 import copy
 
 UR_IP = '192.168.253.10'
-rtde_frequency = 500.0
+rtde_frequency = 100
 
 # read positions
 """
@@ -85,7 +85,7 @@ rtde_c.stopScript()
 """
 
 # servoj control
-"""
+
 rtde_c = rtde_control.RTDEControlInterface(UR_IP, rtde_frequency)
 rtde_r = rtde_receive.RTDEReceiveInterface(UR_IP, rtde_frequency)
 
@@ -93,24 +93,26 @@ rtde_r = rtde_receive.RTDEReceiveInterface(UR_IP, rtde_frequency)
 velocity = 0.5
 acceleration = 0.5
 dt = 1.0/500  # 2ms
-lookahead_time = 0.1
+lookahead_time = 0.05
 gain = 300
 joint_q_init = rtde_r.getActualQ()
 joint_q = copy.deepcopy(joint_q_init)
 
 # Execute 500Hz control loop for 2 seconds, each cycle is 2ms
-for i in range(1000):
+for i in range(100):
     t_start = rtde_c.initPeriod()
-    rtde_c.servoJ(joint_q, velocity, acceleration, dt, lookahead_time, gain)
-    joint_q[4] += 0.001
-    joint_q[5] += 0.001
+    rtde_c.servoJ(joint_q, velocity, acceleration, 0.002, lookahead_time, gain)
+    joint_q[4] -= 0.001
+    print(rtde_r.getActualQ()[4])
+    # joint_q[5] += 0.001
     rtde_c.waitPeriod(t_start)
 
 rtde_c.servoStop()          # need stop servo mode
 
-rtde_c.moveJ(joint_q_init)
+# rtde_c.moveJ(joint_q_init)
 rtde_c.stopScript()
-"""
+print(np.array(rtde_r.getActualQ())[4]-np.array(joint_q_init)[4])
+
 
 # speedj
 """
@@ -167,7 +169,8 @@ rtde_c.moveL(path)
 rtde_c.stopScript()
 """
 
-
+# IO control
+"""
 rtde_io_ = rtde_io.RTDEIOInterface(UR_IP, rtde_frequency)
 rtde_receive_ = rtde_receive.RTDEReceiveInterface(UR_IP, rtde_frequency)
 
@@ -201,3 +204,4 @@ else:
 
 # How to set a analog output with a specified current ratio
 rtde_io_.setAnalogOutputCurrent(1, 0.25)
+"""
