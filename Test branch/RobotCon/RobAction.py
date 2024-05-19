@@ -22,6 +22,13 @@ class URROb:
         self.rtde_c.speedL(v, a, dt)
         self.rtde_c.waitPeriod(t_start)
         return
+    
+
+    def move_speedl(self, v, a=0.5, dt=1./500):
+        t_start = self.rtde_c.initPeriod()
+        self.rtde_c.speedL(v, a, dt)
+        self.rtde_c.waitPeriod(t_start)
+        return
 
 
     def move_add_servoj(self, joint_add):

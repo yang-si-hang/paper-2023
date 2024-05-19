@@ -6,6 +6,7 @@ Obtain the position of the black on red soft object.
 import numpy as np
 from scipy.spatial import Delaunay
 from ControlSimulation import *
+from RobAction import URROb
 
 
 dot_pixel = np.array([456, 823], dtype=int)
@@ -16,6 +17,11 @@ dot_pos = np.array([0.05, 0.01])
 
 
 """标记点检测"""
+
+# 相机坐标系转换到软体坐标系
+depth = 
+# 可以用棋盘格标定板得到变换矩阵
+T = 
 
 
 def feature_barycentric_coordinates(p, mesh_nodes):
@@ -58,6 +64,7 @@ def find_element(tri, dot_pos):
 def main():
     obj_shape = [0.1, 0.1]
     obj_seed_size = 0.01
+    learning_rate = 1.0
 
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, contact_idx):
@@ -144,6 +151,7 @@ def main():
             self.diff_pd(10)
             self.compute_grad_y()
 
+    MyRob = URROb(500)
 
     soft_obj = MyObject(obj_shape, obj_seed_size, [10])
 
@@ -161,10 +169,12 @@ def main():
     # np.savetxt('grad_y.txt', soft_obj.grad_y.to_numpy())
 
     print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
+    end_speed_np = learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
+    end_speed = end_speed_np.tolist()
 
 
     """机器人控制部分"""
-
+    MyRob.move_speedl(end_speed)            # 设置机械臂末端速度
 
 
 
