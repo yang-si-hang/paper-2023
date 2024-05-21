@@ -1,3 +1,8 @@
+"""
+Get Camera intrisic parameters
+"""
+
+
 import pyzed.sl as sl
 
 def main():
