@@ -58,50 +58,58 @@ def get_camera_intrinsic():
     return camera_matrix, dist_coeffs, image_cv
 
 
-intrisic_matrix, dist, image_chess = get_camera_intrinsic()
+def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist):
+    # 世界坐标系中的棋盘格点, X向右，Y向下，Z向里
+    objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]].T.reshape(-1, 2)
+    objp *= square_size
 
-# 棋盘格的大小
-chessboard_size = (11, 8)  # (宽, 高) 内角点数
+    # 读取棋盘格图像
+    # image = cv2.imread('chessboard.jpg')
+    image = image_chess
 
-# 每个棋盘格的格子宽度（单位：米）
-square_size = 0.015
+    # 转换为灰度图像
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-# 世界坐标系中的棋盘格点
-objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3), np.float32)
-objp[:, :2] = np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]].T.reshape(-1, 2)
-objp *= square_size
+    # 寻找棋盘格的角点
+    ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
 
-# 读取棋盘格图像
-# image = cv2.imread('chessboard.jpg')
-image = image_chess
+    # 如果找到了角点
+    if ret:
+        # 提高角点的准确度
+        corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1),
+                                    criteria=(cv2.TermCriteria_EPS + cv2.TermCriteria_MAX_ITER, 30, 0.001))
 
-# 转换为灰度图像
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # 计算旋转和平移向量，相机是Z向外的标准规定坐标系
+        ret, rvecs, tvecs = cv2.solvePnP(objp, corners2, intrisic_matrix, dist)
 
-# 寻找棋盘格的角点
-ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
+        # 将旋转向量转换为旋转矩阵
+        rotation_matrix, _ = cv2.Rodrigues(rvecs)
 
-# 如果找到了角点
-if ret:
-    # 提高角点的准确度
-    corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1),
-                                criteria=(cv2.TermCriteria_EPS + cv2.TermCriteria_MAX_ITER, 30, 0.001))
+        # 打印变换矩阵
+        transformation_matrix = np.hstack((rotation_matrix, tvecs))
+        transformation_matrix = np.vstack((transformation_matrix, np.array([0, 0, 0, 1])))
+        print("Transformation Matrix:\n", transformation_matrix)
+    else:
+        print("Chessboard corners not found")
+        raise Exception("Chessboard corners not found")
 
-    # 计算旋转和平移向量
-    ret, rvecs, tvecs = cv2.solvePnP(objp, corners2, intrisic_matrix, dist)
+    return image, corners2, ret
 
-    # 将旋转向量转换为旋转矩阵
-    rotation_matrix, _ = cv2.Rodrigues(rvecs)
 
-    # 打印变换矩阵
-    transformation_matrix = np.hstack((rotation_matrix, tvecs))
-    transformation_matrix = np.vstack((transformation_matrix, np.array([0, 0, 0, 1])))
-    print("Transformation Matrix:\n", transformation_matrix)
-else:
-    print("Chessboard corners not found")
+def main():
+    # 棋盘格的大小和每个棋盘格的格子宽度（单位：米）
+    chessboard_size, square_size = (11, 8), 0.015
 
-# 显示图像并标记角点
-cv2.drawChessboardCorners(image, chessboard_size, corners2, ret)
-cv2.imshow('Chessboard', image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    intrisic_matrix, dist, image_chess = get_camera_intrinsic()
+
+    image, corner_refined, ret = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
+
+    # 显示图像并标记角点
+    cv2.drawChessboardCorners(image, chessboard_size, corner_refined, ret)
+    cv2.imshow('Chessboard', image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
