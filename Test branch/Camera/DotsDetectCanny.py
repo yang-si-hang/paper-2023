@@ -72,14 +72,46 @@ def detect_rect(image):
         # 画出轮廓和角点
         cv2.drawContours(image, [approx], 0, (0, 255, 0), 2)
 
-        # 打印角点坐标
-        print("角点坐标:")
-        for point in approx:
-            print(point[0])
+        # # 打印角点坐标
+        # print("角点坐标:")
+        # for point in approx:
+        #     print(point[0])
 
         return  approx
     else:
         return None
+
+
+def calculate_area(x1, y1, x2, y2, x3, y3):
+    return 0.5 * abs(x1*(y2 - y3) + x2*(y3 - y1) + x3*(y1 - y2))
+
+def calculate_barycentric_coordinates(A, B, C, D, P):
+    # 四边形的四个顶点
+    x1, y1 = A
+    x2, y2 = B
+    x3, y3 = C
+    x4, y4 = D
+
+    # 内部点
+    xp, yp = P
+
+    # 计算四边形的总面积
+    area_ABCD = calculate_area(x1, y1, x2, y2, x3, y3) + calculate_area(x1, y1, x3, y3, x4, y4)
+
+    # 计算每个子三角形的面积
+    area_PAB = calculate_area(xp, yp, x1, y1, x2, y2)
+    area_PBC = calculate_area(xp, yp, x2, y2, x3, y3)
+    area_PCD = calculate_area(xp, yp, x3, y3, x4, y4)
+    area_PDA = calculate_area(xp, yp, x4, y4, x1, y1)
+
+    # 计算重心坐标
+    lambda_A = area_PBC / area_ABCD
+    lambda_B = area_PDA / area_ABCD
+    lambda_C = area_PAB / area_ABCD
+    lambda_D = area_PCD / area_ABCD
+
+    return (lambda_A, lambda_B, lambda_C, lambda_D)
+
 
 # @profile
 def main():
@@ -117,7 +149,9 @@ def main():
                     closed_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
                     # cv2.imwrite('closed_mask.png', closed_mask)
 
+                    # 检测四边形
                     rect_corner = detect_rect(red_mask)
+                    corner_pos = np.squeeze(rect_corner)
 
                     # Apply the mask to the original image
                     masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=closed_mask)
@@ -162,8 +196,8 @@ def main():
                                     cv2.circle(color_image_bgr, (cX, cY), 5, (255, 0, 0), -1)
 
                     if rect_corner is not None:
-                        for point in rect_corner:
-                            cv2.circle(color_image_bgr, tuple(point[0]), 5, (0, 255, 0), -1)
+                        for point in corner_pos:
+                            cv2.circle(color_image_bgr, tuple(point), 5, (0, 255, 0), -1)
 
                     # time_end = time.time()
                     # Display the result (with circles around detected dots on red tissue)
@@ -183,6 +217,12 @@ def main():
         print("Detected Dot Coordinates on Red Tissue:")
         for i, (cX, cY) in enumerate(dot_coordinates, 1):
             print(f"Dot {i}: ({cX}, {cY}). Area: {areas[i-1]:.2f} pixels^2")
+
+        for i, point in enumerate(corner_pos, 1):
+            print(f"Corner {i}: ({point[0]}, {point[1]})")
+
+        cord = calculate_barycentric_coordinates(corner_pos[0], corner_pos[1], corner_pos[2], corner_pos[3], dot_coordinates[0])
+        print(cord)
 
 
 if __name__ == '__main__':

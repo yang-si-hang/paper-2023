@@ -69,6 +69,7 @@ def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
 
     # 转换为灰度图像
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    cv2.imwrite('gray_chessboard.jpg', gray)
 
     # 寻找棋盘格的角点
     ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
@@ -80,7 +81,8 @@ def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
                                     criteria=(cv2.TermCriteria_EPS + cv2.TermCriteria_MAX_ITER, 30, 0.001))
 
         # 计算旋转和平移向量，相机是Z向外的标准规定坐标系
-        ret, rvecs, tvecs = cv2.solvePnP(objp, corners2, intrisic_matrix, dist)
+        dist_zero = np.zeros(5)         # Zed相机已经去畸变
+        ret, rvecs, tvecs = cv2.solvePnP(objp, corners2, intrisic_matrix, dist_zero)
 
         # 将旋转向量转换为旋转矩阵
         rotation_matrix, _ = cv2.Rodrigues(rvecs)

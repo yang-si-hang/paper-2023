@@ -21,8 +21,7 @@ red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
 def init_param():
     """
-    获得标定板相对于相机的变换矩阵
-    :return:
+    获得软组织相对于相机的变换矩阵
     """
     # 棋盘格的大小和每个棋盘格的格子宽度（单位：米）
     chessboard_size, square_size = (11, 8), 0.015
@@ -30,13 +29,50 @@ def init_param():
 
     *_, transformation_matrix = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
 
-    # # 将棋盘格坐标系转换到软体坐标系
-    # transformation_chess_soft = np.array([[1., 0., 0., ],
-    #                                       [0., 1., 0., ],
-    #                                       [0., 0., 1., 0.],
-    #                                       [0., 0., 0., 1.]])
+    # 将棋盘格坐标系转换到软体坐标系
+    transformation_chess_soft = np.array([[1., 0., 0., -0.025],
+                                          [0., 1., 0., 0.],
+                                          [0., 0., 1., 0.],
+                                          [0., 0., 0., 1.]])
 
-    return transformation_matrix[2,3]       # 返回深度值
+    transformation_soft = transformation_matrix @ transformation_chess_soft
+
+    return transformation_soft, intrisic_matrix
+
+
+def pixel_to_camera_coordinates(pixel, K_inv):
+    """
+    将图像坐标转换为相机坐标系中的射线
+    """
+    pixel_homogeneous = np.append(pixel, 1.0)
+    camera_ray = K_inv @ pixel_homogeneous
+    return camera_ray
+
+
+def line_plane_intersection(line_dir, plane_normal, plane_point):
+    """
+    计算直线与平面的交点
+    """
+    d = np.dot(plane_normal, plane_point)
+    t = d / np.dot(plane_normal, line_dir)          # 这里不需要对line_dir进行归一化
+    intersection_point = t * line_dir
+    return intersection_point
+
+
+def dot_in_soft(dot_pixel, trans_soft, intrinsic):
+    """
+    将标记点的像素坐标转换到软体坐标系
+    :return:
+    """
+    intrisic_inv = np.linalg.inv(intrinsic)
+    dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
+
+    plane_normal = trans_soft[:3, 2]            # Z轴方向
+    plane_point = trans_soft[:3, 3]             # 变换矩阵的平移部分
+
+    dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)
+
+    return dot_soft
 
 
 def feature_barycentric_coordinates(p, mesh_nodes):
@@ -81,11 +117,12 @@ def main():
     obj_seed_size = 0.01
     learning_rate = 1.0
 
-    depth = init_param()
+    trans_soft, intrinsic = init_param()
 
     camera_id, image_init, window_name = init_camera()
     # 运行一次，获得标记点的初始位置
     dots, areas = get_dot(camera_id, image_init, red_range, window_name)
+    dot_pos_init = dot_in_soft(dots, trans_soft, intrinsic)
 
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, contact_idx):
@@ -95,7 +132,7 @@ def main():
             self.dot_pos = ti.Vector.field(2, dtype=ti.f64, shape=1)
             self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=1)
             self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
-            self.dot_pos[0] = dot_pos
+            self.dot_pos[0] = dot_pos_init
             self.dot_pos_init[0] = dot_pos_init
             self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.002, 0.])
 
@@ -104,10 +141,10 @@ def main():
 
         def marker_element_get(self):
             mesh_nodes = self.tri.points
-            element_np = find_element(self.tri, dot_pos)
+            element_np = find_element(self.tri, self.dot_pos_init[0])
             if element_np is not None:
                 self.marker_element = list(element_np)
-                barycentric_init = feature_barycentric_coordinates(dot_pos, mesh_nodes[element_np])
+                barycentric_init = feature_barycentric_coordinates(self.dot_pos_init[0], mesh_nodes[element_np])
                 self.barycentric = barycentric_init
                 print("The dot is in element: ", element_np)
                 print("The barycentric coordinates are: ", barycentric_init)
