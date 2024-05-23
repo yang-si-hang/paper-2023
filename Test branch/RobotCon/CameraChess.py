@@ -93,7 +93,7 @@ def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
         print("Chessboard corners not found")
         raise Exception("Chessboard corners not found")
 
-    return image, corners2, ret
+    return image, corners2, ret, transformation_matrix
 
 
 def main():
@@ -102,7 +102,7 @@ def main():
 
     intrisic_matrix, dist, image_chess = get_camera_intrinsic()
 
-    image, corner_refined, ret = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
+    image, corner_refined, ret, *_ = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
 
     # 显示图像并标记角点
     cv2.drawChessboardCorners(image, chessboard_size, corner_refined, ret)

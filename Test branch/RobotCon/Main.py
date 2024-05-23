@@ -2,26 +2,41 @@
 Obtain the position of the black on red soft object.
 """
 
-
 import numpy as np
 from scipy.spatial import Delaunay
 from ControlSimulation import *
 from RobAction import URROb
+from CameraChess import get_camera_intrinsic, get_border
+from DotsDetectCanny import init_camera, get_dot
 
 
-dot_pixel = np.array([456, 823], dtype=int)
+# Define the lower and upper bounds for the red color in HSV
+lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
+upper_red_1 = np.array([10, 255, 255])
 
-orign_pixel = np.array([456, 823], dtype=int)
+lower_red_2 = np.array([156, 43, 46])
+upper_red_2 = np.array([180, 255, 255])
+red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
-dot_pos = np.array([0.05, 0.01])
 
+def init_param():
+    """
+    获得标定板相对于相机的变换矩阵
+    :return:
+    """
+    # 棋盘格的大小和每个棋盘格的格子宽度（单位：米）
+    chessboard_size, square_size = (11, 8), 0.015
+    intrisic_matrix, dist, image_chess = get_camera_intrinsic()
 
-"""标记点检测"""
+    *_, transformation_matrix = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
 
-# 相机坐标系转换到软体坐标系
-depth = 
-# 可以用棋盘格标定板得到变换矩阵
-T = 
+    # # 将棋盘格坐标系转换到软体坐标系
+    # transformation_chess_soft = np.array([[1., 0., 0., ],
+    #                                       [0., 1., 0., ],
+    #                                       [0., 0., 1., 0.],
+    #                                       [0., 0., 0., 1.]])
+
+    return transformation_matrix[2,3]       # 返回深度值
 
 
 def feature_barycentric_coordinates(p, mesh_nodes):
@@ -66,15 +81,23 @@ def main():
     obj_seed_size = 0.01
     learning_rate = 1.0
 
+    depth = init_param()
+
+    camera_id, image_init, window_name = init_camera()
+    # 运行一次，获得标记点的初始位置
+    dots, areas = get_dot(camera_id, image_init, red_range, window_name)
+
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, contact_idx):
             super().__init__(shape, seed_size, contact_idx)
             self.marker_element = None
             self.barycentric = None
             self.dot_pos = ti.Vector.field(2, dtype=ti.f64, shape=1)
-            self.dot_pos[0] = dot_pos
+            self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=1)
             self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
-            self.dot_pos_desired[0] = self.dot_pos[0] + ti.Vector([0.002, 0.])
+            self.dot_pos[0] = dot_pos
+            self.dot_pos_init[0] = dot_pos_init
+            self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.002, 0.])
 
             self.marker_element_get()
 

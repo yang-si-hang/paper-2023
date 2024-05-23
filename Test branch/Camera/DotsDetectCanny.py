@@ -39,19 +39,61 @@ lower_red_2 = np.array([156, 43, 46])
 upper_red_2 = np.array([180, 255, 255])
 
 
+def detect_rect(image):
+    """
+    检测长方形
+    :param image:
+    :return:
+    """
+    gray = image
+
+    # 应用Canny边缘检测
+    edges = cv2.Canny(gray, 50, 60, apertureSize=3)
+
+    # 定义结构元素（kernel）
+    kernel = np.ones((5, 5), np.uint8)
+
+    # 进行闭运算以平滑轮廓
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
+    # 查找轮廓
+    contours, _ = cv2.findContours(closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contour = max(contours, key=cv2.contourArea)
+
+    # 多边形逼近
+    epsilon = 0.05 * cv2.arcLength(contour, True)
+    approx = cv2.approxPolyDP(contour, epsilon, True)
+
+    for point in approx:
+        cv2.circle(image, tuple(point[0]), 3, (0, 0, 255), -1)
+
+    # 如果轮廓有4个顶点，我们假设它是一个长方形
+    if len(approx) == 4:
+        # 画出轮廓和角点
+        cv2.drawContours(image, [approx], 0, (0, 255, 0), 2)
+
+        # 打印角点坐标
+        print("角点坐标:")
+        for point in approx:
+            print(point[0])
+
+        return  approx
+    else:
+        return None
+
 # @profile
 def main():
     try:
         while True:  # 按Q键退出
-            time_start = time.time()
+            # time_start = time.time()
             # 捕获图像
             if zed.grab() == sl.ERROR_CODE.SUCCESS:
                 # 将图像从ZED相机转移到图像矩阵
-                zed.retrieve_image(image, sl.VIEW.LEFT)
+                zed.retrieve_image(image, sl.VIEW.RIGHT)    # 你可以选择 LEFT 或 RIGHT
                 # 将图像矩阵转换为OpenCV格式
                 frame = image.get_data()
                 color_image = frame
-                time_capture = time.time()
+                # time_capture = time.time()
                 if color_image is not None:
                     # Convert color image to OpenCV format
                     # color_image = color_image[:, :, 0:3]
@@ -74,6 +116,8 @@ def main():
                     # 使用闭运算，可能会破坏掉边界
                     closed_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
                     # cv2.imwrite('closed_mask.png', closed_mask)
+
+                    rect_corner = detect_rect(red_mask)
 
                     # Apply the mask to the original image
                     masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=closed_mask)
@@ -117,11 +161,15 @@ def main():
                                     # 在图像上标记中心点
                                     cv2.circle(color_image_bgr, (cX, cY), 5, (255, 0, 0), -1)
 
-                    time_end = time.time()
+                    if rect_corner is not None:
+                        for point in rect_corner:
+                            cv2.circle(color_image_bgr, tuple(point[0]), 5, (0, 255, 0), -1)
+
+                    # time_end = time.time()
                     # Display the result (with circles around detected dots on red tissue)
                     cv2.imshow(window_name, color_image_bgr)
 
-                    print(f"Time taken: {time_end - time_start:.5f} seconds")
+                    # print(f"Time taken: {time_end - time_start:.5f} seconds")
 
                     # Press 'q' to exit the application
                     if cv2.waitKey(1) & 0xFF == ord('q'):
