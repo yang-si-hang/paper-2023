@@ -125,8 +125,9 @@ class SoftObject:
         LN = int(np.ceil(L / seed_size)) + LN_remain
         WN = int(np.ceil(W / seed_size)) + WN_remain
 
-        # Generate the nodes' position
-        xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        # Generate the nodes' position, Z axis inward, X axis rightward, Y axis downward
+        # xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(0, W, WN))
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
