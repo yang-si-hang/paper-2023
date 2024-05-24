@@ -1,4 +1,7 @@
-
+"""
+使用真实数据测试Adaptive Controller
+这样做不对,Adaptive Controller的目的在于完成控制目标,而不是估计参数
+"""
 
 import numpy as np
 np.set_printoptions(linewidth=150)
