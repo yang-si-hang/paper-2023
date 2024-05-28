@@ -77,6 +77,7 @@ class URROb:
         self.rtde_c.stopScript()
 
 
-freq = 500
-MyUR = URROb(freq)
-pose_init = MyUR.get_pose()
+if __name__ == '__main__':
+    freq = 500
+    MyUR = URROb(freq)
+    pose_init = MyUR.get_pose()

@@ -6,8 +6,7 @@ import numpy as np
 from scipy.spatial import Delaunay
 from ControlSimulation import *
 from RobAction import URROb
-from CameraChess import get_camera_intrinsic, get_border
-from DotsDetectCanny import init_camera, get_dot
+from DotsDetectCanny import *
 
 
 # Define the lower and upper bounds for the red color in HSV
@@ -17,27 +16,6 @@ upper_red_1 = np.array([10, 255, 255])
 lower_red_2 = np.array([156, 43, 46])
 upper_red_2 = np.array([180, 255, 255])
 red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
-
-
-def init_param():
-    """
-    获得软组织相对于相机的变换矩阵
-    """
-    # 棋盘格的大小和每个棋盘格的格子宽度（单位：米）
-    chessboard_size, square_size = (11, 8), 0.015
-    intrisic_matrix, dist, image_chess = get_camera_intrinsic()
-
-    *_, transformation_matrix = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
-
-    # 将棋盘格坐标系转换到软体坐标系
-    transformation_chess_soft = np.array([[1., 0., 0., -0.025],
-                                          [0., 1., 0., 0.],
-                                          [0., 0., 1., 0.],
-                                          [0., 0., 0., 1.]])
-
-    transformation_soft = transformation_matrix @ transformation_chess_soft
-
-    return transformation_soft, intrisic_matrix
 
 
 def pixel_to_camera_coordinates(pixel, K_inv):
@@ -70,9 +48,10 @@ def dot_in_soft(dot_pixel, trans_soft, intrinsic):
     plane_normal = trans_soft[:3, 2]            # Z轴方向
     plane_point = trans_soft[:3, 3]             # 变换矩阵的平移部分
 
-    dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)
+    dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
+    dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
 
-    return dot_soft
+    return dot_soft[0:2]
 
 
 def feature_barycentric_coordinates(p, mesh_nodes):
@@ -117,12 +96,16 @@ def main():
     obj_seed_size = 0.01
     learning_rate = 1.0
 
-    trans_soft, intrinsic = init_param()
+    camera_data = np.load('data/camera_param.npz')
+    trans_soft = camera_data['matrix1']
+    intrinsic = camera_data['matrix2']
 
     camera_id, image_init, window_name = init_camera()
     # 运行一次，获得标记点的初始位置
-    dots, areas = get_dot(camera_id, image_init, red_range, window_name)
+    color_image_bgra = get_image(camera_id, image_init)
+    dots, areas = get_dot(color_image_bgra, red_range, window_name)
     dot_pos_init = dot_in_soft(dots, trans_soft, intrinsic)
+    print("The initial position of the dot in soft object: ", dot_pos_init)
 
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, contact_idx):
@@ -211,11 +194,9 @@ def main():
             self.diff_pd(10)
             self.compute_grad_y()
 
-    MyRob = URROb(500)
+    # MyRob = URROb(500)
 
     soft_obj = MyObject(obj_shape, obj_seed_size, [10])
-
-    soft_obj.preset()
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -231,10 +212,11 @@ def main():
     print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
     end_speed_np = learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
     end_speed = end_speed_np.tolist()
+    print('The end speed:', end_speed)
 
 
     """机器人控制部分"""
-    MyRob.move_speedl(end_speed)            # 设置机械臂末端速度
+    # MyRob.move_speedl(end_speed)            # 设置机械臂末端速度
 
 
 

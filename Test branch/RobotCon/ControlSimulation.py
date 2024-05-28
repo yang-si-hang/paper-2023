@@ -692,7 +692,7 @@ class SoftObject:
         window.show()
 
 
-    def preset(self):
+    def gui_preset(self):
         self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
         self.canvas = self.window.get_canvas()
         self.show_preset()
@@ -720,7 +720,7 @@ def main():
 
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/10)
-    soft_obj.preset()
+    soft_obj.gui_preset()
 
     print('grasp node idx:', soft_obj.grasp_particle_list)
     print('marker node idx:', soft_obj.marker_idx)
