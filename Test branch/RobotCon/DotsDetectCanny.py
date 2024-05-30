@@ -8,6 +8,8 @@ import time
 import cv2
 import numpy as np
 import pyzed.sl as sl
+from scipy.spatial.distance import mahalanobis
+from scipy.stats import chi2
 
 def init_camera():
     # 创建一个相机对象
@@ -47,10 +49,36 @@ def get_image(zed, image):
             return color_image
 
 
-def init_region_range(image_bgr):
-    itr_num = 10
+def init_region_range(zed_id, image_init, red_range):
+    image_bgra = get_image(zed_id, image_init)
+    mask = np.zeros(image_bgra.shape[:2], dtype=np.uint8)
+    mask[:, :] = 255
+    itr_num = 50
+    dots_list = []
     for i in range(itr_num):
-        pass
+        image_bgra = get_image(zed_id, image_init)
+        edges = image_process(image_bgra, red_range, mask)
+        dot, area, ellipse = ellipse_fitting(edges)
+        # print('Dot coordinates:', dot, area)
+        dots_list.append(dot)
+
+    dots_array = np.array(dots_list)
+
+    # 计算均值向量和协方差矩阵
+    mean_vector = np.mean(dots_array, axis=0)
+    cov_matrix = np.cov(dots_array, rowvar=False)
+
+    # 计算 Mahalanobis 距离
+    inv_cov_matrix = np.linalg.inv(cov_matrix)
+    distances = [mahalanobis(sample, mean_vector, inv_cov_matrix) for sample in dots_array]
+
+    # 设置阈值（例如使用 99% 置信水平）
+    threshold = chi2.ppf((1-0.01), df=2)
+
+    # 剔除离群值
+    filtered_data = dots_array[np.array(distances) < threshold]
+
+    return np.mean(filtered_data, axis=0)
 
 
 def cal_center(contour):
@@ -69,7 +97,7 @@ def cal_center(contour):
 
 
 # @profile
-def get_dot(image_bgra, color_range, window_name='ZED Camera Image'):
+def image_process(image_bgra, color_range, masekd_region):
     # Convert color image to OpenCV format
     color_image_rgb = cv2.cvtColor(image_bgra, cv2.COLOR_BGRA2RGB)
     color_image_bgr = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2BGR)
@@ -93,7 +121,9 @@ def get_dot(image_bgra, color_range, window_name='ZED Camera Image'):
     # cv2.imwrite('closed_mask.png', closed_mask)
 
     # Apply the mask to the original image
-    masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=closed_mask)
+    # 将两个mask进行按位与操作
+    combined_mask = cv2.bitwise_and(closed_mask, masekd_region)
+    masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=combined_mask)
     # cv2.imwrite('masked_image.png', masked_image)
 
     # Convert the image to grayscale
@@ -108,12 +138,17 @@ def get_dot(image_bgra, color_range, window_name='ZED Camera Image'):
 
     # 腐蚀变形体边界去除外轮廓
     kernel = np.ones((7, 7), np.uint8)
-    closed_mask_reduced = cv2.erode(closed_mask, kernel, iterations=1)
+    closed_mask_reduced = cv2.erode(combined_mask, kernel, iterations=1)
     edges = cv2.bitwise_and(edges, closed_mask_reduced)
     cv2.imwrite('edges.png', edges)
 
+    return edges
+
+
+def ellipse_fitting(edges):
     dot_coordinates = []
     areas = []
+    filtered_contours = []
     contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     # 检查层级信息，层级信息存储在hierarchy[0]中，格式为[next, previous, first_child, parent]
@@ -126,20 +161,27 @@ def get_dot(image_bgra, color_range, window_name='ZED Camera Image'):
                     (cX, cY), area = center_result
                     dot_coordinates.append((cX, cY))
                     areas.append(area)
+                    filtered_contours.append(contour)
 
     # 找到area中最大元素的索引,使用该索引找到dot_coordinates中对应的元素
     max_index = areas.index(max(areas))
-    (dot_x,  dot_y) = dot_coordinates[max_index]
-    # 在图像上标记中心点
-    cv2.circle(color_image_bgr, (dot_x,  dot_y), 5, (255, 0, 0), -1)
 
-    # time_end = time.time()
-    # Display the result (with circles around detected dots on red tissue)
-    cv2.imshow(window_name, color_image_bgr)
-    cv2.imwrite('color_image_bgr.png', color_image_bgr)
-    # print(f"Time taken: {time_end - time_start:.5f} seconds")
+    # 拟合椭圆
+    ellipse = cv2.fitEllipse(filtered_contours[max_index])
+    (x, y), (MA, ma), angle = ellipse
+    # 圆心
+    center = (x, y)
+    ellipse_area = MA * ma * np.pi / 4
 
-    return [dot_coordinates[max_index]], [areas[max_index]]
+    # return [dot_coordinates[max_index]], [areas[max_index]]
+    return center, ellipse_area, ellipse
+
+
+def image_show(image_bgr, ellipse, window_name='ZED Camera Image'):
+    # 绘制拟合的椭圆
+    cv2.ellipse(image_bgr, ellipse, (0, 255, 0), 1)
+    cv2.imshow(window_name, image_bgr)
+    cv2.imwrite('color_image_bgr.png', image_bgr)
 
 
 def dot_filter(dots, area):
@@ -147,7 +189,7 @@ def dot_filter(dots, area):
     筛选出符合条件的点，使得到的点只有一个
     :return:
     """
-    if area[0] < 10:
+    if area < 10:
         raise ValueError('Too small area!')
 
 
@@ -161,12 +203,36 @@ def main():
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
     zed_id, image_init, window_name = init_camera()
+    dot_init = init_region_range(zed_id, image_init, red_range)
+    color_image_bgra = get_image(zed_id, image_init)
+    height, width = color_image_bgra.shape[:2]
+    masekd_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
+
+    size = int(50)
+    x1 = max(int(dot_init[0]) - size, 0)
+    x2 = min(int(dot_init[0]) + size, width)
+    y1 = max(int(dot_init[1]) - size, 0)
+    y2 = min(int(dot_init[1]) + size, height)
+
+    # 将指定区域的值设置为255（白色）
+    masekd_region[y1:y2, x1:x2] = 255
+
     try:
         while True:  # 按Q键退出
             color_image_bgra = get_image(zed_id, image_init)
-            dots, areas = get_dot(color_image_bgra, red_range, window_name)
+            edges = image_process(color_image_bgra, red_range, masekd_region)
+            dots, areas, ellipse = ellipse_fitting(edges)
+            image_show(color_image_bgra, ellipse, window_name)
             dot_filter(dots, areas)
-            print('Dot coordinates:', dots[0], areas[0])
+            print('Dot coordinates:', dots, areas)
+
+            x1 = max(int(dot_init[0]) - size, 0)
+            x2 = min(int(dot_init[0]) + size, width)
+            y1 = max(int(dot_init[1]) - size, 0)
+            y2 = min(int(dot_init[1]) + size, height)
+
+            # 将指定区域的值设置为255（白色）
+            masekd_region[y1:y2, x1:x2] = 255
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):
