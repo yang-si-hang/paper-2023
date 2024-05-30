@@ -94,7 +94,7 @@ def find_element(tri, dot_pos):
 def main():
     obj_shape = [0.1, 0.1]
     obj_seed_size = 0.01
-    learning_rate = 1.0
+    learning_rate = 1.e1
 
     camera_data = np.load('data/camera_param.npz')
     trans_soft = camera_data['matrix1']
@@ -188,35 +188,42 @@ def main():
             self.update_vel_pos()
 
 
+        def actuate_action(self, contact_speed):
+            self.GRASP_VEL[0] = contact_speed
+
+
         def compute_gradient(self):
             error, loss_tmp = self.construct_L_mrker()
             self.loss = loss_tmp
             self.diff_pd(10)
             self.compute_grad_y()
 
-    # MyRob = URROb(500)
+    MyRob = URROb(500)
 
     soft_obj = MyObject(obj_shape, obj_seed_size, [10])
-
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    soft_obj.substep(1)
-    soft_obj.compute_gradient()
+    for i in range(50):
+        soft_obj.substep(1)
+        soft_obj.compute_gradient()
 
-    # np.savetxt('dL.txt', soft_obj.dL.to_numpy())
-    # np.savetxt('grad_y.txt', soft_obj.grad_y.to_numpy())
+        # np.savetxt('dL.txt', soft_obj.dL.to_numpy())
+        # np.savetxt('grad_y.txt', soft_obj.grad_y.to_numpy())
 
-    print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
-    end_speed_np = learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
-    end_speed = end_speed_np.tolist()
-    print('The end speed:', end_speed)
+        print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
+        end_speed_np = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
+        end_speed = end_speed_np.tolist()
+        print('The end speed:', end_speed)
 
+        soft_obj.actuate_action(end_speed_np)
 
-    """机器人控制部分"""
-    # MyRob.move_speedl(end_speed)            # 设置机械臂末端速度
+        # 机器人控制
+        MyRob.move_speedl([-end_speed[0], end_speed[1], 0, 0, 0, 0])            # 设置机械臂末端速度
+        MyRob.get_pose()
+    MyRob.move_speedl([0, 0, 0, 0, 0, 0])
 
 
 
