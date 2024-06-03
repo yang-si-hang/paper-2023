@@ -17,6 +17,8 @@ lower_red_2 = np.array([156, 43, 46])
 upper_red_2 = np.array([180, 255, 255])
 red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
+image_width, image_height = 1280, 720
+
 
 def pixel_to_camera_coordinates(pixel, K_inv):
     """
@@ -91,6 +93,27 @@ def find_element(tri, dot_pos):
         return None
 
 
+def dot_detect_in_action(zed_id, image_init, dots):
+    """
+    Detect the dot in robot action.
+    """
+    masked_region = np.zeros((image_height, image_width), dtype=np.uint8)
+    size = int(50)
+    x1 = max(int(dots[0]) - size, 0)
+    x2 = min(int(dots[0]) + size, image_width)
+    y1 = max(int(dots[1]) - size, 0)
+    y2 = min(int(dots[1]) + size, image_height)
+
+    # 将指定区域的值设置为255（白色）
+    masked_region[y1:y2, x1:x2] = 255
+
+    color_image_bgra = get_image(zed_id, image_init)
+    edges = image_process(color_image_bgra, red_range, masked_region)
+    dot, area, ellipse = ellipse_fitting(edges)
+
+    return dot
+
+
 def main():
     obj_shape = [0.1, 0.1]
     obj_seed_size = 0.01
@@ -102,9 +125,8 @@ def main():
 
     camera_id, image_init, window_name = init_camera()
     # 运行一次，获得标记点的初始位置
-    color_image_bgra = get_image(camera_id, image_init)
-    dots, areas = get_dot(color_image_bgra, red_range, window_name)
-    dot_pos_init = dot_in_soft(dots, trans_soft, intrinsic)
+    dot_init = init_region_range(camera_id, image_init, red_range)
+    dot_pos_init = dot_in_soft(dot_init, trans_soft, intrinsic)
     print("The initial position of the dot in soft object: ", dot_pos_init)
 
     class MyObject(SoftObject):
@@ -138,7 +160,6 @@ def main():
         def construct_L_mrker(self):
             """
             Construct the L with marker that doesn't position on the node.
-            :return:
             """
             dim = self.dim
             barycentric = self.barycentric
@@ -147,8 +168,23 @@ def main():
             error = current_pos - desired_pos
             L = error.norm() ** 2
             for idx, ele_idx in enumerate(self.marker_element):
-                self.dL[ele_idx * 2] = 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
-                self.dL[ele_idx * 2 + 1] = 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
+                self.dL[ele_idx * dim] = 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
+                self.dL[ele_idx * dim + 1] = 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
+
+            return error, L
+
+
+        def construct_L_camera(self, dot_pos_soft):
+            """
+            Construct the L with camera image detect.
+            """
+            dim = self.dim
+            barycentric = self.barycentric
+            error = dot_pos_soft - self.dot_pos_desired[0]
+            L = error.norm() ** 2
+            for idx, ele_idx in enumerate(self.marker_element):
+                self.dL[ele_idx * dim] = 2 * error[0] * barycentric[idx]
+                self.dL[ele_idx * dim + 1] = 2 * error[1] * barycentric[idx]
 
             return error, L
 
@@ -192,11 +228,13 @@ def main():
             self.GRASP_VEL[0] = contact_speed
 
 
-        def compute_gradient(self):
-            error, loss_tmp = self.construct_L_mrker()
+        def compute_gradient(self, dot_soft):
+            error, loss_tmp = self.construct_L_camera(dot_soft)
             self.loss = loss_tmp
             self.diff_pd(10)
             self.compute_grad_y()
+
+            return loss_tmp
 
     MyRob = URROb(500)
 
@@ -207,23 +245,30 @@ def main():
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
     for i in range(50):
+        dot = dot_detect_in_action(camera_id, image_init, dot_init)
+        dot_pos = dot_in_soft(dot_init, trans_soft, intrinsic)
+
         soft_obj.substep(1)
-        soft_obj.compute_gradient()
+        loss_tmp = soft_obj.compute_gradient(dot_pos)
 
         # np.savetxt('dL.txt', soft_obj.dL.to_numpy())
         # np.savetxt('grad_y.txt', soft_obj.grad_y.to_numpy())
 
-        print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
+        # print('The gradient of the action:', soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy())
         end_speed_np = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
         end_speed = end_speed_np.tolist()
+        print('Loss:', loss_tmp)
         print('The end speed:', end_speed)
 
-        soft_obj.actuate_action(end_speed_np)
 
         # 机器人控制
         MyRob.move_speedl([-end_speed[0], end_speed[1], 0, 0, 0, 0])            # 设置机械臂末端速度
-        MyRob.get_pose()
-    MyRob.move_speedl([0, 0, 0, 0, 0, 0])
+        last_pose = MyRob.get_pose()
+        soft_obj.actuate_action(end_speed_np)
+        pose_end = MyRob.get_pose()
+
+    MyRob.speed_stop()
+    MyRob.exit_script()
 
 
 

@@ -206,7 +206,7 @@ def main():
     dot_init = init_region_range(zed_id, image_init, red_range)
     color_image_bgra = get_image(zed_id, image_init)
     height, width = color_image_bgra.shape[:2]
-    masekd_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
+    masked_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
 
     size = int(50)
     x1 = max(int(dot_init[0]) - size, 0)
@@ -215,15 +215,15 @@ def main():
     y2 = min(int(dot_init[1]) + size, height)
 
     # 将指定区域的值设置为255（白色）
-    masekd_region[y1:y2, x1:x2] = 255
+    masked_region[y1:y2, x1:x2] = 255
 
     try:
         while True:  # 按Q键退出
             color_image_bgra = get_image(zed_id, image_init)
-            edges = image_process(color_image_bgra, red_range, masekd_region)
+            edges = image_process(color_image_bgra, red_range, masked_region)
             dots, areas, ellipse = ellipse_fitting(edges)
             image_show(color_image_bgra, ellipse, window_name)
-            dot_filter(dots, areas)
+            # dot_filter(dots, areas)
             print('Dot coordinates:', dots, areas)
 
             x1 = max(int(dot_init[0]) - size, 0)
@@ -232,7 +232,7 @@ def main():
             y2 = min(int(dot_init[1]) + size, height)
 
             # 将指定区域的值设置为255（白色）
-            masekd_region[y1:y2, x1:x2] = 255
+            masked_region[y1:y2, x1:x2] = 255
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):

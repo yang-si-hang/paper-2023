@@ -1,6 +1,7 @@
 """
 Give action to the robot
 """
+import time
 
 import numpy as np
 import rtde_control
@@ -19,12 +20,15 @@ class URROb:
 
     def move_speedj(self, v, a=0.5, dt=1./500):
         t_start = self.rtde_c.initPeriod()
-        self.rtde_c.speedL(v, a, dt)
+        self.rtde_c.speedJ(v, a, dt)
         self.rtde_c.waitPeriod(t_start)
         return
     
 
-    def move_speedl(self, v, a=0.5, dt=1./500):
+    def move_speedl(self, v, a=1., dt=1./500):
+        """
+        机器人末端速度不能稳定在给定速度
+        """
         t_start = self.rtde_c.initPeriod()
         self.rtde_c.speedL(v, a, dt)
         self.rtde_c.waitPeriod(t_start)
@@ -65,6 +69,7 @@ class URROb:
     def get_joint(self):
         actual_q = self.rtde_r.getActualQ()
         print('The joint position is:', actual_q)
+        return np.array(actual_q)
 
 
     def get_pose(self):
@@ -77,7 +82,20 @@ class URROb:
         self.rtde_c.stopScript()
 
 
+    def speed_stop(self):
+        self.rtde_c.speedStop()
+
+
 if __name__ == '__main__':
     freq = 500
     MyUR = URROb(freq)
-    pose_init = MyUR.get_pose()
+    print(MyUR.rtde_r.getTimestamp())
+    pose_init = MyUR.get_joint()
+    MyUR.move_speedj([0, 0, 0, 0, 0, 0.01], dt=0.002)
+    time.sleep(1.)
+    print(MyUR.rtde_r.getTimestamp())
+    pose_end = MyUR.get_joint()
+    print('The pose difference:', pose_end - pose_init)
+    MyUR.rtde_c.speedStop(0.5)
+    print(MyUR.get_pose())
+    MyUR.exit_script()
