@@ -3,7 +3,6 @@ This code for detecting black dots on red soft object.
 Filting red component --> Canny edge detection --> Find contours.
 """
 
-
 import time
 import cv2
 import numpy as np
@@ -11,13 +10,14 @@ import pyzed.sl as sl
 from scipy.spatial.distance import mahalanobis
 from scipy.stats import chi2
 
+
 def init_camera():
     # 创建一个相机对象
     zed = sl.Camera()
 
     # 设置相机配置
     init_params = sl.InitParameters()
-    init_params.camera_resolution = sl.RESOLUTION.HD720  # 设置相机分辨率为HD1080
+    init_params.camera_resolution = sl.RESOLUTION.HD720  # 设置相机分辨率为HD720
     init_params.camera_fps = 30  # 设置相机的帧率为30 fps
 
     # 打开相机
@@ -96,6 +96,19 @@ def cal_center(contour):
         return None
 
 
+def get_mask_region(init_pos, masked_region, size:int=50):
+    height, width = masked_region.shape
+
+    x1 = max(int(init_pos[0]) - size, 0)
+    x2 = min(int(init_pos[0]) + size, width)
+    y1 = max(int(init_pos[1]) - size, 0)
+    y2 = min(int(init_pos[1]) + size, height)
+
+    # 将指定区域的值设置为255（白色）
+    masked_region[y1:y2, x1:x2] = 255
+    return masked_region
+
+
 # @profile
 def image_process(image_bgra, color_range, masekd_region):
     # Convert color image to OpenCV format
@@ -128,7 +141,7 @@ def image_process(image_bgra, color_range, masekd_region):
 
     # Convert the image to grayscale
     gray = cv2.cvtColor(masked_image, cv2.COLOR_RGB2GRAY)
-    cv2.imwrite('gray.png', gray)
+    # cv2.imwrite('gray.png', gray)
 
     blurred_image = cv2.GaussianBlur(gray, (5, 5), 0)           # 应用高斯模糊，减少图像中的噪声
 
@@ -140,7 +153,7 @@ def image_process(image_bgra, color_range, masekd_region):
     kernel = np.ones((7, 7), np.uint8)
     closed_mask_reduced = cv2.erode(combined_mask, kernel, iterations=1)
     edges = cv2.bitwise_and(edges, closed_mask_reduced)
-    cv2.imwrite('edges.png', edges)
+    # cv2.imwrite('edges.png', edges)
 
     return edges
 
@@ -181,7 +194,7 @@ def image_show(image_bgr, ellipse, window_name='ZED Camera Image'):
     # 绘制拟合的椭圆
     cv2.ellipse(image_bgr, ellipse, (0, 255, 0), 1)
     cv2.imshow(window_name, image_bgr)
-    cv2.imwrite('color_image_bgr.png', image_bgr)
+    # cv2.imwrite('color_image_bgr.png', image_bgr)
 
 
 def dot_filter(dots, area):
@@ -204,18 +217,21 @@ def main():
 
     zed_id, image_init, window_name = init_camera()
     dot_init = init_region_range(zed_id, image_init, red_range)
+    print(f'Init position of dot: {dot_init}')
     color_image_bgra = get_image(zed_id, image_init)
     height, width = color_image_bgra.shape[:2]
     masked_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
 
-    size = int(50)
-    x1 = max(int(dot_init[0]) - size, 0)
-    x2 = min(int(dot_init[0]) + size, width)
-    y1 = max(int(dot_init[1]) - size, 0)
-    y2 = min(int(dot_init[1]) + size, height)
+    masked_region = get_mask_region(dot_init, masked_region, 50)
 
-    # 将指定区域的值设置为255（白色）
-    masked_region[y1:y2, x1:x2] = 255
+    # size = int(50)
+    # x1 = max(int(dot_init[0]) - size, 0)
+    # x2 = min(int(dot_init[0]) + size, width)
+    # y1 = max(int(dot_init[1]) - size, 0)
+    # y2 = min(int(dot_init[1]) + size, height)
+    #
+    # # 将指定区域的值设置为255（白色）
+    # masked_region[y1:y2, x1:x2] = 255
 
     try:
         while True:  # 按Q键退出
@@ -226,13 +242,7 @@ def main():
             # dot_filter(dots, areas)
             print('Dot coordinates:', dots, areas)
 
-            x1 = max(int(dot_init[0]) - size, 0)
-            x2 = min(int(dot_init[0]) + size, width)
-            y1 = max(int(dot_init[1]) - size, 0)
-            y2 = min(int(dot_init[1]) + size, height)
-
-            # 将指定区域的值设置为255（白色）
-            masked_region[y1:y2, x1:x2] = 255
+            masked_region = get_mask_region(dots, masked_region, 50)
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):

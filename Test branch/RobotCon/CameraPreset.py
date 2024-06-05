@@ -4,7 +4,6 @@
 
 import numpy as np
 from CameraChess import get_camera_intrinsic, get_border
-from DotsDetectCanny import init_camera, get_dot
 
 
 def init_param():

@@ -10,13 +10,13 @@ import copy
 
 
 class URROb:
-    def __init__(self, control_frequecy, ur_ip='192.168.253.10'):
+    def __init__(self, control_frequency, ur_ip='192.168.253.10'):
         self.UR_IP = ur_ip
-        self.rtde_frequecy = control_frequecy
+        self.rtde_frequency = control_frequency
         self.record_variable = []
 
-        self.rtde_c = rtde_control.RTDEControlInterface(self.UR_IP, self.rtde_frequecy)
-        self.rtde_r = rtde_receive.RTDEReceiveInterface(self.UR_IP, self.rtde_frequecy)
+        self.rtde_c = rtde_control.RTDEControlInterface(self.UR_IP, self.rtde_frequency)
+        self.rtde_r = rtde_receive.RTDEReceiveInterface(self.UR_IP, self.rtde_frequency)
 
 
     def move_speedj(self, v, a=5., dt=1./500):
@@ -37,7 +37,7 @@ class URROb:
 
 
     def move_add_servoj(self, joint_add):
-        dt = 1./self.rtde_frequecy
+        dt = 1./self.rtde_frequency
         pose_start = self.rtde_r.getTargetTCPPose()
         t_start = self.rtde_c.initPeriod()
         pose_end = copy.deepcopy(pose_start)
@@ -50,7 +50,7 @@ class URROb:
 
 
     def move_add_servol(self, pose_add):
-        dt = 1./self.rtde_frequecy
+        dt = 1./self.rtde_frequency
         pose_start = self.rtde_r.getTargetTCPPose()
         t_start = self.rtde_c.initPeriod()
         pose_end = copy.deepcopy(pose_start)
@@ -66,12 +66,12 @@ class URROb:
         self.rtde_c.moveJ(joint_end, 0.5, 0.5, False)
 
 
-    def move_add_movel(self, pose_add):
+    def move_add_movel(self, pose_add, a=0.5, v=0.5):
         pose_start = self.rtde_r.getActualTCPPose()
         pose_end = copy.deepcopy(pose_start)
         pose_end = [pose_end[i] + pose_add[i] for i in range(6)]
         # True是非阻塞，False是阻塞
-        self.rtde_c.moveL(pose_end, 0.5, 0.5, False)
+        self.rtde_c.moveL(pose_end, a, v, False)
 
 
     def move_add_movej_ik(self, pose_add):
@@ -115,9 +115,20 @@ class URROb:
         self.rtde_r.startFileRecording(output_file, variable)
 
 
-    def speed_stop(self):
+    def stop_record_data(self):
+        self.rtde_r.stopFileRecording()
+
+
+    def stop_speed(self):
         self.rtde_c.speedStop()
 
+
+    def stop_movel(self):
+        self.rtde_c.stopL()
+
+
+    def stop_movej(self):
+        self.rtde_c.stopJ()
 
     def exit_script(self):
         self.rtde_c.stopScript()
@@ -150,19 +161,20 @@ if __name__ == '__main__':
 
     freq = 500
     MyUR = URROb(freq)
-    MyUR.record_variable = ['timestamp', 'target_q', 'actual_q', 'target_qd', 'actual_qd', 'target_qdd']
+    MyUR.record_variable = ['timestamp', 'target_TCP_pose', 'actual_TCP_pose', 'target_TCP_speed', 'actual_TCP_speed']
 
     MyUR.start_record_data()
-    pose_init = MyUR.get_joint()
-    MyUR.move_add_movej([0, 0, 0., 0, 0., -0.01])
-    pose_middle = MyUR.get_joint()
-    print('The pose difference:', pose_middle - pose_init)
+    for i in range(50):
+        pose_init = MyUR.get_pose()
+        MyUR.move_add_movel([0, 0, 0., 0, 0., 0.])
+        pose_middle = MyUR.get_pose()
+        print('The pose difference:', pose_middle - pose_init)
 
-    time.sleep(1.)
+        time.sleep(1.)
 
-    MyUR.move_add_movej([0, 0, 0., 0, 0., 0.01])
-    pose_end = MyUR.get_joint()
-    print('The pose difference:', pose_end - pose_middle)
+    # MyUR.move_add_movej([0, 0, 0., 0, 0., 0.01])
+    # pose_end = MyUR.get_joint()
+    # print('The pose difference:', pose_end - pose_middle)
 
     MyUR.rtde_c.stopL()
     MyUR.rtde_r.stopFileRecording()
