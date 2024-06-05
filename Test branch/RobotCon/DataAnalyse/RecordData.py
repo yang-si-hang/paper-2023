@@ -73,8 +73,13 @@ def main(args):
 
     except KeyboardInterrupt:
         rtde_r.stopFileRecording()
-        print("\nData recording stopped.")
+        print(f"\nCollect {i} samples. Data recording stopped.")
+
+    # finally:
+    #     rtde_r.stopFileRecording()
+    #     print(f"\nCollect {i} samples. Data recording stopped.")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    # main(sys.argv[1:])
+    main(None)

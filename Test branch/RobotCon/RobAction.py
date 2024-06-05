@@ -1,8 +1,8 @@
 """
 Give action to the robot
 """
-import time
 
+import time
 import numpy as np
 import rtde_control
 import rtde_receive
@@ -10,15 +10,16 @@ import copy
 
 
 class URROb:
-    def __init__(self, control_frequecy):
-        self.UR_IP = '192.168.253.10'
+    def __init__(self, control_frequecy, ur_ip='192.168.253.10'):
+        self.UR_IP = ur_ip
         self.rtde_frequecy = control_frequecy
+        self.record_variable = []
 
         self.rtde_c = rtde_control.RTDEControlInterface(self.UR_IP, self.rtde_frequecy)
         self.rtde_r = rtde_receive.RTDEReceiveInterface(self.UR_IP, self.rtde_frequecy)
 
 
-    def move_speedj(self, v, a=0.5, dt=1./500):
+    def move_speedj(self, v, a=5., dt=1./500):
         t_start = self.rtde_c.initPeriod()
         self.rtde_c.speedJ(v, a, dt)
         self.rtde_c.waitPeriod(t_start)
@@ -58,44 +59,112 @@ class URROb:
         self.rtde_c.waitPeriod(t_start)
 
 
+    def move_add_movej(self, joint_add):
+        joint_start = self.rtde_r.getActualQ()
+        joint_end = copy.deepcopy(joint_start)
+        joint_end = [joint_start[i] + joint_add[i] for i in range(6)]
+        self.rtde_c.moveJ(joint_end, 0.5, 0.5, False)
+
+
     def move_add_movel(self, pose_add):
-        pose_start = self.rtde_r.getTargetTCPPose()
+        pose_start = self.rtde_r.getActualTCPPose()
         pose_end = copy.deepcopy(pose_start)
         pose_end = [pose_end[i] + pose_add[i] for i in range(6)]
         # True是非阻塞，False是阻塞
         self.rtde_c.moveL(pose_end, 0.5, 0.5, False)
 
 
-    def get_joint(self):
+    def move_add_movej_ik(self, pose_add):
+        """
+        Linear in joint space, move to the target TCP pose
+        """
+        pose_start = self.rtde_r.getActualTCPPose()
+        pose_end = copy.deepcopy(pose_start)
+        pose_end = [pose_end[i] + pose_add[i] for i in range(6)]
+        self.rtde_c.moveJ_IK(pose_end, 0.5, 0.5, False)
+
+
+    def move_add_movel_fk(self, joint_add):
+        """
+        Linear in tool space, move to the target joint position
+        """
+        joint_start = self.rtde_r.getActualQ()
+        joint_end = copy.deepcopy(joint_start)
+        joint_end = [joint_start[i] + joint_add[i] for i in range(6)]
+        self.rtde_c.moveL_FK(joint_end, 0.5, 0.5, False)
+
+
+    def get_joint(self, print_flag: bool = True):
         actual_q = self.rtde_r.getActualQ()
-        print('The joint position is:', actual_q)
+        if print_flag:
+            time_stamp = self.rtde_r.getTimestamp()
+            print(f'Time stamp: {time_stamp}. The joint position is: {actual_q}')
         return np.array(actual_q)
 
 
-    def get_pose(self):
+    def get_pose(self, print_flag: bool = True):
         actual_pose = self.rtde_r.getTargetTCPPose()
-        print('The TCP Pose is:', actual_pose)
+        if print_flag:
+            time_stamp = self.rtde_r.getTimestamp()
+            print(f'Time stamp: {time_stamp}. The TCP Pose is: {actual_pose}')
         return np.array(actual_pose)
 
 
-    def exit_script(self):
-        self.rtde_c.stopScript()
+    def start_record_data(self, output_file='robot_data.csv'):
+        variable = self.record_variable
+        self.rtde_r.startFileRecording(output_file, variable)
 
 
     def speed_stop(self):
         self.rtde_c.speedStop()
 
 
+    def exit_script(self):
+        self.rtde_c.stopScript()
+
+
 if __name__ == '__main__':
+    """
     freq = 500
     MyUR = URROb(freq)
-    print(MyUR.rtde_r.getTimestamp())
+    MyUR.record_variable = ['timestamp', 'target_q', 'actual_q', 'target_qd', 'actual_qd', 'target_qdd']
+    # MyUR.record_variable = ['timestamp', 'actual_TCP_pose', 'target_TCP_speed', 'actual_TCP_speed']
+    MyUR.start_record_data()
     pose_init = MyUR.get_joint()
-    MyUR.move_speedj([0, 0, 0, 0, 0, 0.01], dt=0.002)
-    time.sleep(1.)
-    print(MyUR.rtde_r.getTimestamp())
+    # for i in range(500):
+    MyUR.move_speedj([0, 0, 0., 0, 0., 0.0], 2.)
+    time.sleep(0.5)
+    pose_middle = MyUR.get_joint()
+    print('The pose difference:', pose_middle - pose_init)
+
+    MyUR.move_speedj([0, 0, 0., 0, 0., -0.01], 2., 0.9)
+    time.sleep(.5)
+
     pose_end = MyUR.get_joint()
-    print('The pose difference:', pose_end - pose_init)
-    MyUR.rtde_c.speedStop(0.5)
-    print(MyUR.get_pose())
+    print('The pose difference:', pose_end - pose_middle)
+    MyUR.rtde_c.speedStop(5.)
+    MyUR.rtde_r.stopFileRecording()
+
+    MyUR.exit_script()
+    """
+
+    freq = 500
+    MyUR = URROb(freq)
+    MyUR.record_variable = ['timestamp', 'target_q', 'actual_q', 'target_qd', 'actual_qd', 'target_qdd']
+
+    MyUR.start_record_data()
+    pose_init = MyUR.get_joint()
+    MyUR.move_add_movej([0, 0, 0., 0, 0., -0.01])
+    pose_middle = MyUR.get_joint()
+    print('The pose difference:', pose_middle - pose_init)
+
+    time.sleep(1.)
+
+    MyUR.move_add_movej([0, 0, 0., 0, 0., 0.01])
+    pose_end = MyUR.get_joint()
+    print('The pose difference:', pose_end - pose_middle)
+
+    MyUR.rtde_c.stopL()
+    MyUR.rtde_r.stopFileRecording()
+
     MyUR.exit_script()
