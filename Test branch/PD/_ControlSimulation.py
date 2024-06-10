@@ -551,7 +551,7 @@ class SoftObject:
         np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
         np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
         np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
-        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
+        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')

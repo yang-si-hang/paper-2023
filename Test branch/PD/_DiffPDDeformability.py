@@ -1,6 +1,6 @@
 """
 Apply DiffPD in simulation.
-With leftside and downside positional constraint.
+With leftside positional constraint.
 This file is used to generate figures, which explanation of (\partial x/ \partial y) in paper.
 """
 
@@ -16,28 +16,28 @@ from scipy.sparse.linalg import factorized
 
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size):
+    def __init__(self, shape, seed_size, contact_list=[]):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145e3
         self.E = 5.e5
         self.nu = 0.4
+        self.grasp_particle_list = contact_list
         self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
-        self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
+        self.GRASP_VEL[0] = ti.Vector([0., 0.]) / 5.
         self.area_sum = ti.field(dtype=ti.f64, shape=())
-        self.positional_weight = 1.e15
+        self.positional_weight = 1.e10
         self.positional_mass = 0.
-        self.grasp_mass = 0.
-        self.marker_mass = 0.
+        self.grasp_mass = 1.e5
         self.solve_iteration = 10
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
+        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
 
         self.PARTICLE_NUM = node_np.shape[0]
@@ -83,16 +83,16 @@ class SoftObject:
         self.dL = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
         self.displace = ti.field(ti.f64, shape=2*self.PARTICLE_NUM)
+        self.grasp_dx_dy = ti.Vector.field(2, dtype=ti.f64, shape=2*self.PARTICLE_NUM)
 
         self.dL.fill(0.)
         self.z.fill(1.)
 
+        self.fix_particle_list = self.fix_particle_No()
+
         self.construct_B()
         self.construct_volume()
-        self.construct_mass(self.area_sum[None])
-
-        self.fix_particle_list = self.fix_particle_No()
-        self.grasp_particle_list, _ = self.grasp_particle_No()
+        self.construct_mass(self.area_sum[None]) 
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
@@ -177,6 +177,9 @@ class SoftObject:
         mass_tmp = self.rho * area / self.PARTICLE_NUM
         self.node_mass.fill(mass_tmp)
 
+        for i in ti.static(self.grasp_particle_list):
+            self.node_mass[i] = self.grasp_mass
+
 
     @ti.kernel
     def precomputation(self):
@@ -260,12 +263,6 @@ class SoftObject:
             q_i_y_idx = i * dim + 1
             self.lhs[q_i_x_idx, q_i_x_idx] += self.positional_mass
             self.lhs[q_i_y_idx, q_i_y_idx] += self.positional_mass
-
-        for i in ti.static(self.grasp_particle_list):
-            q_i_x_idx = i * 2
-            q_i_y_idx = i * 2 + 1
-            self.lhs[q_i_x_idx, q_i_x_idx] += self.grasp_mass
-            self.lhs[q_i_y_idx, q_i_y_idx] += self.grasp_mass
 
 
     @ti.kernel
@@ -371,13 +368,6 @@ class SoftObject:
             self.rhs[q_i_x_idx] += self.positional_mass * pos_init[0]# / self.dt**2
             self.rhs[q_i_y_idx] += self.positional_mass * pos_init[1]# / self.dt**2
 
-        for i in ti.static(self.grasp_particle_list):
-            pos_new_i = self.node_pos_new[i]
-            q_i_x_idx = i * dim
-            q_i_y_idx = i * dim + 1
-            self.rhs[q_i_x_idx] += (pos_new_i[0] * self.grasp_mass)
-            self.rhs[q_i_y_idx] += (pos_new_i[1] * self.grasp_mass)
-
 
     @ti.kernel
     def warm_up(self):
@@ -427,7 +417,7 @@ class SoftObject:
                 x_temp = self.node_init_pos[idx].x
                 z_temp = self.node_init_pos[idx].y  # 2D dimension
                 # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0. + EPS) or (z_temp > W/2 - EPS)
+                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
                 fix_flag[idx] = fix_flag_temp
 
         cal_fix_constraint(L, W, seed_size)
@@ -438,40 +428,6 @@ class SoftObject:
         fix_particle_list = list(fix_particle_set)
 
         return fix_particle_list
-
-
-    def grasp_particle_No(self):
-        """
-        Find the particle No. & element No. of grasp constraint
-        """
-        grasp_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-        L = self.shape[0]
-        W = self.shape[1]
-        seed_size = self.seed_size
-
-        @ti.kernel
-        def cal_grasp_constraint(L: float, W: float, seed_size: float):
-            EPS = seed_size / 3
-            for idx in range(self.PARTICLE_NUM):
-                x_temp = self.node_init_pos[idx].x
-                z_temp = self.node_init_pos[idx].y
-                grasp_flag_temp = (x_temp > L - EPS) and (z_temp > W / 2 - EPS)
-                grasp_flag[idx] = grasp_flag_temp
-
-        cal_grasp_constraint(L, W, seed_size)
-        grasp_particle_set = set()
-        for i in range(self.PARTICLE_NUM):
-            if grasp_flag[i]:
-                grasp_particle_set.add(i)
-        grasp_particle_list = list(grasp_particle_set)
-        grasp_idx = grasp_particle_list[0]
-        grasp_ele_list = []
-        for i in range(self.ELEMENT_NUM):
-            ele_temp = self.element[i].to_numpy()
-            if grasp_idx in ele_temp:
-                grasp_ele_list.append(i)
-
-        return grasp_particle_list, grasp_ele_list
 
 
     @ti.kernel
@@ -533,6 +489,7 @@ class SoftObject:
         """
         Store the data of DiffPD
         """
+        grasp_idx = self.grasp_particle_list[0]
         self.partial_p()
         mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
         mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
@@ -546,7 +503,8 @@ class SoftObject:
         A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
-        np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
+        self.grasp_dx_dy.from_numpy(dx_dy_np[:, grasp_idx*2:grasp_idx*2+2])
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -654,29 +612,20 @@ class SoftObject:
             # print(f'itr: {itr}, {node_pos_new_np}')
 
         self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
+        # self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0)
 
         # self.construct_L()
         self.diff_data()
         # self.diff_pd(10)
 
 
-    @ti.kernel
-    def init_vel(self):
-        for i in range(self.PARTICLE_NUM):
-            if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
-                self.node_vel[i].x = 8.
-            else:
-                self.node_vel[i].x = 0.
-
-
-def main():
+def main(contact_idx_list):
     class MyObject(SoftObject):
-        def __init__(self, shape, seed_size):
-            super().__init__(shape, seed_size)
+        def __init__(self, shape, seed_size, contact_list=contact_idx_list):
+            super().__init__(shape, seed_size, contact_list)
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
-    soft_obj.preset()
+    # soft_obj.preset()
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
@@ -695,10 +644,9 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # soft_obj.GRASP_VEL = ti.Vector([0., 0.])
-
     for i in range(1):
         soft_obj.substep()
+        np.savetxt(f'dx_dy-contact_idx_{soft_obj.grasp_particle_list[0]}.csv', soft_obj.grasp_dx_dy.to_numpy(), fmt='%f', delimiter=',')
 
     # Following lines for test!
     # np.savetxt('z_final.csv', soft_obj.z.to_numpy(), fmt='%f', delimiter=',')
@@ -706,4 +654,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    params = [5, 76, 118]
+    for param in params:
+        print(f'Contact idx: {[param]}')
+        main([param])
