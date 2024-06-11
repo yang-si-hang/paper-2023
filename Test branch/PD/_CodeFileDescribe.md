@@ -13,4 +13,5 @@ The controller is based on the *grad function solver* or *DiffPD techonolgy*.
 ### ControlMultiPoints.py
 Minimize the loss with multi grasping points by DiffPD.
 
-### 
+### _PDManipulability.py
+Get the manipulability from various contact points to specific feature point.

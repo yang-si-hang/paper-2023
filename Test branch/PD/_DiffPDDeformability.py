@@ -20,7 +20,7 @@ class SoftObject:
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
-        self.rho = 1.145e3
+        self.rho = 1.145
         self.E = 5.e5
         self.nu = 0.4
         self.grasp_particle_list = contact_list
@@ -500,7 +500,7 @@ class SoftObject:
         # np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%f', delimiter=',')
         # np.savetxt('M_h2.csv', M_np, fmt='%f', delimiter=',')
         # np.savetxt('A_positional.csv', self.A_positional.to_numpy(), fmt='%f', delimiter=',')
-        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() + self.rhs_dA.to_numpy()
+        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         dx_dy_np = np.linalg.solve(A, B)
         # np.savetxt('dx_dy.csv', dx_dy_np, fmt='%f', delimiter=',')
@@ -655,6 +655,7 @@ def main(contact_idx_list):
 
 if __name__ == '__main__':
     params = [5, 76, 118]
+    # params = [1]
     for param in params:
         print(f'Contact idx: {[param]}')
         main([param])
