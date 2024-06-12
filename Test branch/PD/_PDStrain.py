@@ -53,6 +53,7 @@ class SoftObject:
         self.volume_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element.from_numpy(element_np.astype(np.int32))
 
+
         self.B = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.F = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.A = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM*2)
