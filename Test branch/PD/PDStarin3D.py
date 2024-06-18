@@ -91,10 +91,23 @@ class SoftObject:
         self.element = ti.Vector.field(4, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.strain_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.volume_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element.from_numpy(element_np.astype(np.int32))
         self.element_volume.from_numpy(volume_np.astype(np.float64))
 
-        self.B = ti.Matrix.field(3, 3, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.B = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # 单元的A矩阵
+        self.A = ti.Matrix.field(self.dim**2, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.Bp = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM*2)           # 此处的`2`应该指约束个数？
+
+        self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
+        self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
+        # 全局的A矩阵
+        self.SA_strain = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
+        self.SA_volume = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
+        self.A_poistional = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
+        self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
         self.fix_particle_list = []
 
@@ -135,14 +148,67 @@ class SoftObject:
         for i in range(self.ELEMENT_NUM):
             idx1, idx2, idx3, idx4 = self.element[i]
             a, b, c, d = self.node_init_pos[idx1], self.node_init_pos[idx2], self.node_init_pos[idx2], self.node_init_pos[idx2]
-            B_i_inv = ti.Matrix.cols([a - d, b - d, c - d])
+            B_i_inv = ti.Matrix.cols([b - a, c - a, d - a])
             self.B[i] = B_i_inv.inverse()
 
 
     @ti.kernel
     def construct_weight(self):
         for i in range(self.ELEMENT_NUM):
-            self.strain_weight[i] = self.mu * 2 * self.element_volume[i]
+            self.strain_weight[i] = self.mu * self.element_volume[i]
+            self.volume_weight[i] = self.lam * self.element_volume[i] / 2
+
+
+    @ti.kernel
+    def precomputation(self):
+        element_num = self.ELEMENT_NUM
+        dim = self.dim
+
+        for i in range(self.PARTICLE_NUM):
+            for d in ti.static(range(dim)):
+                self.lhs[i*dim + d, i*dim + d] = self.node_mass[i] / self.dt**2
+
+        for i in range(element_num):
+            B_i = self.B[i]
+            b11, b12, b13 = B_i[0]
+            b21, b22, b23 = B_i[1]
+            b31, b32, b33 = B_i[2]
+
+            # Strain and Volume straint has the same A matrix
+            for j in range(dim):
+                self.A[i][j*dim+0, 0*dim+j] = -b11-b21-b31
+                self.A[i][j*dim+0, 1*dim+j] = b11
+                self.A[i][j*dim+0, 2*dim+j] = b21
+                self.A[i][j*dim+0, 3*dim+j] = b31
+                self.A[i][j*dim+1, 0*dim+j] = -b12-b22-b32
+                self.A[i][j*dim+1, 1*dim+j] = b12
+                self.A[i][j*dim+1, 2*dim+j] = b22
+                self.A[i][j*dim+1, 3*dim+j] = b32
+                self.A[i][j*dim+2, 0*dim+j] = -b13-b23-b33
+                self.A[i][j*dim+2, 1*dim+j] = b13
+                self.A[i][j*dim+2, 2*dim+j] = b23
+                self.A[i][j*dim+2, 3*dim+j] = b33
+
+        for ele_idx in range(element_num):
+            idx1, idx2, idx3, idx4 = self.element[ele_idx]
+            idx1_x, idx1_y, idx1_z = idx1 * self.dim, idx1 * self.dim + 1, idx1 * self.dim + 2
+            idx2_x, idx2_y, idx2_z = idx2 * self.dim, idx2 * self.dim + 1, idx2 * self.dim + 2
+            idx3_x, idx3_y, idx3_z = idx3 * self.dim, idx3 * self.dim + 1, idx3 * self.dim + 2
+            idx4_x, idx4_y, idx4_z = idx4 * self.dim, idx4 * self.dim + 1, idx4 * self.dim + 2
+            q_idx_vec = ti.Vector([idx1_x, idx1_y, idx1_z, idx2_x, idx2_y, idx2_z, idx3_x, idx3_y, idx3_z, idx4_x, idx4_y, idx4_z])
+
+            strain_weight = self.strain_weight[ele_idx]
+            volume_weight = self.volume_weight[ele_idx]
+            A_i = self.A[ele_idx]
+            ATA = A_i.transpose() @ A_i
+            for A_row_idx, A_col_idx in ti.static(ti.ndrange(12, 12)):
+                lhs_row_idx = q_idx_vec[A_row_idx]
+                lhs_col_idx = q_idx_vec[A_col_idx]
+                self.lhs[lhs_row_idx, lhs_col_idx] += strain_weight * ATA[A_row_idx, A_col_idx]
+
+
+
+
 
 
 
