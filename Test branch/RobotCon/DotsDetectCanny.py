@@ -114,7 +114,7 @@ def image_process(image_bgra, color_range, masekd_region):
     # Convert color image to OpenCV format
     color_image_rgb = cv2.cvtColor(image_bgra, cv2.COLOR_BGRA2RGB)
     color_image_bgr = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2BGR)
-    # cv2.imwrite('color_image.png', color_image_bgr)
+    # cv2.imwrite('color_image_bgr.png', color_image_bgr)
 
     # Convert the image to the HSV color space (for red detection)
     hsv = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2HSV)
@@ -153,7 +153,7 @@ def image_process(image_bgra, color_range, masekd_region):
     kernel = np.ones((7, 7), np.uint8)
     closed_mask_reduced = cv2.erode(combined_mask, kernel, iterations=1)
     edges = cv2.bitwise_and(edges, closed_mask_reduced)
-    # cv2.imwrite('edges.png', edges)
+    # cv2.imwrite('edges_erode.png', edges)
 
     return edges
 
@@ -162,22 +162,31 @@ def ellipse_fitting(edges):
     dot_coordinates = []
     areas = []
     filtered_contours = []
-    contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # CHAIN_APPROX_NONE 存储所有轮廓点，CHAIN_APPROX_SIMPLE 压缩水平、垂直和对角线段，只保留其端点
+    contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
     # 检查层级信息，层级信息存储在hierarchy[0]中，格式为[next, previous, first_child, parent]
     if hierarchy is not None:
         for idx, contour in enumerate(contours):
-            # 检查是否有父轮廓，parent index = hierarchy[0, idx, 3] 不为-1则为内轮廓
-            if hierarchy[0, idx, 3] == -1:
-                center_result = cal_center(contour)
-                if center_result is not None:
-                    (cX, cY), area = center_result
-                    dot_coordinates.append((cX, cY))
-                    areas.append(area)
-                    filtered_contours.append(contour)
+            # # 检查是否有父轮廓，parent index = hierarchy[0, idx, 3] 不为-1则为内轮廓
+            # if hierarchy[0, idx, 3] == -1:
+            center_result = cal_center(contour)
+            if center_result is not None:
+                (cX, cY), area = center_result
+                dot_coordinates.append((cX, cY))
+                areas.append(area)
+                filtered_contours.append(contour)
 
     # 找到area中最大元素的索引,使用该索引找到dot_coordinates中对应的元素
-    max_index = areas.index(max(areas))
+    if len(areas) == 0:                                 # 没有找到edge轮廓,canny边缘检测失败(光源掉了)
+        return None, None, None
+    ellipse_area = max(areas)
+    if ellipse_area > 50:                               # 找错轮廓,面积太大
+        return None, None, None
+    max_index = areas.index(ellipse_area)
+    if len(filtered_contours[max_index]) < 5:           # 椭圆拟合需要至少5个点
+        return None, None, None
+    # print(f'Processing! Contours: {len(filtered_contours[max_index])}, Filtered Contours: {filtered_contours}')
 
     # 拟合椭圆
     ellipse = cv2.fitEllipse(filtered_contours[max_index])
@@ -191,10 +200,65 @@ def ellipse_fitting(edges):
 
 
 def image_show(image_bgr, ellipse, window_name='ZED Camera Image'):
-    # 绘制拟合的椭圆
-    cv2.ellipse(image_bgr, ellipse, (0, 255, 0), 1)
-    cv2.imshow(window_name, image_bgr)
-    # cv2.imwrite('color_image_bgr.png', image_bgr)
+    if ellipse is None:
+        cv2.imshow(window_name, image_bgr)
+        return
+    else:
+        # 绘制拟合的椭圆
+        # cv2.ellipse(image_bgr, ellipse, (0, 255, 0), 1)
+        (x, y), _, _ = ellipse
+        cv2.circle(image_bgr, (int(x), int(y)), 5, (0, 255, 0), 1)
+        cv2.imshow(window_name, image_bgr)
+
+
+def kalman_filter_init():
+    kalman = cv2.KalmanFilter(4, 2)  # 状态空间为4维，测量空间为2维
+    kalman.measurementMatrix = np.array([[1, 0, 0, 0],
+                                         [0, 1, 0, 0]], np.float32)
+    kalman.transitionMatrix = np.array([[1, 0, 1, 0],
+                                        [0, 1, 0, 1],
+                                        [0, 0, 1, 0],
+                                        [0, 0, 0, 1]], np.float32)
+    kalman.processNoiseCov = np.array([[1, 0, 0, 0],
+                                       [0, 1, 0, 0],
+                                       [0, 0, 1, 0],
+                                       [0, 0, 0, 1]], np.float32) * 0.03
+    # 设置初始误差协方差矩阵
+    kalman.errorCovPre = np.eye(4, dtype=np.float32) * 1  # 根据实际情况调整
+
+    # 设置测量噪声协方差矩阵
+    kalman.measurementNoiseCov = np.array([[1, 0],
+                                           [0, 1]], np.float32) * 1  # 根据实际情况调整
+
+    return kalman
+
+
+def kalman_filter_process(kalman, detected_dot, position_threshold):
+    # 预测
+    prediction = kalman.predict()
+    predicted_x, predicted_y = prediction[0][0], prediction[1][0]
+    if detected_dot is not None:
+        detected_x, detected_y = detected_dot
+        position_deviation = np.abs(detected_x - predicted_x) + np.abs(detected_y - predicted_y)        # 计算位置偏差
+
+        # 判断是否为错误的检测点
+        if position_deviation > position_threshold:
+            # 如果偏差超过阈值，则认为检测点无效，使用预测值
+            measurement = None
+            pass
+        else:
+            # 更新测量
+            measurement = np.array([[np.float32(detected_dot[0])],
+                                    [np.float32(detected_dot[1])]])
+            kalman.correct(measurement)
+    else:
+        # 如果未检测到点，则使用预测值
+        measurement = None
+
+    # 预测
+    prediction = kalman.predict()
+    predicted_point = (prediction[0][0], prediction[1][0])
+    return predicted_point
 
 
 def dot_filter(dots, area):
@@ -215,34 +279,35 @@ def main():
     upper_red_2 = np.array([180, 255, 255])
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
+    kalman = kalman_filter_init()
+
     zed_id, image_init, window_name = init_camera()
     dot_init = init_region_range(zed_id, image_init, red_range)
     print(f'Init position of dot: {dot_init}')
     color_image_bgra = get_image(zed_id, image_init)
     height, width = color_image_bgra.shape[:2]
     masked_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
-
     masked_region = get_mask_region(dot_init, masked_region, 50)
-
-    # size = int(50)
-    # x1 = max(int(dot_init[0]) - size, 0)
-    # x2 = min(int(dot_init[0]) + size, width)
-    # y1 = max(int(dot_init[1]) - size, 0)
-    # y2 = min(int(dot_init[1]) + size, height)
-    #
-    # # 将指定区域的值设置为255（白色）
-    # masked_region[y1:y2, x1:x2] = 255
+    kalman.statePre = np.array([[dot_init[0]], [dot_init[1]], [0], [0]], np.float32)
+    kalman.statePost = np.array([[dot_init[0]], [dot_init[1]], [0], [0]], np.float32)
 
     try:
         while True:  # 按Q键退出
             color_image_bgra = get_image(zed_id, image_init)
             edges = image_process(color_image_bgra, red_range, masked_region)
-            dots, areas, ellipse = ellipse_fitting(edges)
-            image_show(color_image_bgra, ellipse, window_name)
-            # dot_filter(dots, areas)
-            print('Dot coordinates:', dots, areas)
+            dots, areas, ellipse = ellipse_fitting(edges)           # dots是元组，不可改变
 
-            masked_region = get_mask_region(dots, masked_region, 50)
+            filtered_dot_cell = kalman_filter_process(kalman, dots, 5)
+
+            # dot_filter(dots, areas)
+            if areas is None:
+                image_show(color_image_bgra, ellipse, window_name)
+                print('No dots detected in this step!')
+            else:
+                image_show(color_image_bgra, ellipse, window_name)
+                print(f'Dot coordinates:, [{filtered_dot_cell[0]:.2f}, {filtered_dot_cell[1]:.2f}], {areas:.2f}')
+
+            masked_region = get_mask_region(filtered_dot_cell, masked_region, 50)
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):

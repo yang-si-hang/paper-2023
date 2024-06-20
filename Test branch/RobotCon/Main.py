@@ -25,6 +25,8 @@ red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
 image_width, image_height = 1280, 720
 
+kalman = kalman_filter_init()
+
 
 def pixel_to_camera_coordinates(pixel, K_inv):
     """
@@ -130,7 +132,7 @@ def image_save(image, i, frame_name_list):
     return  frame_name_list
 
 
-def image_to_video(frame_name_list, video_filename:str='output_video.mp4'):
+def image_to_video(frame_name_list, video_filename:str='output_video1.mp4'):
     # 合成视频
     frame = cv2.imread(frame_name_list[0])
     height, width, layers = frame.shape
@@ -150,10 +152,10 @@ def dot_detect_in_actionloop(zed_id, masked_region, image_init):
     color_image_bgra = get_image(zed_id, image_init)
     edges = image_process(color_image_bgra, red_range, masked_region)
     dot, area, ellipse = ellipse_fitting(edges)
-    # if show_flag:
-    #     image_show(color_image_bgra, ellipse)
 
-    return dot, color_image_bgra, ellipse
+    filtered_dot_cell = kalman_filter_process(kalman, dot, 3)
+
+    return filtered_dot_cell, color_image_bgra, ellipse
 
 
 def main():
@@ -171,6 +173,9 @@ def main():
     dot_pos_init = dot_in_soft(dot_init, trans_soft, intrinsic)
     print("The initial position of the dot in soft object: ", dot_pos_init)
     masked_region = get_mask_region(dot_init, np.zeros((image_height, image_width), dtype=np.uint8), 50)
+    kalman.statePre = np.array([[dot_init[0]], [dot_init[1]], [0], [0]], np.float32)
+    kalman.statePost = np.array([[dot_init[0]], [dot_init[1]], [0], [0]], np.float32)
+
 
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, contact_idx):
@@ -183,7 +188,7 @@ def main():
             self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
             self.dot_pos[0] = dot_pos_init
             self.dot_pos_init[0] = dot_pos_init
-            self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.002, 0.])
+            self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.00, -0.003])
 
             self.marker_element_get()
 
@@ -282,7 +287,7 @@ def main():
 
     MyRob = URROb(500)
     MyRob.record_variable = ['timestamp', 'actual_TCP_pose', 'actual_TCP_speed']
-    MyRob.start_record_data('experiment_data2.csv')
+    MyRob.start_record_data('experiment_data4.csv')
 
     soft_obj = MyObject(obj_shape, obj_seed_size, [10])
     soft_obj.precomputation()
@@ -304,7 +309,10 @@ def main():
 
             # 显示图像
             cv2.circle(color_image, (int(dot_desired[0]), int(dot_desired[1])), 2, (255, 0, 0), -1)
-            cv2.ellipse(color_image, ellipse, (0, 255, 0), 1)
+            if ellipse is None:
+                cv2.addText(color_image, f'Not Correct Detection', (10, 20), 'Times New Roman', 1, (0, 0, 0))
+            else:
+                cv2.ellipse(color_image, ellipse, (0, 255, 0), 1)
             cv2.imshow(window_name, color_image)
 
             # 保存图像
@@ -354,7 +362,7 @@ def main():
         np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
 
         # 将保存的图像转换为视频
-        image_to_video(frame_name_list, 'output_video.mp4')
+        image_to_video(frame_name_list, 'DataAnalyse/output_video.mp4')
 
 
 if __name__ == '__main__':

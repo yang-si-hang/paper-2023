@@ -1,5 +1,6 @@
 """
 获得相机的初始参数,以及软体的坐标系
+棋盘格摆放的位置需要与软体坐标系的原点只有X方向上的偏移
 """
 
 import numpy as np
@@ -19,7 +20,7 @@ def init_param():
     # 将棋盘格坐标系转换到软体坐标系
     transformation_chess_soft = np.array([[1., 0., 0., -0.025],
                                           [0., 1., 0., 0.],
-                                          [0., 0., 1., 0.],
+                                          [0., 0., 1., 0.003],
                                           [0., 0., 0., 1.]])
 
     transformation_soft = transformation_matrix @ transformation_chess_soft
