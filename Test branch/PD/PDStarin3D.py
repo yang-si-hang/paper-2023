@@ -9,6 +9,7 @@ import taichi.math as tm
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 import numpy as np
 from scipy import sparse
+from GenMsh import generate_msh
 
 
 def cal_tet_volume(vertices):
@@ -81,34 +82,35 @@ def get_tetrahedron_edges(tet_indices):
 
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size):
+    def __init__(self, shape, seed_size, mesh_file):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.e1
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e4
+        self.solve_iteration = 10
         self.E, self.nu = 5.e2, 0.1
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
-        node_np, element_np, volume_np = self.load_msh('Mesh/liver.msh')
+        node_np, element_np, volume_np = self.load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
         np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
         np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
         np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
-        self.EDGE_NUM = edge_np.shape[0]
+        self.EDGE_NUM = self.edge_np.shape[0]
         self.ELEMENT_NUM = element_np.shape[0]
 
         # node_pos: 3D position of each node in time step
-        self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         # For local solver
-        self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_pos_new = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
 
@@ -147,14 +149,14 @@ class SoftObject:
     @staticmethod
     def load_msh(file_path):
         nodes_array, elements_array = read_msh_file(file_path)
+        elements_array = elements_array - 1
         # 打印节点和单元信息
         # print(f"节点信息：{nodes_array.shape[0]}")
         # print(f"单元信息：{elements_array.shape[0]}")
 
         volumes_list = []
         for ele in elements_array:
-            node_indices = ele - 1          # 转换为从0开始的索引
-            tetra_nodes = nodes_array[node_indices]
+            tetra_nodes = nodes_array[ele]
             volume_tmp = cal_tet_volume(tetra_nodes)
             volumes_list.append(volume_tmp)
 
@@ -190,7 +192,7 @@ class SoftObject:
         dim = self.dim
 
         for i in range(self.PARTICLE_NUM):
-            for d in ti.static(range(dim)):
+            for d in ti.static(range(self.dim)):
                 self.lhs[i*dim + d, i*dim + d] = self.node_mass[i] / self.dt**2
 
         for i in range(element_num):
@@ -282,7 +284,7 @@ class SoftObject:
                 if D_error < tol:
                     break
 
-            PP = ti.Matrix([[aa, 0, 0], [0, bb, 0], [0, 0, cc]])
+            PP = ti.Matrix([[D[0]+sig[0,0], 0, 0], [0, D[1]+sig[1,1], 0], [0, 0, D[2]+sig[2,2]]])
             self.Bp[ele_idx+self.ELEMENT_NUM] = U @ PP @ V.transpose()        # Volume contraint
 
 
@@ -291,11 +293,11 @@ class SoftObject:
         self.rhs.fill(0.)
         dim = self.dim
         for i in range(self.PARTICLE_NUM):
-            for d in ti.static(range(dim)):
+            for d in ti.static(range(self.dim)):
                 self.rhs[i*dim + d] = self.node_mass[i] / self.dt**2 * self.sn[i*dim + d]
             
-        for i in range(self.ELEMENT_NUM):
-            idx1, idx2, idx3, idx4 = self.element[i]
+        for ele_idx in range(self.ELEMENT_NUM):
+            idx1, idx2, idx3, idx4 = self.element[ele_idx]
             idx1_x, idx1_y, idx1_z = idx1 * self.dim, idx1 * self.dim + 1, idx1 * self.dim + 2
             idx2_x, idx2_y, idx2_z = idx2 * self.dim, idx2 * self.dim + 1, idx2 * self.dim + 2
             idx3_x, idx3_y, idx3_z = idx3 * self.dim, idx3 * self.dim + 1, idx3 * self.dim + 2
@@ -303,21 +305,22 @@ class SoftObject:
             q_idx_vec = ti.Vector([idx1_x, idx1_y, idx1_z, idx2_x, idx2_y, idx2_z,
                                    idx3_x, idx3_y, idx3_z, idx4_x, idx4_y, idx4_z])
 
-            A_i = self.A[i]
+            A_i = self.A[ele_idx]
             AT_Bp_all_i = ti.Vector.zero(ti.f64, self.dim*(self.dim+1))
             for t in range(2):
-                Bp_i = self.Bp[t*self.ELEMENT_NUM+i]
+                Bp_i = self.Bp[t*self.ELEMENT_NUM + ele_idx]
                 Bp_i_vec = ti.Vector([Bp_i[0,0], Bp_i[0,1], Bp_i[0,2], 
                                       Bp_i[1,0], Bp_i[1,1], Bp_i[1,2], 
                                       Bp_i[2,0], Bp_i[2,1], Bp_i[2,2]])
+                weight = 0.
                 if t == 0:
-                    weight = self.strain_weight[i]
+                    weight = self.strain_weight[ele_idx]
                 else:
-                    weight = self.volume_weight[i]
+                    weight = self.volume_weight[ele_idx]
                 AT_Bp_all_i += weight * A_i.transpose() @ Bp_i_vec
 
-            for i in range(self.dim*(self.dim+1)):
-                self.rhs[q_idx_vec[i]] += AT_Bp_all_i[i]
+            for j in range(self.dim*(self.dim+1)):
+                self.rhs[q_idx_vec[j]] += AT_Bp_all_i[j]
 
         for i in ti.static(self.fix_particle_list):
             weight = self.positional_weight
@@ -337,7 +340,7 @@ class SoftObject:
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
 
-    
+
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
         window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
@@ -395,6 +398,16 @@ class SoftObject:
         window.show()
 
     
+    def preset_gui(self, camera_pos:list, camera_target:list):
+        """
+        Define the camera position & target
+        """
+        # self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
+        self.window, self.camera, self.scene = self.gui_set(pos=camera_pos, target=camera_target)
+        self.canvas = self.window.get_canvas()
+        self.show_preset()
+
+    
     @ti.kernel
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
@@ -421,13 +434,23 @@ class SoftObject:
 
 
 def main():
+    cube_shape = [0.1, 0.02, 0.1]
+    generate_msh(cube_shape, 'Mesh/cube.msh')
     class MyObect(SoftObject):
-        def __init__(self, shape, seed_size):
-            super().__init__(shape, seed_size)
+        def __init__(self, shape, seed_size, file='Mesh/cube.msh'):
+            super().__init__(shape, seed_size, file)
 
+    soft_obj = MyObect(shape=cube_shape, seed_size=0.1/2)
+    soft_obj.preset_gui([0.2+0.2, 0.6, 0.], [0.2+0.2, 0., 0.])
 
-    soft_obj = MyObect(shape=[0.1, 0.1, 0.1], seed_size=0.1/2)
+    soft_obj.precomputation()
+    lhs_np = soft_obj.lhs.to_numpy()
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    soft_obj.init_vel()
 
+    for i in range(100):
+        soft_obj.substep(i)
 
 
 if __name__ == '__main__':
