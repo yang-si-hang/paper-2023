@@ -4,9 +4,10 @@ This file simulates deformation by PD method in 3D
 之前的文件都不同
 """
 
+import time
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
 import numpy as np
 from scipy import sparse
 from GenMsh import generate_msh
@@ -90,7 +91,7 @@ class SoftObject:
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e4
         self.solve_iteration = 10
-        self.E, self.nu = 5.e2, 0.1
+        self.E, self.nu = 5.e1, 0.1
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -135,11 +136,12 @@ class SoftObject:
         self.A_poistional = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
-        self.fix_particle_list = []
+        self.fix_particle_list = self.fix_particle_No()
+        self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
 
+        self.construct_mass()
         self.construct_B()
         self.construct_weight()
-        # self.construct_mass(self.volume_sum[None])
 
         # Print the information
         print('Particle number:', self.PARTICLE_NUM)
@@ -163,10 +165,48 @@ class SoftObject:
         return nodes_array, elements_array, np.array(volumes_list)
 
 
+    def fix_particle_No(self):
+        """
+        Find the particle No. of fix constraint
+        """
+        fix_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        L = self.shape[0]
+        H = self.shape[1]
+        W = self.shape[2]
+        seed_size = self.seed_size
+
+        @ti.kernel
+        def cal_fix_constraint(L: float, H:float, W: float, seed_size: float):
+            EPS = seed_size / 3
+            for idx in range(self.PARTICLE_NUM):
+                x_temp = self.node_init_pos[idx].x
+                y_temp = self.node_init_pos[idx].y
+                z_temp = self.node_init_pos[idx].z  # 3D dimension
+                # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
+                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
+                fix_flag[idx] = fix_flag_temp
+
+        cal_fix_constraint(L, H, W, seed_size)
+        fix_particles_set = set()
+        for i in range(self.PARTICLE_NUM):
+            if fix_flag[i]:
+                fix_particles_set.add(i)
+        fix_particles_list = list(fix_particles_set)
+
+        return fix_particles_list
+
+
     @ti.kernel
     def construct_mass(self):
-        mass_tmp = self.rho * self.volume_sum / self.PARTICLE_NUM
-        self.node_mass.fill(mass_tmp)
+        # mass_tmp = self.rho * self.volume_sum / self.PARTICLE_NUM
+        # self.node_mass.fill(mass_tmp)
+
+        for ele_idx in range(self.ELEMENT_NUM):
+            idx1, idx2, idx3, idx4 = self.element[ele_idx]
+            self.node_mass[idx1] += self.element_volume[ele_idx] * self.rho / 4
+            self.node_mass[idx2] += self.element_volume[ele_idx] * self.rho / 4
+            self.node_mass[idx3] += self.element_volume[ele_idx] * self.rho / 4
+            self.node_mass[idx4] += self.element_volume[ele_idx] * self.rho / 4
 
 
     @ti.kernel
@@ -240,7 +280,7 @@ class SoftObject:
             weight = self.positional_weight
             qi_idx_x, qi_idx_y, qi_idx_z = q_idx * self.dim, q_idx * self.dim + 1, q_idx * self.dim + 2
             q_idx_vec = ti.Vector([qi_idx_x, qi_idx_y, qi_idx_z])
-            for dim_idx in ti.static(dim):
+            for dim_idx in ti.static(range(self.dim)):
                 lhs_idx = q_idx_vec[dim_idx]
                 self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
 
@@ -340,6 +380,33 @@ class SoftObject:
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
 
+    
+    def extract_bottom_particles(self):
+        bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+
+        @ti.kernel
+        def cal_bottom_glag(particle_num:float, seed_size:float):
+            for q_idx in range(particle_num):
+                if self.node_pos[q_idx].y < 0. + seed_size/3:
+                    bottom_flag[q_idx] = True
+
+        cal_bottom_glag(self.PARTICLE_NUM, self.seed_size)
+        bottom_particles_set = set()
+        for i in range(self.PARTICLE_NUM):
+            if bottom_flag[i]:
+                bottom_particles_set.add(i)
+        bottom_particles_list = list(bottom_particles_set)
+        bottom_num = len(bottom_particles_list)
+
+        return bottom_particles_list, bottom_num
+    
+
+    @ti.kernel
+    def get_node_show_value(self):
+        for i in ti.static(range(self.BOTTOM_NUM)):
+            j = self.bottom_particles_list[i]
+            self.node_show[i] = ti.cast(self.node_pos[j], ti.f32)
+        
 
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
@@ -370,7 +437,8 @@ class SoftObject:
         """
         Define the data for GGUI
         """
-        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        # self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.BOTTOM_NUM)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
         self.edge_show.from_numpy(self.edge_np)
 
@@ -384,12 +452,13 @@ class SoftObject:
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
         # the conversion of object particles, etc. the ggui of the taichi only support float32
-        self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1,
-                                            np.zeros(self.PARTICLE_NUM), axis=1))
+        # 只取了最下部的粒子进行展示
+        self.get_node_show_value()
+        # self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
 
         scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
-        scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
-                    vertex_count=0)
+        # scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
+        #             vertex_count=0)
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
@@ -429,29 +498,34 @@ class SoftObject:
             self.update_pos_new(node_pos_new_np)
 
         self.update_vel_pos()
+        # np.savetxt(f'DataWrite/rhs_{step_num}.csv', rhs_np, fmt='%f', delimiter=',')
+        # np.savetxt(f'DataWrite/pos_{step_num}.csv', self.node_pos.to_numpy(), fmt='%f', delimiter=',')
+        # np.savetxt(f'DataWrite/vel_{step_num}.csv', self.node_vel.to_numpy(), fmt='%f', delimiter=',')
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
 
 
 def main():
     cube_shape = [0.1, 0.02, 0.1]
-    generate_msh(cube_shape, 'Mesh/cube.msh')
+    generate_msh(cube_shape, 0.01, 'Mesh/cube.msh')
     class MyObect(SoftObject):
         def __init__(self, shape, seed_size, file='Mesh/cube.msh'):
             super().__init__(shape, seed_size, file)
 
-    soft_obj = MyObect(shape=cube_shape, seed_size=0.1/2)
-    soft_obj.preset_gui([0.2+0.2, 0.6, 0.], [0.2+0.2, 0., 0.])
+    soft_obj = MyObect(shape=cube_shape, seed_size=0.01)
+    soft_obj.preset_gui([0.1, 0.2, 0.], [0.1, 0., 0.])
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.init_vel()
+    # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
 
-    for i in range(100):
+    for i in range(500):
         soft_obj.substep(i)
-
+        # time.sleep(0.05)
 
 if __name__ == '__main__':
     main()

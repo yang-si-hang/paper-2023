@@ -4,7 +4,7 @@ Rewrite the exerted force in the Implicit Euler integration.
 - The difference with "demo3.py" is the which particles are implied velocity. So please attention to the function "init_vel"
 """
 
-
+import time
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 import numpy as np
