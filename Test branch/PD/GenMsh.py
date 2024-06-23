@@ -1,3 +1,7 @@
+"""
+# 使用pygmsh来划分网格,然后写入.msh文件
+"""
+
 import pygmsh
 import numpy as np
 
