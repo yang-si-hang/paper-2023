@@ -151,7 +151,7 @@ class SoftObject:
         self.dt = 1./100
         self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
-        self.positional_weight = 1.e4
+        self.positional_weight = 1.e5
         self.contact_mass = 1.e0
         self.solve_iteration = int(10)
         self.E, self.nu = 5.e2, 0.4
@@ -566,7 +566,7 @@ def main():
         np.savetxt(f'pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
     
     soft_obj.contact_vel[0] = ti.Vector([0.0, 0.0, 0.0])
-    for i in range(1000):
+    for i in range(1001):
         soft_obj.substep(i)
         if i % 100 == 0:
             np.savetxt(f'pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
