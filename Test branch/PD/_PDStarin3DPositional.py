@@ -1,7 +1,7 @@
 """
 This file simulates deformation by PD method in 3D
-参考"_PDStrain.py"更改的三维版本,其中`strain_weight`和`volume_weight`和
-之前的文件都不同
+参考"_PDStrain.py"更改的三维版本,其中`strain_weight`和`volume_weight`和之前的文件都不同.
+Positional Constraint改为设置'weight'的方式,而不是调大质量
 """
 
 import time
@@ -86,12 +86,12 @@ class SoftObject:
     def __init__(self, shape, seed_size, mesh_file):
         self.shape = shape
         self.seed_size = seed_size
-        self.dt = 1./120
-        self.rho = 1.e1
+        self.dt = 1./100
+        self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
-        self.positional_weight = 1.e4
+        self.positional_weight = 1.e8
         self.solve_iteration = 10
-        self.E, self.nu = 5.e1, 0.45
+        self.E, self.nu = 5.e4, 0.45
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -577,8 +577,10 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # soft_obj.init_vel()
+    np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
-    # np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # exit(0)
 
     sample_particles_pos_list = []
     for i in range(500):

@@ -152,7 +152,7 @@ class SoftObject:
         self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e6
-        self.contact_mass = 1.e2
+        self.contact_weight = 1.e4
         self.solve_iteration = int(10)
         self.E, self.nu = 5.e2, 0.4
         self.dim = 3
@@ -205,10 +205,15 @@ class SoftObject:
         self.A_poistional = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
-        self.contact_particles_list = [85]
-        self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=len(self.contact_particles_list))
-        self.contact_vel[0] = ti.Vector([0.002, 0.0, 0.0])
         self.fix_particle_list = [3, 39, 64]
+        self.contact_particles_list = [85]
+        self.contact_num = len(self.contact_particles_list)
+        if self.contact_num == 0:
+            print(f'No contact points!')
+        else:
+            self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
+            self.contact_vel[0] = ti.Vector([0.002, 0.0, 0.0])
+            self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         exclude_set = set(self.fix_particle_list + self.contact_particles_list)
         self.surface_moveable_particles_list = [i for i in self.surfaces_node_np if i not in exclude_set]
 
@@ -264,8 +269,8 @@ class SoftObject:
             self.node_mass[idx3] += self.element_volume[ele_idx] * self.rho / 4
             self.node_mass[idx4] += self.element_volume[ele_idx] * self.rho / 4
         
-        for i in ti.static(self.contact_particles_list):
-            self.node_mass[i] = self.contact_mass
+        # for i in ti.static(self.contact_particles_list):
+        #     self.node_mass[i] = self.contact_mass
 
 
     @ti.kernel
@@ -343,6 +348,21 @@ class SoftObject:
                 lhs_idx = q_idx_vec[dim_idx]
                 self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
 
+        for q_idx in ti.static(self.contact_particles_list):
+            A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+            weight = self.contact_weight
+            qi_idx_x, qi_idx_y, qi_idx_z = q_idx * self.dim, q_idx * self.dim + 1, q_idx * self.dim + 2
+            q_idx_vec = ti.Vector([qi_idx_x, qi_idx_y, qi_idx_z])
+            for dim_idx in ti.static(range(self.dim)):
+                lhs_idx = q_idx_vec[dim_idx]
+                self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
+
+
+    @ti.kernel
+    def construct_desired_pos(self):
+        for i in ti.static(range(self.contact_num)):
+            q_idx = self.contact_particles_list[i]
+            self.node_desired_pos[i] = self.node_pos[q_idx] + self.contact_vel[i] * self.dt
 
     @ti.kernel
     def construct_sn(self):
@@ -350,9 +370,9 @@ class SoftObject:
             for d in ti.static(range(self.dim)):
                 self.sn[i*self.dim + d] = self.node_pos[i][d] + self.dt * self.node_vel[i][d]
 
-        for i in ti.static(self.contact_particles_list):
-            for d in ti.static(range(self.dim)):
-                self.sn[i*self.dim + d] += self.contact_vel[0][d] * self.dt
+        # for i in ti.static(self.contact_particles_list):
+        #     for d in ti.static(range(self.dim)):
+        #         self.sn[i*self.dim + d] += self.contact_vel[0][d] * self.dt
 
 
     @ti.kernel
@@ -430,6 +450,12 @@ class SoftObject:
             for d in ti.static(range(self.dim)):
                 self.rhs[i*self.dim + d] += weight * self.node_init_pos[i][d]
 
+        for i in ti.static(range(len(self.contact_particles_list))):
+            q_idx = self.contact_particles_list[i]
+            weight = self.contact_weight
+            for d in ti.static(range(self.dim)):
+                self.rhs[q_idx*self.dim + d] += weight * self.node_desired_pos[i][d]
+
     @ti.kernel
     def update_pos_new(self, sol:ti.types.ndarray()):
         for i in range(self.PARTICLE_NUM):
@@ -439,13 +465,13 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
-        for i in ti.static(self.contact_particles_list):
-            self.node_pos_new[i] = self.node_pos[i] + self.contact_vel[0] * self.dt
+        # for i in ti.static(self.contact_particles_list):
+        #     self.node_pos_new[i] = self.node_pos[i] + self.contact_vel[0] * self.dt
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
-        for i in ti.static(self.contact_particles_list):
-            self.node_vel[i] = ti.Vector([0., 0., 0.])
+        # for i in ti.static(self.contact_particles_list):
+        #     self.node_vel[i] = ti.Vector([0., 0., 0.])
         
 
     def gui_set(self, pos, target, FOV=60):
@@ -562,15 +588,22 @@ def main():
     np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     # exit(0)
 
+    sample_particles_pos_list = []
     for i in range(500):
         soft_obj.substep(i)
-        np.savetxt(f'pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+        sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
+        np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
     
-    soft_obj.contact_vel[0] = ti.Vector([0.0, 0.0, 0.0])
+    soft_obj.contact_vel.fill(0.)
     for i in range(1001):
         soft_obj.substep(i)
+        sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
         if i % 100 == 0:
             np.savetxt(f'pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+
+    np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt(f'20240623-PD Validation/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
+
 
 if __name__ == '__main__':
     main()
