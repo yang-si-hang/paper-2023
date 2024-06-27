@@ -137,8 +137,10 @@ class SoftObject:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
         self.fix_particle_list = self.fix_particle_No()
+        # self.fix_particle_list = [0, 1, 12]
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
         self.contact_particles_list = self.contact_particles_indice()
+        # self.contact_particles_list = [5]
         self.contact_num = len(self.contact_particles_list)
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
@@ -155,6 +157,7 @@ class SoftObject:
         print('Particle number:', self.PARTICLE_NUM)
         print('Element number:', self.ELEMENT_NUM)
         print('Contact particles number:', self.contact_num)
+        print('Fixed particles indices:', self.fix_particle_list)
 
 
     @staticmethod

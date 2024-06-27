@@ -151,10 +151,10 @@ class SoftObject:
         self.dt = 1./100
         self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
-        self.positional_weight = 1.e6
-        self.contact_weight = 1.e4
+        self.positional_weight = 1.e8
+        self.contact_weight = 1.e8
         self.solve_iteration = int(10)
-        self.E, self.nu = 5.e2, 0.4
+        self.E, self.nu = 5.e4, 0.45
         self.dim = 3
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -552,6 +552,7 @@ class SoftObject:
 
 
     def substep(self, step_num):
+        self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
         # Local sovle needs iteration
@@ -591,9 +592,13 @@ def main():
     sample_particles_pos_list = []
     for i in range(500):
         soft_obj.substep(i)
+        print(f'Iter: {i}.')
+        print(f'Contact Pos: [{soft_obj.node_pos[85].x:.8f},{soft_obj.node_pos[85].y:.8f},{soft_obj.node_pos[85].z:.8f}]')
+        print(f'Desired Pos: [{soft_obj.node_desired_pos[0].x:.8f},{soft_obj.node_desired_pos[0].y:.8f},{soft_obj.node_desired_pos[0].z:.8f}]')
         sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
         np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
-    
+
+    # exit(0)
     soft_obj.contact_vel.fill(0.)
     for i in range(1001):
         soft_obj.substep(i)
