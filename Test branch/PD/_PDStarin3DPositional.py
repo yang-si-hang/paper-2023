@@ -147,7 +147,7 @@ class SoftObject:
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
-        contact_vel_np[:, 0] = 0.002
+        contact_vel_np[:, 0] = 0.005
         self.contact_vel.from_numpy(contact_vel_np)
         self.sample_particles_list = [132]
 
@@ -583,7 +583,7 @@ def main():
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # soft_obj.init_vel()
     # np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
-    # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
     # exit(0)
 
