@@ -589,7 +589,7 @@ def main():
     np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
     np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    # exit(0)
+    exit(0)
 
     sample_particles_pos_list = []
     for i in range(500):
