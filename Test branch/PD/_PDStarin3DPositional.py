@@ -1,5 +1,6 @@
 """
 This file simulates deformation by PD method in 3D
+created at 2024/06/10 by hsy
 参考"_PDStrain.py"更改的三维版本,其中`strain_weight`和`volume_weight`和之前的文件都不同.
 Positional Constraint改为设置'weight'的方式,而不是调大质量
 """
@@ -90,6 +91,7 @@ class SoftObject:
         self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e8
+        self.contact_weight = 1.e8
         self.solve_iteration = 10
         self.E, self.nu = 5.e4, 0.45
         self.dim = len(shape)
@@ -136,16 +138,16 @@ class SoftObject:
         self.A_poistional = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
-        self.fix_particle_list = self.fix_particle_No()
-        # self.fix_particle_list = [0, 1, 12]
+        # self.fix_particle_list = self.fix_particle_No()
+        self.fix_particle_list = [0, 1, 12]
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
-        self.contact_particles_list = self.contact_particles_indice()
-        # self.contact_particles_list = [5]
+        # self.contact_particles_list = self.contact_particles_indice()
+        self.contact_particles_list = [5]
         self.contact_num = len(self.contact_particles_list)
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
-        contact_vel_np[:, 0] = 0.005
+        contact_vel_np[:, 0] = 0.002
         self.contact_vel.from_numpy(contact_vel_np)
         self.sample_particles_list = [132]
 
@@ -328,7 +330,7 @@ class SoftObject:
 
         for q_idx in ti.static(self.contact_particles_list):
             A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-            weight = self.positional_weight
+            weight = self.contact_weight
             qi_idx_x, qi_idx_y, qi_idx_z = q_idx * self.dim, q_idx * self.dim + 1, q_idx * self.dim + 2
             q_idx_vec = ti.Vector([qi_idx_x, qi_idx_y, qi_idx_z])
             for dim_idx in ti.static(range(self.dim)):
@@ -427,7 +429,7 @@ class SoftObject:
 
         for i in ti.static(range(self.contact_num)):
             q_idx = self.contact_particles_list[i]
-            weight = self.positional_weight
+            weight = self.contact_weight
             for d in ti.static(range(self.dim)):
                 self.rhs[q_idx*self.dim + d] += weight * self.node_desired_pos[i][d]
 
@@ -580,9 +582,9 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # soft_obj.init_vel()
-    np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
+    # np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
     # exit(0)
 
     sample_particles_pos_list = []
@@ -592,7 +594,7 @@ def main():
     np.savetxt(f'DataWrite/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
     soft_obj.contact_vel.fill(0.)
-    for i in range(1001):
+    for i in range(501):
         soft_obj.substep(i)
         sample_particles_pos_list.append(list(soft_obj.node_pos[132].to_numpy()))
         if i % 50 == 0:

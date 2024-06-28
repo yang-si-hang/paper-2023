@@ -213,7 +213,7 @@ class SoftObject:
             print(f'No contact points!')
         else:
             self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
-            self.contact_vel[0] = ti.Vector([0.002, 0.0, 0.0])
+            self.contact_vel[0] = ti.Vector([0.005, 0.0, 0.0])
             self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         exclude_set = set(self.fix_particle_list + self.contact_particles_list)
         self.surface_moveable_particles_list = [i for i in self.surfaces_node_np if i not in exclude_set]
