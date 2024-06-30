@@ -573,7 +573,7 @@ class SoftObject:
 
 
 def main():
-    mesh_file = 'liver.msh'
+    mesh_file = 'Mesh/liver.msh'
     class MyObect(SoftObject):
         def __init__(self, seed_size, file=mesh_file):
             super().__init__(seed_size, file)
@@ -586,29 +586,29 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    exit(0)
+    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # exit(0)
 
     sample_particles_pos_list = []
     for i in range(500):
         soft_obj.substep(i)
-        # print(f'Iter: {i}.')
-        # print(f'Contact Pos: [{soft_obj.node_pos[85].x:.8f},{soft_obj.node_pos[85].y:.8f},{soft_obj.node_pos[85].z:.8f}]')
+        print(f'Iter: {i}.')
+        print(f'Contact Pos: [{soft_obj.node_pos[85].x:.8f},{soft_obj.node_pos[85].y:.8f},{soft_obj.node_pos[85].z:.8f}]')
         # print(f'Desired Pos: [{soft_obj.node_desired_pos[0].x:.8f},{soft_obj.node_desired_pos[0].y:.8f},{soft_obj.node_desired_pos[0].z:.8f}]')
         sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
-    np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
     # exit(0)
     soft_obj.contact_vel.fill(0.)
     for i in range(501):
         soft_obj.substep(i)
         sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
-        if i % 50 == 0:
-            np.savetxt(f'20240623-PD Validation/pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+        # if i % 50 == 0:
+            # np.savetxt(f'20240623-PD Validation/pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
-    np.savetxt(f'20240623-PD Validation/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
 
 
 if __name__ == '__main__':
