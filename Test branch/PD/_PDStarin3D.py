@@ -1,5 +1,6 @@
 """
 This file simulates deformation by PD method in 3D
+created at 2024-06-24 by hsy
 参考"_PDStrain.py"更改的三维版本,其中`strain_weight`和`volume_weight`和
 之前的文件都不同
 """
