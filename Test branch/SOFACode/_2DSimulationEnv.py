@@ -1,6 +1,6 @@
 """
 Construct a 2D square simulation scene by SOFA
-Apply node movement in every simulation step
+Apply node movement in every simulation step and show the deformation end.
 """
 
 
@@ -107,7 +107,7 @@ def main():
 
     for itr in range(1, 10, 1):
         print(f'{root.time.value}:{root.object.dofs.position.value[120]}')
-        pp = pp = 0.01 * np.random.random()
+        pp = 0.01 * np.random.random()
         add_move(linear_mov, dt, np.array([pp, 0., 0.]))
 
         # save_pos(dofs, script_dir+f'/node_data/node_pos_{itr}.csv')

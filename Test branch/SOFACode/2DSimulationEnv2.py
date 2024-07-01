@@ -219,9 +219,9 @@ def main():
     createScene(root)
 
     Sofa.Simulation.init(root)
-    # Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
-    # Sofa.Gui.GUIManager.createGUI(root, __file__)
-    # Sofa.Gui.GUIManager.SetDimension(1080, 800)
+    Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
+    Sofa.Gui.GUIManager.createGUI(root, __file__)
+    Sofa.Gui.GUIManager.SetDimension(1080, 800)
 
     dt = root.dt.value
     obj = root.getChild('object')

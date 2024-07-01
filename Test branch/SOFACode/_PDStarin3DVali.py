@@ -1,6 +1,7 @@
 """
 This file simulates deformation by PD method in 3D
-由PD/PDStrain3D.py修改而来,为了验证自己编写的PD代码是否与SOFA仿真结果一致
+由PD/_PDStrain3DPositional.py修改而来
+验证仿真过程是否符合准静态过程:先施加一个位移,然后等待变形稳定,比较两者之间的差异
 """
 
 import time
@@ -212,7 +213,7 @@ class SoftObject:
             print(f'No contact points!')
         else:
             self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
-            self.contact_vel[0] = ti.Vector([0.002, 0.0, 0.0])
+            self.contact_vel[0] = ti.Vector([0.005, 0.0, 0.0])
             self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         exclude_set = set(self.fix_particle_list + self.contact_particles_list)
         self.surface_moveable_particles_list = [i for i in self.surfaces_node_np if i not in exclude_set]
@@ -572,7 +573,7 @@ class SoftObject:
 
 
 def main():
-    mesh_file = 'liver.msh'
+    mesh_file = 'Mesh/liver.msh'
     class MyObect(SoftObject):
         def __init__(self, seed_size, file=mesh_file):
             super().__init__(seed_size, file)
@@ -585,8 +586,9 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     # exit(0)
 
     sample_particles_pos_list = []
@@ -594,20 +596,19 @@ def main():
         soft_obj.substep(i)
         print(f'Iter: {i}.')
         print(f'Contact Pos: [{soft_obj.node_pos[85].x:.8f},{soft_obj.node_pos[85].y:.8f},{soft_obj.node_pos[85].z:.8f}]')
-        print(f'Desired Pos: [{soft_obj.node_desired_pos[0].x:.8f},{soft_obj.node_desired_pos[0].y:.8f},{soft_obj.node_desired_pos[0].z:.8f}]')
+        # print(f'Desired Pos: [{soft_obj.node_desired_pos[0].x:.8f},{soft_obj.node_desired_pos[0].y:.8f},{soft_obj.node_desired_pos[0].z:.8f}]')
         sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
-        np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
     # exit(0)
     soft_obj.contact_vel.fill(0.)
-    for i in range(1001):
+    for i in range(501):
         soft_obj.substep(i)
         sample_particles_pos_list.append(list(soft_obj.node_pos[146].to_numpy()))
-        if i % 100 == 0:
-            np.savetxt(f'pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+        # if i % 50 == 0:
+            # np.savetxt(f'20240623-PD Validation/pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
-    np.savetxt(f'20240623-PD Validation/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt(f'20240623-PD Validation/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
+    # np.savetxt(f'20240623-PD Validation/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
 
 
 if __name__ == '__main__':
