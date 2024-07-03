@@ -476,7 +476,7 @@ class SoftObject:
             U, sig, V = ti.svd(F_i, ti.f64)
 
             # Solve a linear equations
-            # Position dimension is 2
+            # Position dimension is 2, (m,n)是论文中的(i,j)
             for m,n in ti.ndrange(dim, dim):
                 # Subscript [0,1] due to the 2D
                 Omega_UV = ti.Matrix([[0., 0.], [0., 0.]])
