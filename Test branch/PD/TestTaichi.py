@@ -4,11 +4,10 @@ ti.init(arch=ti.gpu, debug=True, advanced_optimization=False)
 
 @ti.func
 def qr_decomposition(A):
-    # n = A.get_shape()[0]
     Q = ti.Matrix.zero(ti.f64, 9, 9)
     R = ti.Matrix.zero(ti.f64, 9, 9)
 
-    ti.loop_config(serialize=True)
+    # ti.loop_config(serialize=True)
     for col_idx in ti.static(range(9)):
         Q[:, col_idx] = A[:, col_idx]
         for i in range(col_idx):
@@ -27,17 +26,54 @@ def solve_qr(Q, R, b):
     Rx = ti.Vector.zero(ti.f64, 9)
 
     ti.loop_config(serialize=True)
-    for i in range(n):
-        j = n - 1 - i
-        for k in range(j, n):
+    for i in range(9):
+        j = 9 - 1 - i
+        for k in range(j, 9):
             Rx[j] += R[j, k] * x[k]
         x[j] = (y[j] - Rx[j]) / R[j, j]
 
     return x
 
+
+@ti.func
+def qr_decompose9(matrix):
+    Q = ti.Matrix.zero(ti.f64, 9, 9)
+    R = ti.Matrix.zero(ti.f64, 9, 9)
+
+    ti.loop_config(serialize=True)
+    for col_idx in ti.static(range(9)):
+        Q[:, col_idx] = matrix[:, col_idx]
+        for i in range(col_idx):
+            R[i, col_idx] = Q[:, i].dot(matrix[:, col_idx])
+            Q[:, col_idx] -= R[i, col_idx] * Q[:, i]
+        R[col_idx, col_idx] = Q[:, col_idx].norm()
+        Q[:, col_idx] /= R[col_idx, col_idx]
+
+    return Q, R
+
+
+@ti.func
+def qr_solve9(A, b):
+    Q, R = qr_decompose9(A)
+    """
+    x = ti.Vector.zero(ti.f64, 9)
+    Rx = ti.Vector.zero(ti.f64, 9)
+      
+    y = Q.transpose() @ b
+
+    ti.loop_config(serialize=True)
+    for i in range(9):
+        j = 9 - 1 - i
+        for k in range(j, 9):
+            Rx[j] += R[j, k] * x[k]
+        x[j] = (y[j] - Rx[j]) / R[j, j]
+    """
+    # return x
+
 @ti.func
 def my_solve(A, b):
     Q, R = qr_decomposition(A)
+
     x = solve_qr(Q, R, b)
     return x
 
@@ -56,9 +92,13 @@ B = ti.Vector([ 0., 0., 0., -0.8, 0., 1.25, 0., -1., 1.25])
 
 @ti.kernel
 def main():
-    pass
     Q, R = qr_decomposition(A)
-    # print(Q, R)
+    x = solve_qr(Q, R, B)
+    print(x)
+    xx = my_solve(A, B)
+    print(xx)
+    # qr_decompose9(A)
+    # qr_solve9(A, B)
 
 if __name__ == '__main__':
     main()
