@@ -214,7 +214,7 @@ def partial():
                           [dPP_dsig_vec[6], dPP_dsig_vec[7], dPP_dsig_vec[8]]])
     # print('dPP_dsig:', dPP_dsig)
 
-    ti.loop_config(serialize=True)
+    # ti.loop_config(serialize=True)
     for row_idx, col_idx in ti.ndrange(3, 3):
         Omega_UVS = ti.Matrix.zero(ti.f64, 3, 3)
         # 用系数求和的方法

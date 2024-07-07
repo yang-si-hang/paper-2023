@@ -96,6 +96,37 @@ def get_tetrahedron_edges(tet_indices):
     return np.array(list(unique_edges))
 
 
+@ti.func
+def qr_solve9(A, b):
+    # 用QR分解求解9*9的线性方程组
+    Q = ti.Matrix.zero(ti.f64, 9, 9)        # 正交矩阵
+    R = ti.Matrix.zero(ti.f64, 9, 9)        # 上三角矩阵
+
+    # QR分解
+    ti.loop_config(serialize=True)
+    for col_idx in ti.static(range(9)):
+        Q[:, col_idx] = A[:, col_idx]
+        for i in range(col_idx):
+            R[i, col_idx] = Q[:, i].dot(A[:, col_idx])
+            Q[:, col_idx] -= R[i, col_idx] * Q[:, i]
+        R[col_idx, col_idx] = Q[:, col_idx].norm()
+        Q[:, col_idx] /= R[col_idx, col_idx]
+
+    x = ti.Vector.zero(ti.f64, 9)
+    Rx = ti.Vector.zero(ti.f64, 9)
+    y = Q.transpose() @ b
+
+    # 从最后一行往前的高斯消元
+    ti.loop_config(serialize=True)
+    for i in range(9):
+        j = 9 - 1 - i
+        for k in range(j, 9):
+            Rx[j] += R[j, k] * x[k]
+        x[j] = (y[j] - Rx[j]) / R[j, j]
+
+    return x
+
+
 @ti.data_oriented
 class SoftObject:
     def __init__(self, shape, seed_size, mesh_file):
@@ -152,6 +183,8 @@ class SoftObject:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
         # Following is diffPD
+        self.dBp_strain_dF = ti.Matrix.field(self.dim**2, self.dim**2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.dBp_volume_dF = ti.Matrix.field(self.dim**2, self.dim**2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dBp_dF = ti.Matrix.field(self.dim**2, self.dim**2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dBp_dq = ti.Matrix.field(self.dim**2, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
 
@@ -428,7 +461,9 @@ class SoftObject:
             F_i = self.F[i]
             # F = U @ sig @ V^T,不同函数库中的svd分解的符号意义不同
             U, sig, V = ti.svd(F_i, ti.f64)
+            s1, s2, s3 = sig[0, 0], sig[1, 1], sig[2, 2]
 
+            # Strain Constraint的DiffPD求解
             for row_idx, col_idx in ti.ndrange(self.dim, self.dim):
                 Omega_UV = ti.Matrix.zero(ti.f64, self.dim, self.dim)
                 # 矩阵索引除对角线的上三角
@@ -436,46 +471,86 @@ class SoftObject:
                     for n in range(m+1, self.dim):
                         Omega_UV[m, n] = (U[row_idx, m]*V[col_idx, n] - U[row_idx, n]*V[col_idx, m]) / (sig[m, m]+sig[n, n])
                         Omega_UV[n, m] = -Omega_UV[m, n]
-                dBp_df = U @ Omega_UV @ V.transpose()
-                dBp_df_vec = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[0, 2],
-                                        dBp_df[1, 0], dBp_df[1, 1], dBp_df[1, 2],
-                                        dBp_df[2, 0], dBp_df[2, 1], dBp_df[2, 2]])
-                self.dBp_dF[i][:, self.dim*row_idx+col_idx] = dBp_df_vec
+                dBp_strain_df = U @ Omega_UV @ V.transpose()
+                dBp_strain_df_vec = ti.Vector([dBp_strain_df[0, 0], dBp_strain_df[0, 1], dBp_strain_df[0, 2],
+                                               dBp_strain_df[1, 0], dBp_strain_df[1, 1], dBp_strain_df[1, 2],
+                                               dBp_strain_df[2, 0], dBp_strain_df[2, 1], dBp_strain_df[2, 2]])
+                self.dBp_strain_dF[i][:, self.dim*row_idx+col_idx] = dBp_strain_df_vec
 
+            # Volume Constraint的DiffPD求解
             PP_i = self.PP[i]
             ss1, ss2, ss3 = PP_i[0, 0], PP_i[1, 1], PP_i[2, 2]
-            Sigma_F = ti.Matrix.zero(ti.f64, self.dim, self.dim)
-            coef_A = ti.Matrix.zero(ti.f64, self.dim**2, self.dim**2)
+            PP_coef_A = ti.Matrix.zero(ti.f64, self.dim**2, self.dim**2)
 
             for d_idx in range(dim):
-                coef_A[d_idx, d_idx], coef_A[d_idx, d_idx+self.dim], coef_A[d_idx, d_idx+2*self.dim] = ss2*ss3, ss1*ss3, ss1*ss2
+                PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+self.dim], PP_coef_A[d_idx, d_idx+2*self.dim] = ss2*ss3, ss1*ss3, ss1*ss2
 
             for d_idx in range(dim):
-                coef_A[d_idx+dim, d_idx], coef_A[d_idx+dim, d_idx+2*dim]= (sig[0,0]-2*ss1), -(sig[2,2]-2*ss3)
+                PP_coef_A[d_idx+dim, d_idx], PP_coef_A[d_idx+dim, d_idx+2*dim]= (sig[0,0]-2*ss1), -(sig[2,2]-2*ss3)
 
             for d_idx in range(dim):
-                coef_A[d_idx+2*dim, d_idx+dim], coef_A[d_idx+2*dim, d_idx+2*dim] = (sig[1,1]-2*ss2), -(sig[2,2]-2*ss3)
+                PP_coef_A[d_idx+2*dim, d_idx+dim], PP_coef_A[d_idx+2*dim, d_idx+2*dim] = (sig[1,1]-2*ss2), -(sig[2,2]-2*ss3)
 
-            coef_B = ti.Vector([0, 0, 0, -ss1, 0, ss3, 0, -ss2, ss3])
-            dPP_dsig_vec = ti.solve(coef_A, coef_B, ti.f64)
+            PP_coef_B = ti.Vector([0, 0, 0, -ss1, 0, ss3, 0, -ss2, ss3])
+            dPP_dsig_vec = qr_solve9(PP_coef_A, PP_coef_B)
             dPP_dsig = ti.Matrix([[dPP_dsig_vec[0], dPP_dsig_vec[1], dPP_dsig_vec[2]],
                                   [dPP_dsig_vec[3], dPP_dsig_vec[4], dPP_dsig_vec[5]],
                                   [dPP_dsig_vec[6], dPP_dsig_vec[7], dPP_dsig_vec[8]]])
 
             for row_idx, col_idx in ti.ndrange(self.dim, self.dim):
-                dsig_df = ti.Vector([U[row_idx, 0]*V[col_idx, 0], U[row_idx, 1]*V[col_idx, 1], U[row_idx, 2]*V[col_idx, 2]])
+                Omega_UVS = ti.Matrix.zero(ti.f64, 3, 3)
+                # 用系数求和的方法
+                A = ((U[row_idx, 0] * V[col_idx, 1] - U[row_idx, 1] * V[col_idx, 0]) / 2 / 
+                    (s1 + s2) * (ss1 + ss2))
+                B = ((U[row_idx, 0] * V[col_idx, 1] + U[row_idx, 1] * V[col_idx, 0]) / 2 )
+                if ti.abs(s1 - s3) < 1.e-6:
+                    B *= (dPP_dsig[1, 1] - dPP_dsig[0, 1])      # 不同的s*对同一个s的梯度
+                else:
+                    B *= (ss2 - ss1) / (s2 - s1)
+                C = ti.cast(-B, ti.f64)
+                Omega_UVS[0, 1] = A + B
+                Omega_UVS[1, 0] = -(A + C)
+
+                A = ((U[row_idx, 0] * V[col_idx, 2] - U[row_idx, 2] * V[col_idx, 0]) / 2 / 
+                     (s1 + s3) * (ss1 + ss3))
+                B = (U[row_idx, 0] * V[col_idx, 2] + U[row_idx, 2] * V[col_idx, 0]) / 2 
+                if ti.abs(s1 - s3) < 1.e-6:
+                    B *= (dPP_dsig[2, 2] - dPP_dsig[0, 2])
+                else:
+                    B *= (ss3 - ss1) / (s3 - s1)
+                C = ti.cast(-B, ti.f64)
+                Omega_UVS[0, 2] = (A + B)
+                Omega_UVS[2, 0] = -(A + C)
+
+                A = ((U[row_idx, 1] * V[col_idx, 2] - U[row_idx, 2] * V[col_idx, 1]) / 2 / 
+                    (s2 + s3) * (ss2 + ss3))
+                B = (U[row_idx, 1] * V[col_idx, 2] + U[row_idx, 2] * V[col_idx, 1]) / 2 
+                if ti.abs(s2 - s3) < 1.e-6:
+                    B *= (dPP_dsig[2, 2] - dPP_dsig[1, 2])
+                else:
+                    B *= (ss3 - ss2) / (s3 - s2)
+                C = ti.cast(-B, ti.f64)
+                Omega_UVS[1, 2] = (A + B)
+                Omega_UVS[2, 1] = -(A + C)
+
+                dsig_df = ti.Vector([U[row_idx, 0] * V[col_idx, 0], U[row_idx, 1] * V[col_idx, 1], 
+                                     U[row_idx, 2] * V[col_idx, 2]])
                 dPP_df_vec = dPP_dsig @ dsig_df
-                dPP_df = ti.Matrix.zero(ti.f64, self.dim, self.dim)
+                dPP_df = ti.Matrix.zero(ti.f64, 3, 3)
                 dPP_df[0, 0], dPP_df[1, 1], dPP_df[2, 2] = dPP_df_vec[0], dPP_df_vec[1], dPP_df_vec[2]
+                dBp_volume_df = U @ (Omega_UVS + dPP_df) @ V.transpose()
+                dBp_volume_df_vec = ti.Vector([dBp_volume_df[0, 0], dBp_volume_df[0, 1], dBp_volume_df[0, 2],
+                                               dBp_volume_df[1, 0], dBp_volume_df[1, 1], dBp_volume_df[1, 2],
+                                               dBp_volume_df[2, 0], dBp_volume_df[2, 1], dBp_volume_df[2, 2]])
+                self.dBp_volume_dF[i][:, dim*row_idx + col_idx] = dBp_volume_df_vec
 
-
-
-            self.dBp_dq[i] = self.dBp_dF[i] @ A_i
+            strain_weight = self.strain_weight[ele_idx]
+            volume_weight = self.volume_weight[ele_idx]
+            self.dBp_dq[i] = (strain_weight*self.dBp_strain_dF[i] + volume_weight*self.dBp_volume_dF[i]) @ A_i
             self.AT_dBp_dq[i] = A_i.transpose() @ self.dBp_dq[i]
 
         self.rhs_dA.fill(0.)
         for ele_idx in range(self.ELEMENT_NUM):
-            weight = self.strain_weight[ele_idx]
             idx1, idx2, idx3, idx4 = self.element[ele_idx]
             idx1_x, idx1_y, idx1_z = idx1 * self.dim, idx1 * self.dim + 1, idx1 * self.dim + 2
             idx2_x, idx2_y, idx2_z = idx2 * self.dim, idx2 * self.dim + 1, idx2 * self.dim + 2
@@ -486,7 +561,8 @@ class SoftObject:
             for row_idx, col_idx in ti.ndrange(self.dim*(self.dim+1), self.dim*(self.dim+1)):
                 rhs_row_idx = q_idx_vec[row_idx]
                 rhs_col_idx = q_idx_vec[col_idx]
-                self.rhs_dA[rhs_row_idx, rhs_col_idx] += weight * self.AT_dBp_dq[ele_idx][row_idx, col_idx]
+                self.rhs_dA[rhs_row_idx, rhs_col_idx] += self.AT_dBp_dq[ele_idx][row_idx, col_idx]
+                
 
     def extract_bottom_particles(self):
         bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
