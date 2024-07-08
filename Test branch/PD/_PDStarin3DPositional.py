@@ -98,9 +98,9 @@ class SoftObject:
 
         node_np, element_np, volume_np = self.load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        np.savetxt('DataWrite/node_np.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('DataWrite/element_np.csv', element_np, fmt='%d', delimiter=',')
+        np.savetxt('DataWrite/volume_np.csv', volume_np, fmt='%.15f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -140,13 +140,13 @@ class SoftObject:
         self.fix_particle_list = self.fix_particle_No()
         # self.fix_particle_list = [0, 1, 12]
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
-        self.contact_particles_list = self.contact_particles_indice()
-        # self.contact_particles_list = [5]
+        # self.contact_particles_list = self.contact_particles_indice()
+        self.contact_particles_list = [5]
         self.contact_num = len(self.contact_particles_list)
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
-        contact_vel_np[:, 0] = 0.005
+        contact_vel_np[:, 0] = 0.00
         self.contact_vel.from_numpy(contact_vel_np)
         self.sample_particles_list = [132]
 
@@ -590,17 +590,17 @@ def main():
     for i in range(500):
         soft_obj.substep(i)
         sample_particles_pos_list.append(list(soft_obj.node_pos[132].to_numpy()))
-    np.savetxt(f'DataWrite/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'DataWrite/pos_before.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
 
-    soft_obj.contact_vel.fill(0.)
-    for i in range(1001):
-        soft_obj.substep(i)
-        sample_particles_pos_list.append(list(soft_obj.node_pos[132].to_numpy()))
-        if i % 50 == 0:
-            np.savetxt(f'DataWrite/pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
-    
-    np.savetxt(f'DataWrite/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt(f'DataWrite/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
+    # soft_obj.contact_vel.fill(0.)
+    # for i in range(1001):
+    #     soft_obj.substep(i)
+    #     sample_particles_pos_list.append(list(soft_obj.node_pos[132].to_numpy()))
+    #     if i % 50 == 0:
+    #         np.savetxt(f'DataWrite/pos_after_{i}.csv', soft_obj.node_pos.to_numpy(), fmt='%f', delimiter=',')
+    #
+    # np.savetxt(f'DataWrite/pos_init.csv', soft_obj.node_init_pos.to_numpy(), fmt='%f', delimiter=',')
+    # np.savetxt(f'DataWrite/sample_pos.csv', np.array(sample_particles_pos_list), fmt='%f', delimiter=',')
 
 if __name__ == '__main__':
     main()

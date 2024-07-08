@@ -4,7 +4,7 @@ created at 2024-07-01 by hsy
 """
 
 import taichi as ti
-ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
@@ -136,17 +136,16 @@ class SoftObject:
         self.rho = 1.e3
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e8
-        self.solve_iteration = 10
+        self.solve_iteration = int(10)
         self.E, self.nu = 5.e4, 0.45
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, element_np, volume_np = load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        # np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -169,6 +168,10 @@ class SoftObject:
 
         self.B = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # F = U @ sig @ V ^ T
+        self.U = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.sig = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.V = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.PP = ti.Matrix.field(self.dim, self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         # 单元的A矩阵
         self.A = ti.Matrix.field(self.dim**2, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -187,25 +190,33 @@ class SoftObject:
         self.dBp_volume_dF = ti.Matrix.field(self.dim**2, self.dim**2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dBp_dF = ti.Matrix.field(self.dim**2, self.dim**2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dBp_dq = ti.Matrix.field(self.dim**2, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.AT_dBp_dq = ti.Matrix.field((self.dim+1)*self.dim, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
 
-        self.AT_dBp_dq = ti.Matrix.field((self.dim+1)*self.dim, (self.dim+1)*self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
         self.rhs_dA = ti.field(ti.f64, shape=(self.dim*self.PARTICLE_NUM, self.dim*self.PARTICLE_NUM))
-        self.dL = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
+        self.dL_dq = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
+        self.dL_dy = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
+        self.dx_const = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)          # dx_dy中的常数部分
 
-        self.dL.fill(0.)
+        # Finite difference
+        self.delta = ti.cast(1.e-6, ti.f64)
+        self.grad_finite = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.grad_diffdata = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
+
+        self.dL_dq.fill(0.)
         self.z.fill(0.)
 
         self.fix_particle_list = self.fix_particle_No()
         # self.fix_particle_list = [0, 1, 12]
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
-        self.contact_particles_list = self.contact_particles_indice()
-        # self.contact_particles_list = [5]
+        # self.contact_particles_list = self.contact_particles_indice()
+        self.contact_particles_list = [5]       # 最底层的左上角节点
         self.contact_num = len(self.contact_particles_list)
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
-        contact_vel_np[:, 0] = 0.005
+        # contact_vel_np[:, 0] = 0.005
+        contact_vel_np[:, 0] = 1.e-6 / self.dt
         self.contact_vel.from_numpy(contact_vel_np)
         self.sample_particles_list = [132]
 
@@ -222,9 +233,6 @@ class SoftObject:
 
     @ti.kernel
     def construct_mass(self):
-        # mass_tmp = self.rho * self.volume_sum / self.PARTICLE_NUM
-        # self.node_mass.fill(mass_tmp)
-
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2, idx3, idx4 = self.element[ele_idx]
             self.node_mass[idx1] += self.element_volume[ele_idx] * self.rho / 4
@@ -281,6 +289,36 @@ class SoftObject:
         return fix_particles_list
 
 
+    def contact_particles_indice(self):
+        """
+        Find the indice of contact particles
+        """
+        contact_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        L = self.shape[0]
+        H = self.shape[1]
+        W = self.shape[2]
+        seed_size = self.seed_size
+
+        @ti.kernel
+        def cal_contact_constraint(L: float, H: float, W: float, seed_size: float):
+            EPS = seed_size / 3
+            for idx in range(self.PARTICLE_NUM):
+                x_temp = self.node_init_pos[idx].x
+                y_temp = self.node_init_pos[idx].y
+                z_temp = self.node_init_pos[idx].z
+                contact_flag_temp = (x_temp > L - EPS)
+                contact_flag[idx] = contact_flag_temp
+
+        cal_contact_constraint(L, H, W, seed_size)
+        contact_particles_set = set()
+        for i in range(self.PARTICLE_NUM):
+            if contact_flag[i]:
+                contact_particles_set.add(i)
+        contact_particles_list = list(contact_particles_set)
+
+        return contact_particles_list
+
+
     @ti.kernel
     def precomputation(self):
         element_num = self.ELEMENT_NUM
@@ -329,6 +367,8 @@ class SoftObject:
                 lhs_col_idx = q_idx_vec[A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += strain_weight * ATA[A_row_idx, A_col_idx]
                 self.lhs[lhs_row_idx, lhs_col_idx] += volume_weight * ATA[A_row_idx, A_col_idx]
+                self.SA_strain[lhs_row_idx, lhs_col_idx] += strain_weight * ATA[A_row_idx, A_col_idx]
+                self.SA_volume[lhs_row_idx, lhs_col_idx] += volume_weight * ATA[A_row_idx, A_col_idx]
 
         for q_idx in ti.static(self.fix_particle_list):
             A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
@@ -338,6 +378,7 @@ class SoftObject:
             for dim_idx in ti.static(range(self.dim)):
                 lhs_idx = q_idx_vec[dim_idx]
                 self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
+                self.A_poistional[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
 
         for q_idx in ti.static(self.contact_particles_list):
             A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
@@ -347,6 +388,19 @@ class SoftObject:
             for dim_idx in ti.static(range(self.dim)):
                 lhs_idx = q_idx_vec[dim_idx]
                 self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
+                self.A_poistional[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
+
+
+    def construct_L(self):
+        for q_idx in self.contact_particles_list:
+            self.dL_dq[q_idx*self.dim+0] = 1.
+
+
+    @ti.kernel
+    def construct_desired_pos(self):
+        for i in ti.static(range(self.contact_num)):
+            q_idx = self.contact_particles_list[i]
+            self.node_desired_pos[i] = self.node_pos[q_idx] + self.dt * self.contact_vel[i]
 
 
     @ti.kernel
@@ -354,6 +408,15 @@ class SoftObject:
         for i in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
                 self.sn[i*self.dim + d] = self.node_pos[i][d] + self.dt * self.node_vel[i][d]
+
+        # for i in range(self.contact_num):
+        #     q_idx = self.contact_particles_list[i]
+        #     for d in ti.static(range(self.dim)):
+        #         self.sn[q_idx*self.dim + d] = self.node_pos[q_idx][d] + self.contact_vel[i][d] * self.dt
+
+        # for i in ti.static(range(self.contact_num)):
+        #     q_idx = self.contact_particles_list[i]
+        #     self.sn[q_idx*self.dim + 0] = self.node_pos[q_idx][0] + self.delta
 
 
     @ti.kernel
@@ -374,6 +437,7 @@ class SoftObject:
             self.F[ele_idx] = F_i
 
             U, sig, V = ti.svd(F_i, ti.f64)
+            self.U[ele_idx], self.sig[ele_idx], self.V[ele_idx] = U, ti.Vector([sig[0, 0], sig[1, 1], sig[2, 2]]), V
             self.Bp[ele_idx] = U @ V.transpose()        # Strain contraint
 
             D, max_it, tol = ti.Vector([5., 5., 5.]), 50, 1.e-6
@@ -455,13 +519,16 @@ class SoftObject:
 
     @ti.kernel
     def partial_p(self):
-        for i in range(self.ELEMENT_NUM):
+        for ele_idx in range(self.ELEMENT_NUM):
             dim = self.dim
-            A_i = self.A[i]
-            F_i = self.F[i]
-            # F = U @ sig @ V^T,不同函数库中的svd分解的符号意义不同
-            U, sig, V = ti.svd(F_i, ti.f64)
-            s1, s2, s3 = sig[0, 0], sig[1, 1], sig[2, 2]
+            A_i = self.A[ele_idx]
+            # F_i = self.F[ele_idx]
+            # U, sig, V = ti.svd(F_i, ti.f64)
+            # s1, s2, s3 = sig[0, 0], sig[1, 1], sig[2, 2]
+            U_i = self.U[ele_idx]
+            sig = self.sig[ele_idx]
+            s1, s2, s3 = sig[0], sig[1], sig[2]
+            V_i = self.V[ele_idx]
 
             # Strain Constraint的DiffPD求解
             for row_idx, col_idx in ti.ndrange(self.dim, self.dim):
@@ -469,16 +536,16 @@ class SoftObject:
                 # 矩阵索引除对角线的上三角
                 for m in range(self.dim):
                     for n in range(m+1, self.dim):
-                        Omega_UV[m, n] = (U[row_idx, m]*V[col_idx, n] - U[row_idx, n]*V[col_idx, m]) / (sig[m, m]+sig[n, n])
+                        Omega_UV[m, n] = (U_i[row_idx, m]*V_i[col_idx, n] - U_i[row_idx, n]*V_i[col_idx, m]) / (sig[m]+sig[n])
                         Omega_UV[n, m] = -Omega_UV[m, n]
-                dBp_strain_df = U @ Omega_UV @ V.transpose()
+                dBp_strain_df = U_i @ Omega_UV @ V_i.transpose()
                 dBp_strain_df_vec = ti.Vector([dBp_strain_df[0, 0], dBp_strain_df[0, 1], dBp_strain_df[0, 2],
                                                dBp_strain_df[1, 0], dBp_strain_df[1, 1], dBp_strain_df[1, 2],
                                                dBp_strain_df[2, 0], dBp_strain_df[2, 1], dBp_strain_df[2, 2]])
-                self.dBp_strain_dF[i][:, self.dim*row_idx+col_idx] = dBp_strain_df_vec
+                self.dBp_strain_dF[ele_idx][:, self.dim*row_idx+col_idx] = dBp_strain_df_vec
 
             # Volume Constraint的DiffPD求解
-            PP_i = self.PP[i]
+            PP_i = self.PP[ele_idx]
             ss1, ss2, ss3 = PP_i[0, 0], PP_i[1, 1], PP_i[2, 2]
             PP_coef_A = ti.Matrix.zero(ti.f64, self.dim**2, self.dim**2)
 
@@ -486,10 +553,10 @@ class SoftObject:
                 PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+self.dim], PP_coef_A[d_idx, d_idx+2*self.dim] = ss2*ss3, ss1*ss3, ss1*ss2
 
             for d_idx in range(dim):
-                PP_coef_A[d_idx+dim, d_idx], PP_coef_A[d_idx+dim, d_idx+2*dim]= (sig[0,0]-2*ss1), -(sig[2,2]-2*ss3)
+                PP_coef_A[d_idx+dim, d_idx], PP_coef_A[d_idx+dim, d_idx+2*dim] = (s1-2*ss1), -(s3-2*ss3)
 
             for d_idx in range(dim):
-                PP_coef_A[d_idx+2*dim, d_idx+dim], PP_coef_A[d_idx+2*dim, d_idx+2*dim] = (sig[1,1]-2*ss2), -(sig[2,2]-2*ss3)
+                PP_coef_A[d_idx+2*dim, d_idx+dim], PP_coef_A[d_idx+2*dim, d_idx+2*dim] = (s2-2*ss2), -(s3-2*ss3)
 
             PP_coef_B = ti.Vector([0, 0, 0, -ss1, 0, ss3, 0, -ss2, ss3])
             dPP_dsig_vec = qr_solve9(PP_coef_A, PP_coef_B)
@@ -500,9 +567,9 @@ class SoftObject:
             for row_idx, col_idx in ti.ndrange(self.dim, self.dim):
                 Omega_UVS = ti.Matrix.zero(ti.f64, 3, 3)
                 # 用系数求和的方法
-                A = ((U[row_idx, 0] * V[col_idx, 1] - U[row_idx, 1] * V[col_idx, 0]) / 2 / 
+                A = ((U_i[row_idx, 0] * V_i[col_idx, 1] - U_i[row_idx, 1] * V_i[col_idx, 0]) / 2 /
                     (s1 + s2) * (ss1 + ss2))
-                B = ((U[row_idx, 0] * V[col_idx, 1] + U[row_idx, 1] * V[col_idx, 0]) / 2 )
+                B = ((U_i[row_idx, 0] * V_i[col_idx, 1] + U_i[row_idx, 1] * V_i[col_idx, 0]) / 2 )
                 if ti.abs(s1 - s3) < 1.e-6:
                     B *= (dPP_dsig[1, 1] - dPP_dsig[0, 1])      # 不同的s*对同一个s的梯度
                 else:
@@ -511,9 +578,9 @@ class SoftObject:
                 Omega_UVS[0, 1] = A + B
                 Omega_UVS[1, 0] = -(A + C)
 
-                A = ((U[row_idx, 0] * V[col_idx, 2] - U[row_idx, 2] * V[col_idx, 0]) / 2 / 
+                A = ((U_i[row_idx, 0] * V_i[col_idx, 2] - U_i[row_idx, 2] * V_i[col_idx, 0]) / 2 /
                      (s1 + s3) * (ss1 + ss3))
-                B = (U[row_idx, 0] * V[col_idx, 2] + U[row_idx, 2] * V[col_idx, 0]) / 2 
+                B = (U_i[row_idx, 0] * V_i[col_idx, 2] + U_i[row_idx, 2] * V_i[col_idx, 0]) / 2
                 if ti.abs(s1 - s3) < 1.e-6:
                     B *= (dPP_dsig[2, 2] - dPP_dsig[0, 2])
                 else:
@@ -522,9 +589,9 @@ class SoftObject:
                 Omega_UVS[0, 2] = (A + B)
                 Omega_UVS[2, 0] = -(A + C)
 
-                A = ((U[row_idx, 1] * V[col_idx, 2] - U[row_idx, 2] * V[col_idx, 1]) / 2 / 
+                A = ((U_i[row_idx, 1] * V_i[col_idx, 2] - U_i[row_idx, 2] * V_i[col_idx, 1]) / 2 /
                     (s2 + s3) * (ss2 + ss3))
-                B = (U[row_idx, 1] * V[col_idx, 2] + U[row_idx, 2] * V[col_idx, 1]) / 2 
+                B = (U_i[row_idx, 1] * V_i[col_idx, 2] + U_i[row_idx, 2] * V_i[col_idx, 1]) / 2
                 if ti.abs(s2 - s3) < 1.e-6:
                     B *= (dPP_dsig[2, 2] - dPP_dsig[1, 2])
                 else:
@@ -533,21 +600,21 @@ class SoftObject:
                 Omega_UVS[1, 2] = (A + B)
                 Omega_UVS[2, 1] = -(A + C)
 
-                dsig_df = ti.Vector([U[row_idx, 0] * V[col_idx, 0], U[row_idx, 1] * V[col_idx, 1], 
-                                     U[row_idx, 2] * V[col_idx, 2]])
+                dsig_df = ti.Vector([U_i[row_idx, 0] * V_i[col_idx, 0], U_i[row_idx, 1] * V_i[col_idx, 1],
+                                     U_i[row_idx, 2] * V_i[col_idx, 2]])
                 dPP_df_vec = dPP_dsig @ dsig_df
                 dPP_df = ti.Matrix.zero(ti.f64, 3, 3)
                 dPP_df[0, 0], dPP_df[1, 1], dPP_df[2, 2] = dPP_df_vec[0], dPP_df_vec[1], dPP_df_vec[2]
-                dBp_volume_df = U @ (Omega_UVS + dPP_df) @ V.transpose()
+                dBp_volume_df = U_i @ (Omega_UVS + dPP_df) @ V_i.transpose()
                 dBp_volume_df_vec = ti.Vector([dBp_volume_df[0, 0], dBp_volume_df[0, 1], dBp_volume_df[0, 2],
                                                dBp_volume_df[1, 0], dBp_volume_df[1, 1], dBp_volume_df[1, 2],
                                                dBp_volume_df[2, 0], dBp_volume_df[2, 1], dBp_volume_df[2, 2]])
-                self.dBp_volume_dF[i][:, dim*row_idx + col_idx] = dBp_volume_df_vec
+                self.dBp_volume_dF[ele_idx][:, dim*row_idx + col_idx] = dBp_volume_df_vec
 
             strain_weight = self.strain_weight[ele_idx]
             volume_weight = self.volume_weight[ele_idx]
-            self.dBp_dq[i] = (strain_weight*self.dBp_strain_dF[i] + volume_weight*self.dBp_volume_dF[i]) @ A_i
-            self.AT_dBp_dq[i] = A_i.transpose() @ self.dBp_dq[i]
+            self.dBp_dq[ele_idx] = (strain_weight*self.dBp_strain_dF[ele_idx] + volume_weight*self.dBp_volume_dF[ele_idx]) @ A_i
+            self.AT_dBp_dq[ele_idx] = A_i.transpose() @ self.dBp_dq[ele_idx]
 
         self.rhs_dA.fill(0.)
         for ele_idx in range(self.ELEMENT_NUM):
@@ -562,7 +629,82 @@ class SoftObject:
                 rhs_row_idx = q_idx_vec[row_idx]
                 rhs_col_idx = q_idx_vec[col_idx]
                 self.rhs_dA[rhs_row_idx, rhs_col_idx] += self.AT_dBp_dq[ele_idx][row_idx, col_idx]
-                
+
+        # Positional Constraint的DiffPD求解
+        # 没有，因为是Bp是确定的
+
+
+    @ti.kernel
+    def construct_dx_const(self):
+        # 解决Movement Constraint中dBp/dq为常数的情况
+        for q_i in range(self.PARTICLE_NUM):
+            for d in ti.static(range(self.dim)):
+                self.dx_const[q_i*self.dim+d] = self.node_mass[q_i] / self.dt**2
+
+        for q_i in ti.static(self.contact_particles_list):
+            for d in ti.static(range(self.dim)):
+                self.dx_const[q_i*self.dim+d] += self.positional_weight
+
+
+    def diff_data(self):
+        self.partial_p()
+        mass_np = self.node_mass.to_numpy() / self.dt**2
+        mass_dim_np = np.repeat(mass_np, self.dim)
+        M_np = np.diag(mass_dim_np)
+        # A = M_np + self.SA_strain.to_numpy() + self.SA_volume.to_numpy() + self.A_poistional.to_numpy() - self.rhs_dA.to_numpy()
+        A = self.lhs.to_numpy() - self.rhs_dA.to_numpy()
+        B = M_np
+        for q_i in self.contact_particles_list:
+            for d in range(self.dim):
+                B[q_i*self.dim+d, q_i*self.dim+d] += self.positional_weight
+        dx_dy_np = np.linalg.solve(A, B)
+        np.savetxt('A.csv', A, fmt='%.15f', delimiter=',')
+        np.savetxt('B.csv', B, fmt='%.15f', delimiter=',')
+        for i in self.contact_particles_list:
+            idx = i*self.dim + 0            # 只取x方向的位移
+            self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
+            np.savetxt('dx_dy.csv', dx_dy_np, fmt='%.15f', delimiter=',')
+            # np.savetxt('dx_dy_contact.csv', dx_dy_np[:, idx].reshape(-1, self.dim), fmt='%.15f', delimiter=',')
+
+
+    def diff_pd(self, itr_num:ti.i32):
+        self.partial_p()
+        dA = self.rhs_dA.to_numpy()
+        par_L = self.dL_dq.to_numpy()
+        z_np = self.z.to_numpy()
+        for itr in range(itr_num):
+            rhs_diff_np = dA @ z_np + par_L
+            z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+            z_np = z_new_np
+        self.z.from_numpy(z_np)
+
+
+    @ti.kernel
+    def cal_ygrad(self):
+        for idx in range(3*self.PARTICLE_NUM):
+            self.dL_dy[idx] = self.z[idx] * self.dx_const[idx]
+
+
+    @ti.kernel
+    def cal_grad(self):
+        for q_idx in range(self.PARTICLE_NUM):
+            self.grad_finite[q_idx] = (self.node_pos[q_idx] - self.node_init_pos[q_idx]) / self.delta
+
+
+    def substep(self, step_num:ti.i32):
+        self.construct_desired_pos()
+        self.construct_sn()
+        self.warm_start()
+        for itr in range(self.solve_iteration):
+            self.local_solve()
+            self.construct_rhs()
+            rhs_np = self.rhs.to_numpy()
+            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
+            self.update_pos_new(node_pos_new_np)
+
+        self.update_vel_pos()
+        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num)
+
 
     def extract_bottom_particles(self):
         bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
@@ -654,7 +796,6 @@ class SoftObject:
         self.show_preset()
 
 
-
 def main():
     cube_shape = [0.1, 0.02, 0.1]
     mesh_file = 'Mesh/cube.msh'
@@ -670,8 +811,23 @@ def main():
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    soft_obj.construct_L()
 
+    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('lhs2.csv', lhs_np, fmt='%.15f', delimiter=',')
 
+    for i in range(1):
+        soft_obj.substep(i)
+        # soft_obj.diff_pd(10)
+        # soft_obj.cal_ygrad()
+        soft_obj.diff_data()
+    # np.savetxt('rhs_dA.csv', soft_obj.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
+    for q_idx in soft_obj.contact_particles_list:
+        grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
+        np.savetxt('grad_diffdata.csv', grad_diffdata_tmp, fmt='%.15f', delimiter=',')
+
+    soft_obj.cal_grad()
+    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':
