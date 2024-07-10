@@ -1,5 +1,6 @@
 """
-Obtain the position of the black on red soft object.
+实物实验，仅使用Strain constraint的gradient进行控制
+created at 2024- by hsy
 """
 
 import time

@@ -1,3 +1,6 @@
+"""
+这是UR-RTDE读取数据的官方例程
+"""
 from rtde_receive import RTDEReceiveInterface as RTDEReceive
 import time
 import argparse
