@@ -1,7 +1,7 @@
 """
 This code for detecting black dots on red soft object.
-Filting red component --> Canny edge detection --> Find contours.
-created at 2024-05-23 by hsy.
+(不一定采用这个流程) Filting red component --> Canny edge detection --> Find contours.
+created at 2024-07-15 by hsy.
 """
 
 import time
