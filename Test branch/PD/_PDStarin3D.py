@@ -4,14 +4,17 @@ created at 2024-06-24 by hsy
 参考"_PDStrain.py"更改的三维版本,其中`strain_weight`和`volume_weight`和
 之前的文件都不同
 """
-
+import os.path
 import time
+import cv2
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cuda, device_memory_GB=6.0, default_fp=ti.f64, debug=True)
 import numpy as np
 from scipy import sparse
 from GenMsh import generate_msh
+
+output_folder = 'FigureWrite'
 
 
 def cal_tet_volume(vertices):
@@ -82,6 +85,19 @@ def get_tetrahedron_edges(tet_indices):
     return np.array(list(unique_edges))
 
 
+def image_to_video(frame_name_list, video_filename:str='output_video1.mp4'):
+    # 合成视频
+    frame = cv2.imread(frame_name_list[0])
+    height, width, layers = frame.shape
+    video = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'mp4v'), 30, (width, height))
+
+    for frame_file in frame_name_list:
+        frame = cv2.imread(frame_file)
+        video.write(frame)
+
+    video.release()
+
+
 @ti.data_oriented
 class SoftObject:
     def __init__(self, shape, seed_size, mesh_file):
@@ -92,15 +108,16 @@ class SoftObject:
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e4
         self.solve_iteration = 10
-        self.E, self.nu = 5.e1, 0.45
+        self.E, self.nu = 5.e1, 0.4
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, element_np, volume_np = self.load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        # np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('edge_np.csv', self.edge_np, fmt='%d', delimiter=',')
+        # np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -108,7 +125,7 @@ class SoftObject:
 
         # node_pos: 3D position of each node in time step
         self.node_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_init_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        self.node_init_pos = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
         # For local solver
         self.node_pos_new = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
@@ -137,9 +154,10 @@ class SoftObject:
         self.A_poistional = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim, self.PARTICLE_NUM*self.dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim)
 
+        self.fix_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        self.bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
         self.fix_particle_list = self.fix_particle_No()
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
-
         self.construct_mass()
         self.construct_B()
         self.construct_weight()
@@ -166,34 +184,34 @@ class SoftObject:
         return nodes_array, elements_array, np.array(volumes_list)
 
 
+    @ti.kernel
+    def cal_fix_constraint(self, L: float, H: float, W: float, seed_size: float):
+        EPS = seed_size / 3
+        for idx in range(self.PARTICLE_NUM):
+            x_temp = self.node_init_pos[idx].x
+            y_temp = self.node_init_pos[idx].y
+            z_temp = self.node_init_pos[idx].z  # 3D dimension
+            # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
+            fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
+            self.fix_flag[idx] = fix_flag_temp
+
+
     def fix_particle_No(self):
         """
         Find the particle No. of fix constraint
         """
-        fix_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
+        # fix_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
         L = self.shape[0]
         H = self.shape[1]
         W = self.shape[2]
         seed_size = self.seed_size
 
-        @ti.kernel
-        def cal_fix_constraint(L: float, H:float, W: float, seed_size: float):
-            EPS = seed_size / 3
-            for idx in range(self.PARTICLE_NUM):
-                x_temp = self.node_init_pos[idx].x
-                y_temp = self.node_init_pos[idx].y
-                z_temp = self.node_init_pos[idx].z  # 3D dimension
-                # flag_temp = (x_temp > L - EPS or x_temp < 0. + EPS) and (z_temp > W/2 - EPS or z_temp < -W/2 + EPS)
-                fix_flag_temp = (x_temp < 0. + EPS)# or (z_temp > W/2 - EPS)
-                fix_flag[idx] = fix_flag_temp
-
-        cal_fix_constraint(L, H, W, seed_size)
+        self.cal_fix_constraint(L, H, W, seed_size)
         fix_particles_set = set()
         for i in range(self.PARTICLE_NUM):
-            if fix_flag[i]:
+            if self.fix_flag[i]:
                 fix_particles_set.add(i)
         fix_particles_list = list(fix_particles_set)
-
         return fix_particles_list
 
 
@@ -381,26 +399,38 @@ class SoftObject:
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
 
-    
+
+    @ti.kernel
+    def cal_bottom_flag(self, particle_num:int, seed_size:float):
+        for q_idx in range(particle_num):
+            if self.node_init_pos[q_idx].y < 0. + seed_size/3:
+                self.bottom_flag[q_idx] = True
+
+
     def extract_bottom_particles(self):
-        bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-
-        @ti.kernel
-        def cal_bottom_glag(particle_num:float, seed_size:float):
-            for q_idx in range(particle_num):
-                if self.node_pos[q_idx].y < 0. + seed_size/3:
-                    bottom_flag[q_idx] = True
-
-        cal_bottom_glag(self.PARTICLE_NUM, self.seed_size)
+        self.cal_bottom_flag(self.PARTICLE_NUM, self.seed_size)
         bottom_particles_set = set()
         for i in range(self.PARTICLE_NUM):
-            if bottom_flag[i]:
+            if self.bottom_flag[i]:
                 bottom_particles_set.add(i)
         bottom_particles_list = list(bottom_particles_set)
         bottom_num = len(bottom_particles_list)
 
         return bottom_particles_list, bottom_num
-        
+
+
+    def extract_edges_nodes(self, edge_np, node_list:list):
+        node_set = set(node_list)
+        result_edge = []
+
+        for edge_idx in range(self.EDGE_NUM):
+            if edge_np[edge_idx][0] in node_set and edge_np[edge_idx][1] in node_set:
+                result_edge.append(edge_np[edge_idx])
+
+        result_edge_np = np.array(result_edge)
+
+        return result_edge_np
+
 
     def gui_set(self, pos, target, FOV=60):
         # init the window, canvas, scene and camerea
@@ -431,10 +461,11 @@ class SoftObject:
         """
         Define the data for GGUI
         """
-        # self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
-        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.BOTTOM_NUM)
-        self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
-        self.edge_show.from_numpy(self.edge_np)
+        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
+        self.node_bottom_show = ti.Vector.field(3, dtype=ti.f32, shape=self.BOTTOM_NUM)
+        edge_show_np = self.extract_edges_nodes(self.edge_np, self.bottom_particles_list)
+        self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=edge_show_np.shape[0])
+        self.edge_show.from_numpy(edge_show_np.astype(np.int32))
 
 
     def gui_show(self, window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
@@ -447,18 +478,25 @@ class SoftObject:
         scene.ambient_light((0.8, 0.8, 0.8))
         # the conversion of object particles, etc. the ggui of the taichi only support float32
         # 只取了最下部的粒子进行展示
-        self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32)[self.bottom_particles_list])
+        node_np = self.node_pos.to_numpy()
+        node_bottom_np = node_np[self.bottom_particles_list]
+        self.node_show.from_numpy(node_np.astype(np.float32))
+        self.node_bottom_show.from_numpy(node_bottom_np.astype(np.float32))
         # self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
 
-        scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
-        # scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
-        #             vertex_count=0)
+        scene.particles(self.node_bottom_show, radius=0.001, color=(0., 0., 0.))
+        scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.), index_offset=0)
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
         if WRITE_FLAG is True:
-            window.save_image(f'FigureWrite/{itr_num}.png')
+            file_name = os.path.join(output_folder, f'frame_{itr_num}.png')
+            window.save_image(file_name)
+        else:
+            file_name = None
         window.show()
+
+        return file_name
 
     
     def preset_gui(self, camera_pos:list, camera_target:list):
@@ -475,12 +513,13 @@ class SoftObject:
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
             if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
-                self.node_vel[i].x = 5.
+                self.node_vel[i].x = 25.
             else:
                 self.node_vel[i].x = 0.
 
 
     def substep(self, step_num):
+        t_start = time.time()
         self.construct_sn()
         self.warm_start()
         # Local sovle needs iteration
@@ -495,21 +534,25 @@ class SoftObject:
         # np.savetxt(f'DataWrite/rhs_{step_num}.csv', rhs_np, fmt='%f', delimiter=',')
         # np.savetxt(f'DataWrite/pos_{step_num}.csv', self.node_pos.to_numpy(), fmt='%f', delimiter=',')
         # np.savetxt(f'DataWrite/vel_{step_num}.csv', self.node_vel.to_numpy(), fmt='%f', delimiter=',')
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
+        t_end = time.time()
+        # print(f'Iteration {step_num} Time: {t_end - t_start:.5f}')
+        path = self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=False, WRITE_FLAG=False,
                       itr_num=step_num)
+
+        return path, t_end - t_start
 
 
 def main():
     cube_shape = [0.1, 0.02, 0.1]
+    mesh_size = 0.005
     mesh_file = 'Mesh/cube.msh'
-    generate_msh(cube_shape, 0.01, mesh_file)
+    generate_msh(cube_shape, mesh_size, mesh_file)
     class MyObect(SoftObject):
         def __init__(self, shape, seed_size, file=mesh_file):
             super().__init__(shape, seed_size, file)
 
-    soft_obj = MyObect(shape=cube_shape, seed_size=0.01)
-    soft_obj.preset_gui([0.1, 0.2, 0.], [0.1, 0., 0.])
-
+    soft_obj = MyObect(shape=cube_shape, seed_size=mesh_size)
+    soft_obj.preset_gui([0.1, 0.2, 0.05], [0.1, 0., 0.05])
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
@@ -518,9 +561,18 @@ def main():
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
     # np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
 
-    for i in range(500):
-        soft_obj.substep(i)
+    frame_name_list = []
+    time_list = []
+    for i in range(150):
+        frame_name, t_tmp = soft_obj.substep(i)
+        frame_name_list.append(frame_name)
+        time_list.append(t_tmp)
+        # print(f'Time: {t_end - t_start:.5f}')
         # time.sleep(0.05)
+
+    np.savetxt('time_consume.csv', np.array(time_list), fmt='%f', delimiter=',')
+    if frame_name is not None:
+        image_to_video(frame_name_list, 'FigureWrite/output_video.mp4')
 
 if __name__ == '__main__':
     main()

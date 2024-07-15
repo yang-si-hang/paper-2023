@@ -1,6 +1,6 @@
 """
-DiffPD的3D版本
-created at 2024-07-01 by hsy
+DiffPD的3D版本,控制表面上的图案变形到期望的图案
+created at 2024-07-15 by hsy
 """
 
 import taichi as ti
