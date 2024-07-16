@@ -6,7 +6,9 @@ created at 2024-07-15 by hsy.
 
 import time
 import cv2
+from typing import Tuple 
 import numpy as np
+import numpy.typing as npt
 import pyzed.sl as sl
 from scipy.spatial.distance import mahalanobis
 from scipy.stats import chi2
@@ -50,7 +52,11 @@ def get_image(zed, image):
             return color_image
 
 
-def init_region_range(zed_id, image_init, red_range):
+def init_region_range(zed_id, image_init:npt.NDArray[np.uint8], red_range:list)->npt.NDArray[np.float64]:
+    """
+    获得初始图像上的点的位置
+    :return: 初始点位置的均值
+    """
     image_bgra = get_image(zed_id, image_init)
     mask = np.zeros(image_bgra.shape[:2], dtype=np.uint8)
     mask[:, :] = 255
@@ -59,9 +65,9 @@ def init_region_range(zed_id, image_init, red_range):
     for i in range(itr_num):
         image_bgra = get_image(zed_id, image_init)
         edges = image_process(image_bgra, red_range, mask)
-        dot, area, ellipse = ellipse_fitting(edges)
+        dots, area, ellipse = ellipse_fitting(edges)
         # print('Dot coordinates:', dot, area)
-        dots_list.append(dot)
+        dots_list += dots
 
     dots_array = np.array(dots_list)
 
@@ -110,8 +116,13 @@ def get_mask_region(init_pos, masked_region, size:int=50):
     return masked_region
 
 
-# @profile
-def image_process(image_bgra, color_range, masekd_region):
+def image_process(image_bgra:npt.NDArray, color_range:list, masekd_region:npt.NDArray):
+    """
+    处理图像，得到待跟踪黑点的外轮廓
+    :param image_bgra: 输入的图像(W, H, 4)
+    :param color_range: 红色范围[array*4]
+    :param masekd_region: 感兴趣区域(W, H)
+    """
     # Convert color image to OpenCV format
     color_image_rgb = cv2.cvtColor(image_bgra, cv2.COLOR_BGRA2RGB)
     color_image_bgr = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2BGR)
@@ -159,7 +170,8 @@ def image_process(image_bgra, color_range, masekd_region):
     return edges
 
 
-def ellipse_fitting(edges):
+def ellipse_fitting(edges:npt.NDArray[np.uint8])->Tuple[list, list, list]:
+    points_num:int = 2
     dot_coordinates = []
     areas = []
     filtered_contours = []
@@ -178,26 +190,35 @@ def ellipse_fitting(edges):
                 areas.append(area)
                 filtered_contours.append(contour)
 
-    # 找到area中最大元素的索引,使用该索引找到dot_coordinates中对应的元素
     if len(areas) == 0:                                 # 没有找到edge轮廓,canny边缘检测失败(光源掉了)
         return None, None, None
-    ellipse_area = max(areas)
-    if ellipse_area > 50:                               # 找错轮廓,面积太大
+    areas_np = np.array(areas)
+    # 过滤出面积不大于50的边界及其索引
+    filtered_indices = np.where(areas_np <= 50)[0]      # type: npt.NDArray[np.int64]
+    if len(filtered_indices) == 0:                      # 没有找到符合条件的edge轮廓
         return None, None, None
-    max_index = areas.index(ellipse_area)
-    if len(filtered_contours[max_index]) < 5:           # 椭圆拟合需要至少5个点
-        return None, None, None
-    # print(f'Processing! Contours: {len(filtered_contours[max_index])}, Filtered Contours: {filtered_contours}')
+    filtered_areas = areas_np[filtered_indices]
+    
+    # 对过滤后的areas_np进行排序，并取出最大的point_num个元素及其索引
+    if len(filtered_indices) < points_num:
+        sorted_indices = np.argsort(filtered_areas)
+    sorted_indices = np.argsort(filtered_areas)[-points_num:]
+    largest_n_elements = filtered_areas[sorted_indices]
+    original_indices = filtered_indices[sorted_indices]
 
-    # 拟合椭圆
-    ellipse = cv2.fitEllipse(filtered_contours[max_index])
-    (x, y), (MA, ma), angle = ellipse
-    # 圆心
-    center = (x, y)
-    ellipse_area = MA * ma * np.pi / 4
-
-    # return [dot_coordinates[max_index]], [areas[max_index]]
-    return center, ellipse_area, ellipse
+    centers = []
+    ellipse_areas = []
+    ellipses = []
+    for dots_idx in original_indices:
+        if len(filtered_contours[dots_idx]) < 5:             # 椭圆拟合需要至少5个点
+            continue
+        ellipses_tmp = cv2.fitEllipse(filtered_contours[dots_idx])
+        (x, y), (MA, ma), angle = ellipses_tmp
+        ellipses.append(ellipses_tmp)
+        # 圆心
+        centers.append([x, y])
+        ellipse_areas.append(MA * ma * np.pi / 4)
+    return centers, ellipse_areas, ellipses
 
 
 def image_show(image_bgr, ellipse, window_name='ZED Camera Image'):
@@ -285,6 +306,7 @@ def main():
     zed_id, image_init, window_name = init_camera()
     dot_init = init_region_range(zed_id, image_init, red_range)
     print(f'Init position of dot: {dot_init}')
+    exit(0)
     color_image_bgra = get_image(zed_id, image_init)
     height, width = color_image_bgra.shape[:2]
     masked_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
