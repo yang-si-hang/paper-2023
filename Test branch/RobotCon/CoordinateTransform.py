@@ -4,17 +4,19 @@
 
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial import Delaunay
 
-def pixel_to_camera_coordinates(pixel, K_inv):
+
+def pixel_to_camera_coordinates(pixel:npt.NDArray, K_inv):
     """
     将图像坐标转换为相机坐标系中的射线
     """
-    pixel_homogeneous = np.append(pixel, 1.0)
+    pixel_homogeneous = np.append(pixel, 1.0)           # pixel shape: (2, )
     camera_ray = K_inv @ pixel_homogeneous
     return camera_ray
 
 
-def line_plane_intersection(line_dir, plane_normal, plane_point):
+def line_plane_intersection(line_dir, plane_normal, plane_point)->npt.NDArray:
     """
     计算直线与平面的交点
     """
@@ -24,21 +26,24 @@ def line_plane_intersection(line_dir, plane_normal, plane_point):
     return intersection_point
 
 
-def dot_in_soft(dot_pixel, trans_soft, intrinsic:npt.NDArray):
+def dot_in_soft(dots_pixel, trans_soft:npt.NDArray, intrinsic:npt.NDArray)->npt.NDArray:
     """
-    将标记点的像素坐标转换到软体坐标系
+    将标记点的像素坐标转换到软体的二维坐标系
     :return:
     """
     intrisic_inv = np.linalg.inv(intrinsic)
-    dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
-
     plane_normal = trans_soft[:3, 2]            # Z轴方向
     plane_point = trans_soft[:3, 3]             # 变换矩阵的平移部分
 
-    dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
-    dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
+    dots_soft_list = []
+    for dot_pixel in dots_pixel:
+        dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
+        dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
+        dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
+    
+    dots_soft_list.append(dot_soft[:2])         # shape: (POINTS_NUM, 2)
 
-    return dot_soft[0:2]
+    return np.array(dots_soft_list)
 
 
 def dot_in_pixel(dot_soft, trans_soft, intrinsic):
@@ -71,7 +76,7 @@ def feature_barycentric_coordinates(p, mesh_nodes):
     return np.array([u, v, w])
 
 
-def find_element(tri, dot_pos):
+def find_element(tri:Delaunay, dot_pos):
     """
     Find the element which contains the dot
     :param tri:
