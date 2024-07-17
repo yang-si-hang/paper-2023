@@ -1,6 +1,7 @@
 """
 This code for detecting black dots on red soft object.
 Filting red component --> Canny edge detection --> Find contours.
+多标记点检测不需要标记点周围的mask区域
 created at 2024-07-15 by hsy.
 """
 
@@ -74,11 +75,13 @@ def init_region_range(zed_id, image_init:npt.NDArray[np.uint8], red_range:list)-
     :return: 初始点位置的均值
     """
     image_bgra = get_image(zed_id, image_init)
+    mask = np.zeros(image_bgra.shape[:2], dtype=np.uint8)
+    mask[:, :] = 255
     itr_num = 50
     dots_list = []
     for i in range(itr_num):
         image_bgra = get_image(zed_id, image_init)
-        edges = image_process(image_bgra, red_range)
+        edges = image_process(image_bgra, red_range, mask)
         dots, area, ellipse = ellipse_fitting(edges)
         if dots is None:
             # print('No dots detected!')
@@ -129,7 +132,7 @@ def get_mask_region(init_pos:npt.NDArray[np.float64], shape:List[int], size:int=
     return new_mask
 
 
-def image_process(image_bgra:npt.NDArray, color_range:list):
+def image_process(image_bgra:npt.NDArray, color_range:list, masekd_region:npt.NDArray):
     """
     处理图像，得到待跟踪黑点的外轮廓
     :param image_bgra: 输入的图像(W, H, 4)
@@ -159,7 +162,9 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
     # cv2.imwrite('closed_mask.png', closed_mask)
 
     # Apply the mask to the original image
-    masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=closed_mask)
+    # 将两个mask进行按位与操作
+    combined_mask = cv2.bitwise_and(closed_mask, masekd_region)
+    masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=combined_mask)
     # cv2.imwrite('masked_image.png', masked_image)
 
     # Convert the image to grayscale
@@ -174,7 +179,7 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
 
     # 腐蚀变形体边界去除外轮廓
     kernel = np.ones((9, 9), np.uint8)
-    closed_mask_reduced = cv2.erode(closed_mask, kernel, iterations=1)
+    closed_mask_reduced = cv2.erode(combined_mask, kernel, iterations=1)
     edges = cv2.bitwise_and(edges, closed_mask_reduced)
     # cv2.imwrite('edges_erode.png', edges)
 
@@ -317,6 +322,9 @@ def main():
     for idx, dot in enumerate(dots_init):
         kalmans[idx].statePre = np.array([[dot[0]], [dot[1]], [0], [0]], dtype=np.float32)
         kalmans[idx].statePost = np.array([[dot[0]], [dot[1]], [0], [0]], dtype=np.float32)
+    img_height, img_width = color_image_bgra.shape[:2]
+    masked_region = np.zeros(color_image_bgra.shape[:2], dtype=np.uint8)
+    masked_region = get_mask_region(dots_init, [img_height, img_width], 60)
     # masked_region = np.ones(color_image_bgra.shape[:2], dtype=np.uint8) * 255
 
     # old_gray = cv2.cvtColor(color_image_bgra, cv2.COLOR_BGRA2GRAY)
@@ -356,10 +364,12 @@ def main():
             processed_dots = kalman_process(kalmans, dots_now)
 
             old_gray = image_gray.copy()
-            edges = image_process(color_image_bgra, red_range)
+            edges = image_process(color_image_bgra, red_range, masked_region)
             detected_dots, areas, ellipse = ellipse_fitting(edges)
             detected_dots_np = np.array(detected_dots, dtype=np.float32)
             print(f'Detected dots: {detected_dots}')
+
+            masked_region = get_mask_region(processed_dots, [img_height, img_width], 60)
 
             for processed_dot in processed_dots:
                 cv2.circle(color_image_bgra, (int(processed_dot[0]), int(processed_dot[1])), 5, (0, 255, 0), 1)
