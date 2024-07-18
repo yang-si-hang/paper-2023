@@ -13,7 +13,7 @@ def pixel_to_camera_coordinates(pixel:npt.NDArray, K_inv):
     """
     pixel_homogeneous = np.append(pixel, 1.0)           # pixel shape: (2, )
     camera_ray = K_inv @ pixel_homogeneous
-    return camera_ray
+    return camera_ray                                   # camera_ray shape: (3, )
 
 
 def line_plane_intersection(line_dir, plane_normal, plane_point)->npt.NDArray:
@@ -26,7 +26,7 @@ def line_plane_intersection(line_dir, plane_normal, plane_point)->npt.NDArray:
     return intersection_point
 
 
-def dot_in_soft(dots_pixel, trans_soft:npt.NDArray, intrinsic:npt.NDArray)->npt.NDArray:
+def dot_in_soft(dots_pixel:npt.NDArray, trans_soft:npt.NDArray, intrinsic:npt.NDArray)->npt.NDArray:
     """
     将标记点的像素坐标转换到软体的二维坐标系
     :return:
@@ -36,7 +36,7 @@ def dot_in_soft(dots_pixel, trans_soft:npt.NDArray, intrinsic:npt.NDArray)->npt.
     plane_point = trans_soft[:3, 3]             # 变换矩阵的平移部分
 
     dots_soft_list = []
-    for dot_pixel in dots_pixel:
+    for dot_pixel in dots_pixel:                # dot_pixel shape: (POINTS_NUM, 2)
         dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
         dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
         dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
@@ -56,14 +56,14 @@ def dot_in_pixel(dot_soft, trans_soft, intrinsic):
     return dot_pixel[:2] / dot_pixel[2]
 
 
-def feature_barycentric_coordinates(p, mesh_nodes):
+def feature_barycentric_coordinates(p, mesh_nodes)->npt.NDArray[np.float64]:
     """
     Compute the barycentric coordinates of a point p with respect to the triangle p0, p1, p2
     """
     p0, p1, p2 = mesh_nodes
     v0 = p1 - p0
     v1 = p2 - p0
-    v2 = p - p0
+    v2 = p - p0                 # p shape: (2, )
     d00 = np.dot(v0, v0)
     d01 = np.dot(v0, v1)
     d11 = np.dot(v1, v1)
@@ -88,6 +88,6 @@ def find_element(tri:Delaunay, dot_pos):
 
     if simplex != -1:
         # 返回包含点的三角形的顶点索引
-        return tri.simplices[simplex]
+        return tri.simplices[simplex]           # shape: (3, )
     else:
         return None

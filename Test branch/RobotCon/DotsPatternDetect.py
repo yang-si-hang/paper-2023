@@ -68,7 +68,7 @@ def bgr2gray(image_rgb:npt.NDArray[np.uint8], weights:List[float])->npt.NDArray[
     return image_gray.astype(np.uint8)
 
 
-def init_region_range(zed_id, image_init:npt.NDArray[np.uint8], red_range:list)->npt.NDArray[np.float32]:
+def init_region_range(zed_id, image_init, red_range:list)->npt.NDArray[np.float32]:
     """
     获得初始图像上的点的位置
     :return: 初始点位置的均值
@@ -263,22 +263,46 @@ def kalman_filter_init():
                                            [0, 1]], dtype=np.float32) * 0.1  # 根据实际情况调整
 
     return kalman
-    
 
-def kalman_process(kalmans:List[cv2.KalmanFilter], dots_now:list)->list:
-    processed_dots = []
+
+def kalman_predict(kalmans:List[cv2.KalmanFilter]):
+    # 只做预测，statepre会变
+    dots_pred = np.zeros((POINTS_NUM, 2))
+    for idx, kalman in enumerate(kalmans):
+        kalman_pred = kalman.predict()  # shape:4*1
+        dots_pred[idx, :] = kalman_pred[:2].flatten()
+
+    return dots_pred
+
+
+def kalman_process(kalmans:List[cv2.KalmanFilter], dots_now:list)->npt.NDArray:
+    # match的点用correct，没有match的点用predict
+    processed_dots_np = np.zeros((POINTS_NUM, 2), dtype=np.float32)
     for idx, (kalman, dot_now) in enumerate(zip(kalmans, dots_now)):
         if dot_now is not None:
             measurement = np.array([[dot_now[0]],
                                     [dot_now[1]]])
             correct = kalman.correct(measurement)
             corrected_x, corrected_y = correct[0][0], correct[1][0]
-            processed_dots.append([corrected_x, corrected_y])
+            processed_dots_np[idx, :] = corrected_x, corrected_y
         else:
             predicted_x, predicted_y = kalman.statePre[0][0], kalman.statePre[1][0]
-            processed_dots.append([predicted_x, predicted_y])
+            processed_dots_np[idx, :] = predicted_x, predicted_y
     
-    return processed_dots           # shape:POINTS_NUM*2
+    return processed_dots_np           # shape:POINTS_NUM*2
+
+
+def match_kalman(dots_new_matched, dots_pred, dots_now):
+    for dot_new_matched in dots_new_matched:
+        # 计算点的距离
+        distances = np.linalg.norm(dots_pred - dot_new_matched, axis=1)
+        if min(distances) > 20:  # 如果距离太远，不更新
+            continue
+        # 找到距离最小的点
+        min_idx = np.argmin(distances)
+        dots_now[min_idx] = dot_new_matched
+
+    return dots_now
 
 
 def dot_filter(dots, area):
@@ -299,8 +323,8 @@ def main():
     upper_red_2 = np.array([180, 255, 255])
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
     
-    cv2.namedWindow('Canny', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Canny', 1080, 720)
+    # cv2.namedWindow('Canny', cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow('Canny', 1080, 720)
 
     kalman = kalman_filter_init()
     kalmans = [kalman_filter_init() for _ in range(POINTS_NUM)]
@@ -328,11 +352,7 @@ def main():
             # image_gray = cv2.cvtColor(color_image_bgra, cv2.COLOR_BGRA2GRAY)
             image_gray = bgr2gray(color_image_bgra, [0.2, 0.2, 0.6])
             dots_now = [None] * POINTS_NUM
-
-            dots_pred = np.zeros((POINTS_NUM, 2))
-            for idx, kalman in enumerate(kalmans):
-                kalman_pred = kalman.predict()          # shape:4*1
-                dots_pred[idx, :] = kalman_pred[:2].flatten()
+            dots_pred = kalman_predict(kalmans)
 
             if not np.isnan(detected_dots_np).any():
                 dots_new, st, err = cv2.calcOpticalFlowPyrLK(old_gray, image_gray, detected_dots_np, None, **lk_params)
@@ -340,32 +360,26 @@ def main():
                 
                 # 光流匹配成功的特征点
                 dots_new_matched = dots_new[st == 1]
-                print(f'New dots matched: {dots_new_matched}')
+                # print(f'New dots matched: {dots_new_matched}')
 
-                for dot_new_matched in dots_new_matched:
-                    # 计算点的距离
-                    distances = np.linalg.norm(dots_pred - dot_new_matched, axis=1)
-                    if min(distances) > 20:  # 如果距离太远，不更新
-                        continue
-                    # 找到距离最小的点
-                    min_idx = np.argmin(distances)
-                    dots_now[min_idx] = dot_new_matched
-                print(f'Now dots: {dots_now}')
+                dots_now = match_kalman(dots_new_matched, dots_pred, dots_now)
+                # print(f'Now dots: {dots_now}')
 
             # optical flow & kalman filter
             processed_dots = kalman_process(kalmans, dots_now)
+            print(f'Processed dots: {processed_dots.tolist()}')
 
             old_gray = image_gray.copy()
             edges = image_process(color_image_bgra, red_range)
             detected_dots, areas, ellipse = ellipse_fitting(edges)
             detected_dots_np = np.array(detected_dots, dtype=np.float32)
-            print(f'Detected dots: {detected_dots}')
+            # print(f'Detected dots: {detected_dots}')
 
             for processed_dot in processed_dots:
                 cv2.circle(color_image_bgra, (int(processed_dot[0]), int(processed_dot[1])), 5, (0, 255, 0), 1)
 
             cv2.imshow(window_name, color_image_bgra)
-            cv2.imshow('Canny', edges)
+            # cv2.imshow('Canny', edges)
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):

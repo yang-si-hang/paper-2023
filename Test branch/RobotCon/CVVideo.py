@@ -6,7 +6,7 @@
 import os
 import cv2
 
-def image_save(image, i, frame_name_list, output_folder):
+def image_save(image, i, frame_name_list, output_folder:str):
     # 保存当前帧为图像文件
     frame_filename = os.path.join(output_folder, f'frame_{i:04d}.png')
     cv2.imwrite(frame_filename, image)
@@ -14,7 +14,7 @@ def image_save(image, i, frame_name_list, output_folder):
     return  frame_name_list
 
 
-def image_to_video(frame_name_list, video_filename:str='output_video1.mp4'):
+def image_to_video(frame_name_list, video_filename:str='output_video.mp4'):
     # 合成视频
     frame = cv2.imread(frame_name_list[0])
     height, width, layers = frame.shape
