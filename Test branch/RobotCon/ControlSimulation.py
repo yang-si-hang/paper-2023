@@ -33,7 +33,7 @@ class SoftObject:
 
         node_np, edge_np, element_np, tri = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('Mesh/node.csv', node_np, fmt='%f', delimiter=',')
         # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
         self.edge_np = edge_np
         self.tri = tri

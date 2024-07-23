@@ -4,6 +4,8 @@ Obtain the transformation matrix from the camera coordinate system to the chess 
 
 import cv2
 import numpy as np
+import numpy.typing as npt
+from typing import Tuple
 import pyzed.sl as sl
 
 
@@ -57,8 +59,9 @@ def get_camera_intrinsic():
     return camera_matrix, dist_coeffs, image_cv
 
 
-def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist):
-    # 世界坐标系中的棋盘格点, X向右，Y向下，Z向里
+def get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)\
+        ->Tuple[npt.NDArray, npt.NDArray[float], bool, npt.NDArray]:
+    # 世界坐标系中的棋盘格点, X向右，Y向下，Z向里，必须与corner的像素顺序对应
     objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]].T.reshape(-1, 2)
     objp *= square_size
@@ -106,6 +109,13 @@ def main():
 
     # 显示图像并标记角点
     cv2.drawChessboardCorners(image, chessboard_size, corner_refined, ret)
+    cv2.circle(image, tuple(corner_refined[0].ravel().astype(int)), 10, (255, 255, 255), -1)
+    cv2.arrowedLine(image, tuple(corner_refined[0].ravel().astype(int)), tuple(corner_refined[1].ravel().astype(int)),
+                    (255, 0, 0), 2)
+    cv2.arrowedLine(image, tuple(corner_refined[0].ravel().astype(int)), tuple(corner_refined[chessboard_size[0]].ravel().astype(int)),
+                    (0, 255, 0), 2)
+    cv2.putText(image, 'X', tuple(corner_refined[1].ravel().astype(int)+[0, 30]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+    cv2.putText(image, 'Y', tuple(corner_refined[chessboard_size[0]].ravel().astype(int)+[30, 0]), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
     cv2.imshow('Chessboard', image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

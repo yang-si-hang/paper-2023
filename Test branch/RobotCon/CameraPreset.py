@@ -2,7 +2,7 @@
 获得相机的初始参数,以及软体的坐标系
 棋盘格摆放的位置需要与软体坐标系的原点只有X方向上的偏移，参考'Data/zed_chess_preset.png'
 """
-
+import cv2
 import numpy as np
 from CameraChess import get_camera_intrinsic, get_border
 
@@ -15,7 +15,11 @@ def init_param():
     chessboard_size, square_size = (11, 8), 0.015
     intrisic_matrix, dist, image_chess = get_camera_intrinsic()
 
-    *_, transformation_matrix = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
+    *_, corner_refined, ret, transformation_matrix = get_border(chessboard_size, square_size, image_chess, intrisic_matrix, dist)
+
+    cv2.drawChessboardCorners(image_chess, chessboard_size, corner_refined, ret)
+    cv2.circle(image_chess, tuple(corner_refined[0].ravel().astype(int)), 10, (255, 255, 255), -1)
+    cv2.imwrite('data/zed_chess_preset.png', image_chess)
 
     # 将棋盘格坐标系转换到软体坐标系
     transformation_chess_soft = np.array([[1., 0., 0., -0.025],

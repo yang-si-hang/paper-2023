@@ -40,8 +40,8 @@ def dot_in_soft(dots_pixel:npt.NDArray, trans_soft:npt.NDArray, intrinsic:npt.ND
         dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
         dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
         dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
-    
-    dots_soft_list.append(dot_soft[:2])         # shape: (POINTS_NUM, 2)
+
+        dots_soft_list.append(dot_soft[:2])         # shape: (POINTS_NUM, 2)
 
     return np.array(dots_soft_list)
 
@@ -81,7 +81,7 @@ def find_element(tri:Delaunay, dot_pos):
     Find the element which contains the dot
     :param tri:
     :param dot_pos:
-    :return: element index
+    :return: element node index
     """
     # 查找包含点的三角形
     simplex = tri.find_simplex(dot_pos)

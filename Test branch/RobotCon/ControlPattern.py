@@ -8,6 +8,7 @@ import time
 import os
 import cv2
 import numpy as np
+from scipy.spatial import KDTree
 from ControlSimulation import *
 from RobAction import URROb
 from DotsPatternDetect import *
@@ -19,7 +20,7 @@ if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
 # pattern中有几个点，重新赋值
-POINTS_NUM:int = 2
+POINTS_NUM:int = 4
 
 # Define the lower and upper bounds for the red color in HSV
 lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
@@ -63,7 +64,7 @@ def pattern_detect_in_actionloop(zed_id, image_init, old_gray, detected_dots_old
         dots_new_matched = dots_new[st == 1]
         # print(f'New dots matched: {dots_new_matched}')
         dots_now = match_kalman(dots_new_matched, dots_pred, dots_now)
-        print(f'Now dots: {dots_now}')
+        # print(f'Now dots: {dots_now.tolist()}')
 
     # optical flow & kalman filter
     processed_dots = kalman_process(kalmans, dots_now)
@@ -76,11 +77,13 @@ class MyObject(SoftObject):
     def __init__(self, shape, seed_size, marker_pos_init, contact_idx: list):
         super().__init__(shape, seed_size, contact_idx)
         self.dt = 1. / 100
-        self.marker_elements = ti.field(dtype=ti.i32, shape=POINTS_NUM)
+        self.loss = np.zeros(POINTS_NUM)
+        self.marker_elements = ti.Vector.field(3, dtype=ti.i32, shape=POINTS_NUM)
         self.barycentrics = ti.Vector.field(3, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
+        self.dot_pixel_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos.from_numpy(marker_pos_init)
         self.dot_pos_init.from_numpy(marker_pos_init)
 
@@ -91,17 +94,27 @@ class MyObject(SoftObject):
         mesh_nodes = self.tri.points
         for i in range(POINTS_NUM):
             element_np = find_element(self.tri, self.dot_pos_init[i])
-            self.marker_elements[i] = element_np
-            self.barycentrics[i] = feature_barycentric_coordinates(self.dot_pos_init[i], mesh_nodes[element_np])
-            print("The dot is in element: ", element_np)
-            print("The barycentric coordinates are: ", self.barycentrics[i])
-        else:
-            print("The dot is not in the mesh object.")
+            if element_np is not None:
+                self.marker_elements[i] = element_np
+                self.barycentrics[i] = feature_barycentric_coordinates(self.dot_pos_init[i], mesh_nodes[element_np])
+                print("The dot is in element: ", element_np)
+                print("The barycentric coordinates are: ", self.barycentrics[i])
+            else:
+                print("The dot is not in the mesh object.")
 
 
     def read_desired_pos(self):
-        data = np.load('data/desired_pos.npy')
-        self.dot_pos_desired.from_numpy(data['desired_pos'])
+        data = np.load('data/desired_pos.npz')
+        pos_desired = data['desired_pos']
+        pixel_desired = data['desired_pixel']
+        tree = KDTree(self.dot_pos_init.to_numpy())
+        _, indices = tree.query(pos_desired)
+        ordered_pos_desired = pos_desired[indices]
+        ordered_pixel_desired = pixel_desired[indices]
+        self.dot_pos_desired.from_numpy(ordered_pos_desired)
+        self.dot_pixel_desired.from_numpy(ordered_pixel_desired)
+        print("The desired position of the dot in soft object: ", self.dot_pos_desired)
+        print('The desired pixel position of the dot in soft object: ', self.dot_pixel_desired)
 
 
     def constrcut_L_model(self):
@@ -130,11 +143,13 @@ class MyObject(SoftObject):
         """
         dim = self.dim
         error = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+        self.dL.fill(0.)
         for marker_i in range(POINTS_NUM):
             barycentric = self.barycentrics[marker_i]
             desired_pos = self.dot_pos_desired[marker_i]
             current_pos = marker_pos_soft[marker_i]
             error[marker_i] = (current_pos - desired_pos).to_numpy()
+            print(f'Soft Coordinate Error： {error[marker_i]}')
             for idx, ele_idx in enumerate(self.marker_elements[marker_i]):
                 self.dL[ele_idx * dim] += 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
                 self.dL[ele_idx * dim + 1] += 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
@@ -190,7 +205,7 @@ class MyObject(SoftObject):
 
 
 def main():
-    obj_shape = [0.1, 0.1]
+    obj_shape = [0.14, 0.14]
     obj_seed_size = 0.01
     learning_rate = 1.e1
 
@@ -212,7 +227,7 @@ def main():
     MyRob.record_variable = ['timestamp', 'actual_TCP_pose', 'actual_TCP_speed']
     MyRob.start_record_data('experiment_data.csv')
 
-    soft_obj = MyObject(obj_shape, obj_seed_size, dots_init, [10])
+    soft_obj = MyObject(obj_shape, obj_seed_size, dot_pos_init, [15])
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
@@ -227,22 +242,29 @@ def main():
     detected_marker_old = dots_init
     try:
         for step in range(200):
+            print(f'Step: {step} ------------------------------------')
             processed_markers, color_image, old_gray = pattern_detect_in_actionloop(camera_id, image_init, old_gray, detected_marker_old)
 
             edges = image_process(color_image, red_range)
             detected_dots, area, ellipse = ellipse_fitting(edges)
             detected_marker_old = np.array(detected_dots, dtype=np.float32).copy()
-            print(f'Detected dots: {detected_dots}')
+            # print(f'Detected dots: {detected_dots}')
+            print(f'Processed markers: {processed_markers.tolist()}')
 
-            for marker in processed_markers:
-                cv2.circle(color_image, (int(marker[0]), int(marker[1])), 2, (255, 0, 0), -1)
+            # for marker in processed_markers:
+            for idx in range(POINTS_NUM):
+                cv2.circle(color_image, (int(processed_markers[idx][0]), int(processed_markers[idx][1])), 6, (0, 255, 0), 1)
+                cv2.circle(color_image, (int(soft_obj.dot_pixel_desired[idx][0]), int(soft_obj.dot_pixel_desired[idx][1])), 4, (255, 0, 0), -1)
 
             cv2.imshow(window_name, color_image)
 
-            frame_name_list = image_save(color_image, step, frame_name_list)
+            frame_name_list = image_save(color_image, step, frame_name_list, output_folder)
 
             marker_pos = dot_in_soft(processed_markers, trans_soft, intrinsic)
-            print(f'Step {step}: The dot coordinates: {marker_pos}')
+            print(f'The dot coordinates: {marker_pos.tolist()}')
+            desired_marker_pos = dot_in_soft(soft_obj.dot_pixel_desired.to_numpy(), trans_soft
+                                             , intrinsic)
+            print(f'The desired dot coordinates: {desired_marker_pos.tolist()}')
 
             soft_obj.substep(1)
             loss_tmp = soft_obj.compute_gradient(marker_pos)
@@ -253,14 +275,14 @@ def main():
             end_movement = action_compress(end_movement_np).tolist()
 
             soft_obj.actuate_action(end_speed_np)
-            print('Loss:', loss_tmp)
+            print('Loss:', np.sum(loss_tmp))
             print(f'The tool movement: {end_movement}')
 
             # 机器人控制
             MyRob.move_add_movel([-end_movement[0], end_movement[1], 0, 0, 0, 0], a=0.1, v=0.1)            # 设置机械臂末端速度
 
             # 写入数据
-            marker_pixel_list.append(processed_markers)
+            marker_pixel_list.append(processed_markers.flatten())
             loss_list.append(loss_tmp)
             rob_movement_list.append(end_movement)
 

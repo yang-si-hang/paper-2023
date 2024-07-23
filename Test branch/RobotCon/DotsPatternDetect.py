@@ -15,7 +15,7 @@ from scipy.stats import chi2
 from sklearn.cluster import KMeans
 
 
-POINTS_NUM:int = 2
+POINTS_NUM:int = 4
 
 
 def init_camera():
@@ -80,6 +80,14 @@ def init_region_range(zed_id, image_init, red_range:list)->npt.NDArray[np.float3
         image_bgra = get_image(zed_id, image_init)
         edges = image_process(image_bgra, red_range)
         dots, area, ellipse = ellipse_fitting(edges)
+
+        # cv2.imshow('Canny', edges)
+        # # 设置按键（例如，按 'c' 继续）
+        # while True:
+        #     key = cv2.waitKey(1) & 0xFF
+        #     if key == ord('c'):
+        #         break
+
         if dots is None:
             # print('No dots detected!')
             continue
@@ -89,11 +97,19 @@ def init_region_range(zed_id, image_init, red_range:list)->npt.NDArray[np.float3
     if not dots_list:
         raise ValueError('Init failed!')
     dots_array = np.array(dots_list)
+    # print(f'Init dots: {dots_array}')
 
     # 使用K-means将点聚类为POINTS_NUM个点
     kmeans = KMeans(n_clusters=POINTS_NUM, n_init='auto', random_state=0).fit(dots_array)
 
     dots_center = kmeans.cluster_centers_
+
+    # 获取每个点到其簇中心的距离平方和
+    sse = kmeans.inertia_/itr_num/POINTS_NUM
+    print(f'Sum of Squared Errors (SSE): {sse}')
+    if sse > 20:
+        pass
+        # raise ValueError('Init failed!')
 
     return dots_center.astype(np.float32)          # shape:POINTS_NUM*2
 
@@ -134,7 +150,7 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
     处理图像，得到待跟踪黑点的外轮廓
     :param image_bgra: 输入的图像(W, H, 4)
     :param color_range: 红色范围[array*4]
-    :param masekd_region: 感兴趣区域(W, H)
+    :return edge: Canny算子得到的边界
     """
     # Convert color image to OpenCV format
     color_image_rgb = cv2.cvtColor(image_bgra, cv2.COLOR_BGRA2RGB)
@@ -163,7 +179,14 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
     # cv2.imwrite('masked_image.png', masked_image)
 
     # Convert the image to grayscale
-    gray = cv2.cvtColor(masked_image, cv2.COLOR_RGB2GRAY)
+    # gray = cv2.cvtColor(masked_image, cv2.COLOR_RGB2GRAY)
+    gray = bgr2gray(masked_image, [0.2, 0.2, 0.6])
+    # cv2.imshow('Gray', gray)
+    # 设置按键（例如，按 'c' 继续）
+    # while True:
+    #     key = cv2.waitKey(1) & 0xFF
+    #     if key == ord('c'):
+    #         break
     # cv2.imwrite('gray.png', gray)
 
     blurred_image = cv2.GaussianBlur(gray, (5, 5), 0)           # 应用高斯模糊，减少图像中的噪声
@@ -271,6 +294,7 @@ def kalman_predict(kalmans:List[cv2.KalmanFilter]):
     for idx, kalman in enumerate(kalmans):
         kalman_pred = kalman.predict()  # shape:4*1
         dots_pred[idx, :] = kalman_pred[:2].flatten()
+        # print(f'Predictor Velocity: {kalman_pred[2:].flatten()}')
 
     return dots_pred
 
@@ -297,6 +321,7 @@ def match_kalman(dots_new_matched, dots_pred, dots_now):
         # 计算点的距离
         distances = np.linalg.norm(dots_pred - dot_new_matched, axis=1)
         if min(distances) > 20:  # 如果距离太远，不更新
+            print('Too far away!')
             continue
         # 找到距离最小的点
         min_idx = np.argmin(distances)
@@ -323,8 +348,11 @@ def main():
     upper_red_2 = np.array([180, 255, 255])
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
     
-    # cv2.namedWindow('Canny', cv2.WINDOW_NORMAL)
-    # cv2.resizeWindow('Canny', 1080, 720)
+    cv2.namedWindow('Canny', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('Canny', 1080, 720)
+
+    # cv2.namedWindow('Gray', cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow('Gray', 1080, 720)
 
     kalman = kalman_filter_init()
     kalmans = [kalman_filter_init() for _ in range(POINTS_NUM)]
@@ -379,7 +407,7 @@ def main():
                 cv2.circle(color_image_bgra, (int(processed_dot[0]), int(processed_dot[1])), 5, (0, 255, 0), 1)
 
             cv2.imshow(window_name, color_image_bgra)
-            # cv2.imshow('Canny', edges)
+            cv2.imshow('Canny', edges)
 
             # Press 'q' to exit the application
             if cv2.waitKey(1) & 0xFF == ord('q'):
