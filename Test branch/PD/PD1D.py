@@ -33,7 +33,7 @@ class PD1D:
         self.radius = radius
         self.dt = 1./100
         self.rho = 1.e3
-        self.E = 1.e5
+        self.E = 1.e6
         self.mu = 0.3
         self.positional_weight = 1.e4
         self.dim = 2
@@ -67,9 +67,9 @@ class PD1D:
         self.stretch_weight = 0.
         self.bend_weight = 0.
 
-        self.A_stretch = ti.Matrix.zero(ti.f64, 2, 4)
+        self.A_stretch = ti.Matrix.zero(ti.f64, 4, 6)
         self.A_bend = ti.Matrix.zero(ti.f64, 4, 4)
-        self.Bp_stretch = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.Bp_stretch = ti.Vector.field(4, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.Bp_bend = ti.Vector.field(4, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM+self.ELEMENT_NUM, self.PARTICLE_NUM+self.ELEMENT_NUM))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM+self.ELEMENT_NUM)
@@ -119,6 +119,8 @@ class PD1D:
             self.A_stretch[d, d] = -1. / self.l
         for d in ti.static(range(dim)):
             self.A_stretch[d, d+2] = 1. / self.l
+        for d in ti.static(range(dim)):
+            self.A_stretch[d+2, d+4] = 1.
 
         for d in ti.static(range(dim+dim)):
             self.A_bend[d, d] = tm.sqrt(2)
@@ -128,18 +130,19 @@ class PD1D:
             idx1, idx2 = self.element[ele_idx]
             idx1_x, idx1_y = idx1*dim, idx1*dim+1
             idx2_x, idx2_y = idx2*dim, idx2*dim+1
-            q_idx_vec= ti.Vector([idx1_x, idx1_y, idx2_x, idx2_y])
+            u_idx_s, u_idx_y = (self.PARTICLE_NUM+ele_idx)*dim, (self.PARTICLE_NUM+ele_idx)*dim+1       # 只取四元数的部分
+            q_idx_vec= ti.Vector([idx1_x, idx1_y, idx2_x, idx2_y, u_idx_s, u_idx_y])
             A_i = self.A_stretch
             ATA = A_i.transpose() @ A_i
-            for A_row_idx, A_col_idx in ti.static(ti.ndrange(4, 4)):
+            for A_row_idx, A_col_idx in ti.static(ti.ndrange(6, 6)):
                 self.lhs[q_idx_vec[A_row_idx], q_idx_vec[A_col_idx]] += self.stretch_weight * ATA[A_row_idx, A_col_idx]
 
         # Bend Constraint
         for angle_idx in ti.static(range(self.ANGLE_NUM)):
             idx1, idx2 = self.PARTICLE_NUM + angle_idx, self.PARTICLE_NUM + angle_idx + 1
-            idx1_x, idx1_y = idx1*dim, idx1*dim+1
-            idx2_x, idx2_y = idx2*dim, idx2*dim+1
-            u_idx_vec= ti.Vector([idx1_x, idx1_y, idx2_x, idx2_y])
+            idx1_s, idx1_y = idx1*dim, idx1*dim+1
+            idx2_s, idx2_y = idx2*dim, idx2*dim+1
+            u_idx_vec= ti.Vector([idx1_s, idx1_y, idx2_s, idx2_y])
             A_i = self.A_bend
             ATA = A_i.transpose() @ A_i
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(4, 4)):
@@ -164,7 +167,7 @@ class PD1D:
 
             self.node_desired_pos[idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[idx]
             rot_matrix = theta2rot_matrix(self.dt * self.contact_ang_vel[idx])
-            self.element_desired_quat[idx] = rot_matrix @ self.element_quat[u_idx]             # 检查矩阵乘法结果
+            self.element_desired_quat[idx] = rot_matrix @ self.element_quat[u_idx]
 
     
     @ti.kernel
@@ -195,8 +198,13 @@ class PD1D:
     @ti.kernel
     def local_solve(self):
         for ele_idx in range(self.ELEMENT_NUM):
-            d3 = self.element_quat[ele_idx]
-            self.Bp_stretch[ele_idx] = d3
+            idx1, idx2 = self.element[ele_idx]
+            distance_vec = (self.node_pos[idx2] - self.node_pos[idx1]).normalized()
+            d3 = distance_vec
+            # 确保element的方向的d3的方向一致,可以拿出来单独作为一个constraint
+            u = distance_vec            
+            self.Bp_stretch[ele_idx] = ti.Vector([d3[0], d3[1], u[0], u[1]])
+
 
         for angle_idx in range(self.ANGLE_NUM):
             idx1, idx2 = self.PARTICLE_NUM + angle_idx, self.PARTICLE_NUM + angle_idx + 1
