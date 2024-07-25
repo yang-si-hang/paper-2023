@@ -40,11 +40,12 @@ def quatmul2d(u1, u2):
 
 
 @ti.func
-def valiquat(u):
+def valiunitquat(u):
     norm = u.norm()
     if ti.abs(norm - 1) > 1e-6:
         print(f'Quaternion is not normalized: {norm}')
-
+    else:
+        print(f'Quaternion is normalized: {norm}')
 
 
 @ti.data_oriented
@@ -86,9 +87,11 @@ class PD1D:
         self.element_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)            # 单位四元数只取实部和虚部的Y轴部分
         self.element_quat_init = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element_quat_new = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.element_angle_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)       # 为了符合四元数乘法,实部为0,虚部为角速度
+        self.element_quat_delta = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # self.element_angle_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)       # 为了符合四元数乘法,实部为0,虚部为角速度
         self.element_sn = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.element_ang_vel_sn = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        # self.element_ang_vel_sn = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.distance_vec = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element.from_numpy(element_np)
         self.element_quat_init.from_numpy(element_quat_np)
         self.element_quat.from_numpy(element_quat_np)
@@ -112,6 +115,8 @@ class PD1D:
         self.contact_num = len(self.contact_particle_list)
         self.contact_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.contact_ang_vel = ti.field(dtype=ti.f64, shape=self.contact_num)         # 逆时针为正
+        self.contact_vel.fill(0.)
+        self.contact_ang_vel.fill(0.)
 
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
@@ -188,10 +193,10 @@ class PD1D:
                 self.lhs[q_idx*dim+d, q_idx*dim+d] += self.positional_weight * A_i_eye[d, d]
 
         for u_idx in ti.static(self.fix_quaternion_list):
-            u_idx += self.PARTICLE_NUM
+            s_idx = u_idx + self.PARTICLE_NUM
             A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
             for d in ti.static(range(self.dim)):
-                self.lhs[u_idx*dim+d, u_idx*dim+d] += self.positional_weight * A_i_eye[d, d]
+                self.lhs[s_idx*dim+d, s_idx*dim+d] += self.positional_weight * A_i_eye[d, d]
 
         
     @ti.kernel
@@ -213,12 +218,14 @@ class PD1D:
 
         for u_idx in range(self.ELEMENT_NUM):
             # 2d的情况
-            self.element_ang_vel_sn[u_idx] = self.element_angle_vel[u_idx]                      # shape: (2, 1)
-            quat_tmp = ti.Vector([0., self.element_ang_vel_sn[u_idx][1]])                       # 只取虚部
-            element_sn_tmp = self.element_quat[u_idx] + self.dt * quatmul2d(self.element_quat[u_idx], quat_tmp) / 2
-            self.element_sn[u_idx] = element_sn_tmp
+            # self.element_ang_vel_sn[u_idx] = self.element_angle_vel[u_idx]                      # shape: (2, 1)
+            # quat_tmp = ti.Vector([0., self.element_ang_vel_sn[u_idx][1]])                       # 只取虚部
+            # element_sn_tmp = self.element_quat[u_idx] + self.dt * quatmul2d(self.element_quat[u_idx], quat_tmp) / 2
+            # valiunitquat(element_sn_tmp)
+            delta_quat = self.element_quat_delta[u_idx]
+            self.element_sn[u_idx] = quatmul2d(self.element_quat[u_idx], delta_quat)            # shape: (2, 1)
 
-        
+
     @ti.kernel
     def warm_start(self):
         for q_idx in range(self.PARTICLE_NUM):
@@ -235,6 +242,7 @@ class PD1D:
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2 = self.element[ele_idx]
             distance_vec = (self.node_pos[idx2] - self.node_pos[idx1]).normalized()
+            self.distance_vec[ele_idx] = distance_vec
             d3 = distance_vec
             # 确保element的方向的d3的方向一致,可以考虑单独作为一个constraint
             u = distance_vec            
@@ -262,10 +270,11 @@ class PD1D:
 
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2 = self.element[ele_idx]
-            q_idx_vec = ti.Vector([idx1*dim, idx1*dim+1, idx2*dim, idx2*dim+1])
+            u_idx = self.PARTICLE_NUM + ele_idx
+            q_idx_vec = ti.Vector([idx1*dim, idx1*dim+1, idx2*dim, idx2*dim+1, u_idx*dim, u_idx*dim+1])
             A_i = self.A_stretch[None]
             AT_Bp_i = self.stretch_weight * A_i.transpose() @ self.Bp_stretch[ele_idx]
-            for d in ti.static(range(4)):
+            for d in ti.static(range(6)):
                 self.rhs[q_idx_vec[d]] += AT_Bp_i[d]
 
         for angle_idx in range(self.ANGLE_NUM):
@@ -281,9 +290,9 @@ class PD1D:
                 self.rhs[q_idx*dim+d] += self.positional_weight * self.node_pos_init[q_idx][d]
 
         for u_idx in ti.static(self.fix_quaternion_list):
-            u_idx += self.PARTICLE_NUM
+            s_idx = u_idx + self.PARTICLE_NUM
             for d in ti.static(range(self.dim)):
-                self.rhs[u_idx*dim+d] += self.positional_weight * self.element_quat_init[u_idx-self.PARTICLE_NUM][d]
+                self.rhs[s_idx*dim+d] += self.positional_weight * self.element_quat_init[u_idx][d]
 
         for idx in ti.static(range(self.contact_num)):
             q_idx = self.contact_particle_list[idx]
@@ -304,7 +313,15 @@ class PD1D:
 
         for u_idx in range(self.ELEMENT_NUM):
             for d in ti.static(range(self.dim)):
-                self.element_quat_new[u_idx][d] = sol[(u_idx+self.PARTICLE_NUM)*self.dim+d]
+                self.element_quat_new[u_idx][d] = sol[(u_idx+self.PARTICLE_NUM)*self.dim+d]    
+
+
+    @ti.kernel
+    def quat_normalize(self):
+        for u_idx in range(self.ELEMENT_NUM):
+            u_tmp = self.element_quat_new[u_idx]
+            u_normalized = u_tmp.normalized()
+            self.element_quat_new[u_idx] = u_normalized
 
     
     @ti.kernel
@@ -315,8 +332,9 @@ class PD1D:
                 self.node_pos[q_idx][d] = self.node_pos_new[q_idx][d]
 
         for u_idx in range(self.ELEMENT_NUM):
-            tmp = quatmul2d(quatconj2d(self.element_quat[u_idx]), self.element_quat_new[u_idx])[0]            # 角速度只能取虚部
-            self.element_angle_vel[u_idx] = 2 * ti.Vector([0, tmp]) / self.dt
+            # tmp = quatmul2d(quatconj2d(self.element_quat[u_idx]), self.element_quat_new[u_idx])[0]            # 角速度只能取虚部
+            # self.element_angle_vel[u_idx] = 2 * ti.Vector([0, tmp]) / self.dt
+            self.element_quat_delta[u_idx] = quatmul2d(quatconj2d(self.element_quat[u_idx]), self.element_quat_new[u_idx])
             self.element_quat[u_idx] = self.element_quat_new[u_idx]
 
 
@@ -400,6 +418,7 @@ class PD1D:
             rhs_np = self.rhs.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
+            self.quat_normalize()
 
         self.update_vel_pos()
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num)
@@ -410,7 +429,7 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObject, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.1)
+    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.05)
     soft_obj.preset_gui(camera_pos=[0.5, 0.9, 0.], camera_target=[0.5, 0., 0.])
 
     soft_obj.precomputation()
@@ -423,8 +442,9 @@ def main():
     for i in range(100):
         soft_obj.substep(i)
     print(f'Node Position: {soft_obj.node_pos.to_numpy()}')
+    print(f'Distance Normalized Vector: {soft_obj.distance_vec.to_numpy()}')
     print(f'Element Quaternion: {soft_obj.element_quat.to_numpy()}')
-    print(f'Quaternions: {np.linalg.norm(soft_obj.element_quat.to_numpy(), axis=1)}')
+    # print(f'Quaternions: {np.linalg.norm(soft_obj.element_quat.to_numpy(), axis=1)}')
 
 
 if __name__ == '__main__':
