@@ -18,7 +18,7 @@ def image_to_video(frame_name_list, video_filename:str='output_video.mp4'):
     # 合成视频
     frame = cv2.imread(frame_name_list[0])
     height, width, layers = frame.shape
-    video = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'mp4v'), 30, (width, height))
+    video = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'mp4v'), 100, (width, height))
 
     for frame_file in frame_name_list:
         frame = cv2.imread(frame_file)

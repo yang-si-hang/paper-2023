@@ -513,7 +513,7 @@ class SoftObject:
     def init_vel(self):
         for i in range(self.PARTICLE_NUM):
             if self.node_init_pos[i].x > self.shape[0] - self.seed_size/3:
-                self.node_vel[i].x = 25.
+                self.node_vel[i].x = 10.
             else:
                 self.node_vel[i].x = 0.
 
@@ -536,7 +536,7 @@ class SoftObject:
         # np.savetxt(f'DataWrite/vel_{step_num}.csv', self.node_vel.to_numpy(), fmt='%f', delimiter=',')
         t_end = time.time()
         # print(f'Iteration {step_num} Time: {t_end - t_start:.5f}')
-        path = self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=False, WRITE_FLAG=False,
+        path = self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False,
                       itr_num=step_num)
 
         return path, t_end - t_start
@@ -544,7 +544,7 @@ class SoftObject:
 
 def main():
     cube_shape = [0.1, 0.02, 0.1]
-    mesh_size = 0.005
+    mesh_size = 0.01
     mesh_file = 'Mesh/cube.msh'
     generate_msh(cube_shape, mesh_size, mesh_file)
     class MyObect(SoftObject):
