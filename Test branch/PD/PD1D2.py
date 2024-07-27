@@ -1,13 +1,16 @@
 """
-使用PD仿真1D的绳变形
+使用PD仿真1D的绳变形,只考虑拉伸和弯曲
 """
 
+import time
 import numpy as np
+from _CVVideo import *
 from scipy import sparse
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.cpu, debug=True)
+ti.init(arch=ti.cpu, debug=True,default_fp=ti.f64)
 
+output_folder = 'FigureWrite'
 
 def generate_geometric(length, particle_num:int):
     node_np = np.zeros((particle_num, 2), dtype=np.float64)
@@ -56,8 +59,9 @@ class PD1D:
         self.dt = 1./100
         self.rho = 1.e3
         self.E = 1.e6
-        self.mu = 0.3
-        self.positional_weight = 1.e4
+        self.mu = 0.4
+        self.positional_node_weight = 1.e5
+        self.positional_element_weight = 1.e5
         self.contact_weight = 0.
         self.dim:int = 2
         self.solve_iteration = 10
@@ -82,6 +86,7 @@ class PD1D:
         self.node_mass = 0.
         self.node_pos_init.from_numpy(node_np)
         self.node_pos.from_numpy(node_np)
+        self.node_vel.fill(0.)
 
         self.element = ti.Vector.field(2, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)            # 单位四元数只取实部和虚部的Y轴部分
@@ -91,7 +96,8 @@ class PD1D:
         # self.element_angle_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)       # 为了符合四元数乘法,实部为0,虚部为角速度
         self.element_sn = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
         # self.element_ang_vel_sn = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.distance_vec = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.node_distance_unit = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.element_length = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element.from_numpy(element_np)
         self.element_quat_init.from_numpy(element_quat_np)
         self.element_quat.from_numpy(element_quat_np)
@@ -136,12 +142,14 @@ class PD1D:
         J3 = J1 + J2
         self.element_inertia = self.l * self.rho * ti.Vector([0., J1])
 
-    
+
     def construct_weight(self):
         self.stretch_weight = self.E * self.section_area * self.l
+        # self.stretch_weight = 0.
         self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l
+        # self.bend_weight = 0.
 
-    
+
     @ti.kernel
     def precomputation(self):
         dim = self.dim
@@ -159,7 +167,7 @@ class PD1D:
         for d in ti.static(range(self.dim)):
             self.A_stretch[None][d, d+2] = 1. / self.l
         for d in ti.static(range(self.dim)):
-            self.A_stretch[None][d+2, d+4] = 1.
+            self.A_stretch[None][d+2, d+4] = 1
 
         for d in ti.static(range(self.dim+self.dim)):
             self.A_bend[None][d, d] = tm.sqrt(2)
@@ -190,13 +198,13 @@ class PD1D:
         for q_idx in ti.static(self.fix_particle_list):
             A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
             for d in ti.static(range(self.dim)):
-                self.lhs[q_idx*dim+d, q_idx*dim+d] += self.positional_weight * A_i_eye[d, d]
+                self.lhs[q_idx*dim+d, q_idx*dim+d] += self.positional_node_weight * A_i_eye[d, d]
 
         for u_idx in ti.static(self.fix_quaternion_list):
             s_idx = u_idx + self.PARTICLE_NUM
             A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
             for d in ti.static(range(self.dim)):
-                self.lhs[s_idx*dim+d, s_idx*dim+d] += self.positional_weight * A_i_eye[d, d]
+                self.lhs[s_idx*dim+d, s_idx*dim+d] += self.positional_element_weight * A_i_eye[d, d]
 
         
     @ti.kernel
@@ -241,16 +249,19 @@ class PD1D:
     def local_solve(self):
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2 = self.element[ele_idx]
-            distance_vec = (self.node_pos[idx2] - self.node_pos[idx1]).normalized()
-            self.distance_vec[ele_idx] = distance_vec
-            d3 = distance_vec
+            quat_new = self.element_quat_new[ele_idx]
+            distance_vec = (self.node_pos_new[idx2] - self.node_pos_new[idx1])
+            distance_vec_unit = distance_vec.normalized()
+            # self.distance_vec[ele_idx] = distance_vec_unit
+            self.element_length[ele_idx] = distance_vec.norm()
+            d3 = quat_new
             # 确保element的方向的d3的方向一致,可以考虑单独作为一个constraint
-            u = distance_vec            
-            self.Bp_stretch[ele_idx] = ti.Vector([d3[0], d3[1], u[0], u[1]])
+            u_constaint = distance_vec_unit
+            self.Bp_stretch[ele_idx] = ti.Vector([d3[0], d3[1], u_constaint[0], u_constaint[1]])
 
         for angle_idx in range(self.ANGLE_NUM):
             idx1, idx2 = angle_idx, angle_idx + 1
-            u1, u2 = self.element_quat[idx1], self.element_quat[idx2]
+            u1, u2 = self.element_quat_new[idx1], self.element_quat_new[idx2]
             u_average = (u1 + u2)
             u_average = u_average.normalized()
             self.Bp_bend[angle_idx] = ti.Vector([u_average[0], u_average[1], u_average[0], u_average[1]])
@@ -287,12 +298,12 @@ class PD1D:
 
         for q_idx in ti.static(self.fix_particle_list):
             for d in ti.static(range(self.dim)):
-                self.rhs[q_idx*dim+d] += self.positional_weight * self.node_pos_init[q_idx][d]
+                self.rhs[q_idx*dim+d] += self.positional_node_weight * self.node_pos_init[q_idx][d]
 
         for u_idx in ti.static(self.fix_quaternion_list):
             s_idx = u_idx + self.PARTICLE_NUM
             for d in ti.static(range(self.dim)):
-                self.rhs[s_idx*dim+d] += self.positional_weight * self.element_quat_init[u_idx][d]
+                self.rhs[s_idx*dim+d] += self.positional_element_weight * self.element_quat_init[u_idx][d]
 
         for idx in ti.static(range(self.contact_num)):
             q_idx = self.contact_particle_list[idx]
@@ -336,6 +347,8 @@ class PD1D:
             # self.element_angle_vel[u_idx] = 2 * ti.Vector([0, tmp]) / self.dt
             self.element_quat_delta[u_idx] = quatmul2d(quatconj2d(self.element_quat[u_idx]), self.element_quat_new[u_idx])
             self.element_quat[u_idx] = self.element_quat_new[u_idx]
+            idx1, idx2 = self.element[u_idx]
+            self.node_distance_unit[u_idx] = (self.node_pos_new[idx2] - self.node_pos_new[idx1]).normalized()
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -361,7 +374,7 @@ class PD1D:
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((1., 1., 1.))
         return window, camera, scene
-    
+
 
     def show_preset(self):
         """
@@ -372,25 +385,29 @@ class PD1D:
         self.edge_show.from_numpy(self.element.to_numpy(dtype=np.int32))
 
 
-    def gui_show(self, window, canvas, scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=0):
+    def gui_show(self, ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=None, name_list=None):
         """
         Show the GGUI
         """
+        window, canvas, scene = ggui_set['window'], ggui_set['canvas'], ggui_set['scene']
         if SHOW_FLAG is False:
             return
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
         self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1, np.zeros(self.PARTICLE_NUM), axis=1))
 
-        scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
-        scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
+        scene.particles(self.node_show, radius=0.003, color=(0., 0., 0.))
+        scene.lines(self.node_show, width=2., indices=self.edge_show, color=(0., 0., 0.),
                     vertex_count=0)
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
         if WRITE_FLAG is True:
-            window.save_image(f'FigureWrite/{itr_num}.png')
+            filename = os.path.join(output_folder, f'frame_{itr_num:04d}.png')
+            window.save_image(f'{filename}')
+            name_list.append(filename)
         window.show()
+        return name_list
 
 
     def preset_gui(self, camera_pos:list, camera_target:list):
@@ -404,10 +421,10 @@ class PD1D:
 
     @ti.kernel
     def init_vel(self):
-        self.node_vel[0][1] = 5.
+        self.node_vel[0][1] = 0.2
 
 
-    def substep(self, step_num):
+    def substep(self, step_num, frame_name_list):
         self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
@@ -421,7 +438,9 @@ class PD1D:
             self.quat_normalize()
 
         self.update_vel_pos()
-        self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num)
+        # ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
+        frame_name_list = self.gui_show(ggui_set, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=step_num, name_list=frame_name_list)
+        return frame_name_list
 
 
 def main():
@@ -429,7 +448,7 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObject, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.05)
+    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.01)
     soft_obj.preset_gui(camera_pos=[0.5, 0.9, 0.], camera_target=[0.5, 0., 0.])
 
     soft_obj.precomputation()
@@ -437,15 +456,21 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    # np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
     soft_obj.init_vel()
 
-    for i in range(100):
-        soft_obj.substep(i)
-    print(f'Node Position: {soft_obj.node_pos.to_numpy()}')
-    print(f'Distance Normalized Vector: {soft_obj.distance_vec.to_numpy()}')
-    print(f'Element Quaternion: {soft_obj.element_quat.to_numpy()}')
-    # print(f'Quaternions: {np.linalg.norm(soft_obj.element_quat.to_numpy(), axis=1)}')
+    frame_name_list = []
 
+    for i in range(1000):
+        frame_name_list = soft_obj.substep(i, frame_name_list)
+        # time.sleep(0.02)
+        # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+        # print(f'Iter: {i}--------------------------------------')
+        # print(f'Node Position: {soft_obj.node_pos.to_numpy()}')
+        # print(f'Node Distace Normalized: {soft_obj.node_distance_unit.to_numpy()}')
+        # print(f'Element Quaternion: {soft_obj.element_quat.to_numpy()}')
+
+    image_to_video(frame_name_list, video_filename='output_video.mp4')
 
 if __name__ == '__main__':
     main()

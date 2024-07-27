@@ -504,7 +504,7 @@ class SoftObject:
 
 
     @ti.kernel
-    def update_pos_new(self, sol:ti.types.ndarray()):
+    def update_pos_new(self, sol:ti.types.ndarray):
         for i in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
                 self.node_pos_new[i][d] = sol[i*self.dim+d]
