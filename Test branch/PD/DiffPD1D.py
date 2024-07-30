@@ -109,6 +109,7 @@ class PD1D:
         self.rhs_dA = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2, self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2))
         self.z = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2))
         self.dqu_const = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2)
+        self.dL_dy = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2)
 
         # Finite difference for validation
         self.delta = ti.cast(1e-6, ti.f64)
@@ -358,8 +359,8 @@ class PD1D:
             distance_vec = (self.node_pos[idx2] - self.node_pos[idx1])
             distance_vec_norm = distance_vec.norm()
 
-            dq1 = -I2 / distance_vec_norm - 2 * distance_vec.outer_product(distance_vec)
-            dq2 = I2 / distance_vec_norm + 2 * distance_vec.outer_product(distance_vec)
+            dq1 = -I2 / distance_vec_norm + distance_vec.outer_product(distance_vec) / tm.pow(distance_vec_norm, 3/2)
+            dq2 = -dq1
             self.dBp_stretch_dqu[ele_idx][0:2, 0:2] = dq1
             self.dBp_stretch_dqu[ele_idx][0:2, 2:4] = dq2
             self.dBp_stretch_dqu[ele_idx][2:4, 4:6] = ti.Matrix([[1., 0.], [0., 1.]], ti.f64)
@@ -372,9 +373,17 @@ class PD1D:
             u1, u2 = self.element_quat[idx1], self.element_quat[idx2]
             u_average = (u1 + u2)
             u_average_uorm = u_average.norm()
-            dBp_bend_du_tmp = I2 / u_average_uorm + 2 * u_average.outer_product(u_average)
-            self.dBp_bend_du[angle_idx][0:2, 0:2] = dBp_bend_du_tmp
-            self.dBp_bend_du[angle_idx][2:4, 2:4] = dBp_bend_du_tmp
+            u_average_unit = u_average.normalized()
+
+            du_star = ti.Vector([-u_average_unit[1], u_average_unit[0]]) / 4
+            du1 = 2 / ti.Vector([-u1[1], u1[0]])
+            du2 = 2 / ti.Vector([-u2[1], u2[0]])
+            tmp1 = du_star.outer_product(du1)
+            tmp2 = du_star.outer_product(du2)
+            self.dBp_bend_du[angle_idx][0:2, 0:2] = tmp1
+            self.dBp_bend_du[angle_idx][0:2, 2:4] = tmp2
+            self.dBp_bend_du[angle_idx][2:4, 0:2] = tmp1
+            self.dBp_bend_du[angle_idx][2:4, 2:4] = tmp2
 
             self.dBp_bend_du[angle_idx] = self.bend_weight * self.dBp_bend_du[angle_idx]
             self.AT_dBp_bend_du[angle_idx] = self.A_bend[None].transpose() @ self.dBp_bend_du[angle_idx]
@@ -431,6 +440,10 @@ class PD1D:
                 B[q_idx*self.dim+d, q_idx*self.dim+d] += self.contact_node_weight
 
         dx_dy_np = np.linalg.solve(A, B)
+        for q_idx in self.contact_particle_list:
+            idx = q_idx * self.dim + 0
+            self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
+            np.savetxt(f'grad_diffdata_{q_idx}.csv', dx_dy_np[:, idx].reshape(-1, self.dim), delimiter=',', fmt='%.8f')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -543,9 +556,14 @@ def main():
 
     for step in range(1):
         frame_name_list = soft_obj.substep(step_num=step)
+        soft_obj.diff_data()
         print(f'Frame: {step}----------------------')
+    for q_idx in soft_obj.contact_particle_list:
+        grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
+        np.savetxt(f'grad_diffdata_{q_idx}.csv', grad_diffdata_tmp, delimiter=',', fmt='%.8f')
 
     soft_obj.cal_grad()
+    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), delimiter=',', fmt='%.8f')
 
 if __name__ == '__main__':
     main()
