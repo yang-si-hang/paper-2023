@@ -5,7 +5,7 @@ create at 2024-07-28 by hsy
 
 import taichi as ti
 
-def gui_set(self, pos, target, FOV=60):
+def gui_set(pos, target, FOV=60):
     # init the window, canvas, scene and camerea
     window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
     scene = ti.ui.Scene()

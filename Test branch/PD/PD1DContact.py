@@ -9,7 +9,8 @@ from _CVVideo import *
 from scipy import sparse
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
+# ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
+ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 
 output_folder = 'FigureWrite'
 
@@ -116,6 +117,7 @@ class PD1D:
         self.Bp_bend = ti.Vector.field(4, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*2+self.ELEMENT_NUM*2, self.PARTICLE_NUM*2+self.ELEMENT_NUM*2))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2+self.ELEMENT_NUM*2)
+        self.lhs.fill(0.)
 
         # 固定尾部的节点和单元
         self.fix_particle_list = [self.PARTICLE_NUM-1]
@@ -129,7 +131,8 @@ class PD1D:
         self.contact_vel.fill(0.)
         self.contact_ang_vel.fill(0.)
 
-        self.contact_vel[0] = ti.Vector([0.5, -0.01]) / 5. / 5.
+        # self.contact_vel[0] = ti.Vector([0.5, -0.01]) / 5. / 5.
+        self.contact_vel[0] = ti.Vector([1.e-6, 1.e-6]) / self.dt
 
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
@@ -449,14 +452,15 @@ class PD1D:
         self.construct_sn()
         self.warm_start()
 
-        for itr in range(self.solve_iteration):
+        # for itr in range(self.solve_iteration):
+        for itr in range(1):
             self.local_solve()
             self.construct_rhs()
             rhs_np = self.rhs.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
             self.quat_normalize()
-        # np.savetxt('rhs.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+        # np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
         # exit(0)
 
         self.update_vel_pos()
@@ -475,10 +479,11 @@ def main():
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
-    s_lhs_np = sparse.csc_matrix(lhs_np)
-    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    # s_lhs_np = sparse.csc_matrix(lhs_np)
+    # soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
+    np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
+    exit(0)
     # soft_obj.init_vel()
 
     frame_name_list = []

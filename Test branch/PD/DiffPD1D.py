@@ -56,6 +56,7 @@ class PD1D:
         self.dim:int = 2
         self.solve_iteration = 20
         self.G = self.E / 2 / (1 + self.mu)
+        self.section_area = tm.pi * self.radius ** 2
 
         self.PARTICLE_NUM:int = np.ceil(length / seed_size).astype(int) + 1
         self.ELEMENT_NUM:int = self.PARTICLE_NUM - 1
@@ -73,7 +74,7 @@ class PD1D:
         self.node_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_force = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_sn = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.node_mass = 0.
+        self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_pos_init.from_numpy(node_np)
         self.node_pos.from_numpy(node_np)
         self.node_vel.fill(0.)
@@ -90,7 +91,7 @@ class PD1D:
         self.element_quat_init.from_numpy(element_quat_np)
         self.element_quat.from_numpy(element_quat_np)
         self.element_quat_delta.from_numpy(np.insert(np.ones((self.ELEMENT_NUM, 1)), 1, np.zeros((self.ELEMENT_NUM,)), axis=1))
-        self.element_inertia = ti.Vector([0., 0.])
+        self.element_inertia = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_NUM)
 
         self.stretch_weight = 0.
         self.bend_weight = 0.
@@ -101,6 +102,7 @@ class PD1D:
         self.Bp_bend = ti.Vector.field(4, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*2+self.ELEMENT_NUM*2, self.PARTICLE_NUM*2+self.ELEMENT_NUM*2))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*2+self.ELEMENT_NUM*2)
+        self.lhs.fill(0.)
 
         self.dBp_stretch_dqu = ti.Matrix.field(4, 6, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.dBp_bend_du = ti.Matrix.field(4, 4, dtype=ti.f64, shape=self.ANGLE_NUM)
@@ -110,6 +112,7 @@ class PD1D:
         self.z = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2))
         self.dqu_const = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2)
         self.dL_dy = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*2)
+        self.grad_diffdata = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM+self.ELEMENT_NUM)
 
         # Finite difference for validation
         self.delta = ti.cast(1e-6, ti.f64)
@@ -127,6 +130,8 @@ class PD1D:
         self.contact_vel.fill(0.)
         self.contact_ang_vel.fill(0.)
 
+        self.contact_vel[0] = ti.Vector([1.e-6, 1.e-6]) / self.dt
+
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
 
@@ -134,17 +139,18 @@ class PD1D:
         self.construct_weight()
 
         print(f'Particle Num: {self.PARTICLE_NUM}, Element Num: {self.ELEMENT_NUM}, Angle Num: {self.ANGLE_NUM}')
-        print(f'node_mass: {self.node_mass}, element_inertia: {self.element_inertia}, stretch_weight: {self.stretch_weight}, bend_weight: {self.bend_weight}')
+        print(f'node_mass: {self.node_mass[0]}, element_inertia: {self.element_inertia[0]}, stretch_weight: {self.stretch_weight}, bend_weight: {self.bend_weight}')
         print(f'Contact Node: {self.contact_particle_list}, Contact Element: {self.contact_element_list}')
         print(f'Fix Node: {self.fix_particle_list}, Fix Element: {self.fix_quaternion_list}')
 
 
     def construct_mass(self):
-        self.node_mass = tm.pi * self.radius ** 2 * self.l * self.rho
+        self.node_mass.fill(tm.pi * self.radius ** 2 * self.l * self.rho)
         
         J1 = J2 = tm.pi * self.radius ** 4 / 4
         J3 = J1 + J2
-        self.element_inertia = self.l * self.rho * ti.Vector([0., J1])
+        for ele_idx in range(self.ELEMENT_NUM):
+            self.element_inertia[ele_idx] = self.l * self.rho * ti.Vector([0., J1])
 
 
     def construct_weight(self):
@@ -155,14 +161,13 @@ class PD1D:
     @ti.kernel
     def precomputation(self):
         dim = self.dim
-
         for q_idx in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
-                self.lhs[q_idx*dim+d, q_idx*dim+d] = self.node_mass / self.dt ** 2
+                self.lhs[q_idx*dim+d, q_idx*dim+d] = self.node_mass[q_idx] / self.dt ** 2
         
-        for u_idx in range(self.PARTICLE_NUM, self.PARTICLE_NUM+self.ELEMENT_NUM):
+        for u_idx in range(self.ELEMENT_NUM):
             for d in ti.static(range(self.dim)):
-                self.lhs[u_idx*dim+d, u_idx*dim+d] = self.element_inertia[d] / self.dt ** 2
+                self.lhs[(u_idx+self.PARTICLE_NUM)*dim+d, (u_idx+self.PARTICLE_NUM)*dim+d] = self.element_inertia[u_idx][d] / self.dt ** 2
         
         for d in ti.static(range(self.dim)):
             self.A_stretch[None][d, d] = -1. / self.l
@@ -207,6 +212,17 @@ class PD1D:
             A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
             for d in ti.static(range(self.dim)):
                 self.lhs[s_idx*dim+d, s_idx*dim+d] += self.positional_element_weight * A_i_eye[d, d]
+
+        for q_idx in ti.static(self.contact_particle_list):
+            A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
+            for d in ti.static(range(self.dim)):
+                self.lhs[q_idx*dim+d, q_idx*dim+d] += self.contact_node_weight * A_i_eye[d, d]
+
+        for u_idx in ti.static(self.contact_element_list):
+            s_idx = u_idx + self.PARTICLE_NUM
+            A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
+            for d in ti.static(range(self.dim)):
+                self.lhs[s_idx*dim+d, s_idx*dim+d] += self.contact_element_weight * A_i_eye[d, d]
 
 
     def construct_L(self):
@@ -273,11 +289,11 @@ class PD1D:
         dim = self.dim
         for q_idx in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
-                self.rhs[q_idx*dim+d] = self.node_mass * self.node_sn[q_idx][d] / self.dt ** 2
+                self.rhs[q_idx*dim+d] = self.node_mass[q_idx] * self.node_sn[q_idx][d] / self.dt ** 2
 
         for u_idx in range(self.ELEMENT_NUM):
             for d in ti.static(range(self.dim)):
-                self.rhs[(u_idx+self.PARTICLE_NUM)*dim+d] = self.element_inertia[d] * self.element_sn[u_idx][d] / self.dt ** 2
+                self.rhs[(u_idx+self.PARTICLE_NUM)*dim+d] = self.element_inertia[u_idx][d] * self.element_sn[u_idx][d] / self.dt ** 2
 
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2 = self.element[ele_idx]
@@ -308,12 +324,12 @@ class PD1D:
         for idx in ti.static(range(self.contact_num)):
             q_idx = self.contact_particle_list[idx]
             for d in ti.static(range(self.dim)):
-                self.rhs[q_idx*dim+d] += self.contact_weight * self.node_desired_pos[idx][d]
+                self.rhs[q_idx*dim+d] += self.contact_node_weight * self.node_desired_pos[idx][d]
 
         for idx in ti.static(range(self.contact_num)):
             u_idx = self.contact_element_list[idx] + self.PARTICLE_NUM
             for d in ti.static(range(self.dim)):
-                self.rhs[u_idx*dim+d] += self.contact_weight * self.element_desired_quat[idx][d]
+                self.rhs[u_idx*dim+d] += self.contact_element_weight * self.element_desired_quat[idx][d]
 
 
     @ti.kernel
@@ -431,19 +447,23 @@ class PD1D:
         mass_np = self.node_mass.to_numpy() / self.dt ** 2
         inertia_np = self.element_inertia.to_numpy() / self.dt ** 2
         mass_dim_np = np.repeat(mass_np, self.dim)
-        inertia_dim_np = np.repeat(inertia_np, 2)
+        inertia_dim_np = inertia_np.flatten()
         M_np = np.diag(np.concatenate([mass_dim_np, inertia_dim_np]))
+        # np.savetxt('M.csv', M_np, delimiter=',', fmt='%.10f')
         A = self.lhs.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
         for q_idx in self.contact_particle_list:
             for d in range(self.dim):
                 B[q_idx*self.dim+d, q_idx*self.dim+d] += self.contact_node_weight
-
+        # np.savetxt('A.csv', A, delimiter=',', fmt='%.10f')
+        np.savetxt('dA.csv', self.rhs_dA.to_numpy(), delimiter=',', fmt='%.10f')
+        # np.savetxt('B.csv', B, delimiter=',', fmt='%.10f')
+        exit()
         dx_dy_np = np.linalg.solve(A, B)
         for q_idx in self.contact_particle_list:
             idx = q_idx * self.dim + 0
             self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
-            np.savetxt(f'grad_diffdata_{q_idx}.csv', dx_dy_np[:, idx].reshape(-1, self.dim), delimiter=',', fmt='%.8f')
+            # np.savetxt(f'grad_diffdata_{q_idx}.csv', dx_dy_np[:, idx].reshape(-1, self.dim), delimiter=',', fmt='%.8f')
 
 
     def diff_pd(self, itr_num:ti.i32):
@@ -472,21 +492,24 @@ class PD1D:
             self.grad_finite[u_idx+self.PARTICLE_NUM] = self.element_quat[u_idx] - self.element_quat_init[u_idx]
         
 
-    def substep(self, step_num:ti.i32):
+    def substep(self, step_num:ti.i32, frame_name_list:list):
         self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
-        for itr in range(self.solve_iteration):
+        # for itr in range(self.solve_iteration):
+        for itr in range(1):
             self.local_solve()
             self.construct_rhs()
+            # np.savetxt('rhs.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.10f')
+            # exit()
             rhs_np = self.rhs.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
             self.quat_normalize()
-        
+
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
-        frame_name_list = self.gui_show(ggui_set, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=step_num, name_list=frame_name_list)
+        frame_name_list = self.gui_show(ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num, name_list=frame_name_list)
         return frame_name_list
     
 
@@ -503,7 +526,7 @@ class PD1D:
         """
         Define the camera position & target
         """
-        self.window, self.camera, self.scene = self.gui_set(pos=camera_pos, target=camera_target)
+        self.window, self.camera, self.scene = gui_set(pos=camera_pos, target=camera_target)
         self.canvas = self.window.get_canvas()
         self.show_preset()
 
@@ -536,7 +559,7 @@ class PD1D:
     @ti.kernel
     def init_vel(self):
         # self.node_vel[0][1] = 10.
-        self.node_force[0][1] = 9.8 * self.node_mass * 20
+        self.node_force[0][1] = 9.8 * self.node_mass[0] * 20
 
 
 def main():
@@ -552,12 +575,17 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    # np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
+
     frame_name_list = []
 
     for step in range(1):
-        frame_name_list = soft_obj.substep(step_num=step)
+        frame_name_list = soft_obj.substep(step, frame_name_list)
+        # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+        # exit()
         soft_obj.diff_data()
         print(f'Frame: {step}----------------------')
+        print(f'Node Pos 1: {soft_obj.node_pos[0]}')
     for q_idx in soft_obj.contact_particle_list:
         grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
         np.savetxt(f'grad_diffdata_{q_idx}.csv', grad_diffdata_tmp, delimiter=',', fmt='%.8f')

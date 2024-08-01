@@ -1,5 +1,5 @@
 """
-使用PD仿真1D的绳变形,基于Cosserat理论，只考虑拉伸和弯曲
+使用PD仿真1D的绳变形,基于Cosserat理论,只考虑拉伸和弯曲
 created at 2024-07-23 by hsy
 """
 
@@ -9,7 +9,8 @@ from _CVVideo import *
 from scipy import sparse
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
+# ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
+ti.init(arch=ti.gpu, debug=True,default_fp=ti.f64)
 
 output_folder = 'FigureWrite'
 
@@ -210,7 +211,7 @@ class PD1D:
             for d in ti.static(range(self.dim)):
                 self.lhs[s_idx*dim+d, s_idx*dim+d] += self.positional_element_weight * A_i_eye[d, d]
 
-        
+
     @ti.kernel
     def construct_desired_pos(self):
         for idx in ti.static(range(self.contact_num)):
@@ -221,7 +222,7 @@ class PD1D:
             delta_theta = self.dt * self.contact_ang_vel[idx]
             self.element_desired_quat[idx] = quatmul2d(self.element_quat[u_idx], ti.Vector([tm.cos(delta_theta), tm.sin(delta_theta)]))
 
-    
+
     @ti.kernel
     def construct_sn(self):
         # 参考soler2018cosserat的更新公式
@@ -436,15 +437,15 @@ class PD1D:
         self.warm_start()
 
         # for itr in range(self.solve_iteration):
-        for itr in range(20):
+        for itr in range(2):
             self.local_solve()
             self.construct_rhs()
             rhs_np = self.rhs.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
             self.quat_normalize()
-        # np.savetxt('rhs.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        # exit(0)
+        np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+        exit(0)
 
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
@@ -465,7 +466,7 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
+    np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
     soft_obj.init_vel()
 
     frame_name_list = []
