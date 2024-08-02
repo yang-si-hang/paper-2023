@@ -566,9 +566,9 @@ class SoftObject:
 
 
 def main():
-    cube_shape = [0.1, 0.02, 0.1]
+    cube_shape = [0.1, 0.05, 0.1]
     mesh_file = 'Mesh/cube.msh'
-    generate_msh(cube_shape, 0.01, mesh_file)
+    generate_msh(cube_shape, 0.05, mesh_file)
     class MyObect(SoftObject):
         def __init__(self, shape, seed_size, file=mesh_file):
             super().__init__(shape, seed_size, file)
@@ -581,10 +581,10 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # soft_obj.init_vel()
-    np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
+    # np.savetxt('DataWrite/node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
     # np.savetxt('DataWrite/vel_init.csv', soft_obj.node_vel.to_numpy(), fmt='%f', delimiter=',')
     np.savetxt('DataWrite/lhs.csv', lhs_np, fmt='%f', delimiter=',')
-    # exit(0)
+    exit(0)
 
     sample_particles_pos_list = []
     for i in range(500):

@@ -9,7 +9,7 @@ import taichi.math as tm
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
-from GenMsh import generate_msh
+# from GenMsh import generate_msh
 
 
 def cal_tet_volume(vertices):
@@ -143,9 +143,9 @@ class SoftObject:
 
         node_np, element_np, volume_np = load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        # np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -206,11 +206,12 @@ class SoftObject:
         self.dL_dq.fill(0.)
         self.z.fill(0.)
 
-        self.fix_particle_list = self.fix_particle_No()
-        # self.fix_particle_list = [0, 1, 12]
-        self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
+        self.fix_particle_list = [3, 39, 64]
+        self.contact_particles_list = [85]
+        
+        # self.fix_particle_list = self.fix_particle_No()
+        # self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
         # self.contact_particles_list = self.contact_particles_indice()
-        self.contact_particles_list = [5]       # 最底层的左上角节点
         self.contact_num = len(self.contact_particles_list)
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
@@ -218,7 +219,6 @@ class SoftObject:
         # contact_vel_np[:, 0] = 0.005
         contact_vel_np[:, 0] = 1.e-6 / self.dt
         self.contact_vel.from_numpy(contact_vel_np)
-        self.sample_particles_list = [132]
 
         self.construct_mass()
         self.construct_B()
@@ -255,9 +255,7 @@ class SoftObject:
     def construct_weight(self):
         for i in range(self.ELEMENT_NUM):
             self.strain_weight[i] = self.mu * self.element_volume[i]
-            # self.volume_weight[i] = self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
-
-            self.volume_weight[i] = 0.
+            self.volume_weight[i] = self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
 
 
     def fix_particle_No(self):
@@ -440,7 +438,7 @@ class SoftObject:
 
             U, sig, V = ti.svd(F_i, ti.f64)
             self.U[ele_idx], self.sig[ele_idx], self.V[ele_idx] = U, ti.Vector([sig[0, 0], sig[1, 1], sig[2, 2]]), V
-            self.Bp[ele_idx] = U @ V.transpose()                                # Strain contraint
+            self.Bp[ele_idx] = U @ V.transpose()        # Strain contraint
 
             D, max_it, tol = ti.Vector([5., 5., 5.]), 50, 1.e-6
             for itr in range(max_it):
@@ -456,7 +454,7 @@ class SoftObject:
 
             PP = ti.Matrix([[D[0]+sig[0,0], 0, 0], [0, D[1]+sig[1,1], 0], [0, 0, D[2]+sig[2,2]]])
             self.PP[ele_idx] = PP
-            self.Bp[ele_idx+self.ELEMENT_NUM] = U @ PP @ V.transpose()          # Volume contraint
+            self.Bp[ele_idx+self.ELEMENT_NUM] = U @ PP @ V.transpose()        # Volume contraint
 
 
     @ti.kernel
@@ -662,7 +660,6 @@ class SoftObject:
         dx_dy_np = np.linalg.solve(A, B)
         np.savetxt('A.csv', A, fmt='%.15f', delimiter=',')
         np.savetxt('B.csv', B, fmt='%.15f', delimiter=',')
-        np.savetxt('dA.csv', self.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
         for i in self.contact_particles_list:
             idx = i*self.dim + 0            # 只取x方向的位移
             self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
@@ -758,8 +755,7 @@ class SoftObject:
         """
         Define the data for GGUI
         """
-        # self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
-        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.BOTTOM_NUM)
+        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
         self.edge_show.from_numpy(self.edge_np)
 
@@ -773,10 +769,7 @@ class SoftObject:
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
         # the conversion of object particles, etc. the ggui of the taichi only support float32
-        # 只取了最下部的粒子进行展示
-        self.node_show.from_numpy(
-            self.node_pos.to_numpy(dtype=np.float32)[self.bottom_particles_list])
-        # self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
+        self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
 
         scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
         # scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
@@ -800,15 +793,13 @@ class SoftObject:
 
 
 def main():
-    cube_shape = [0.1, 0.1, 0.1]
-    mesh_size = 0.1
-    mesh_file = 'Mesh/cube.msh'
-    generate_msh(cube_shape, mesh_size, mesh_file)
+    cube_shape = [0.1, 0.02, 0.1]
+    mesh_file = 'liver.msh'
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, file):
             super().__init__(shape, seed_size, file)
 
-    soft_obj = MyObject(shape=cube_shape, seed_size=mesh_size, file=mesh_file)
+    soft_obj = MyObject(shape=cube_shape, seed_size=0.01, file=mesh_file)
     soft_obj.preset_gui(camera_pos=[0.1, 0.2, 0.05], camera_target=[0.1, 0., 0.05])
 
     soft_obj.precomputation()
@@ -817,8 +808,9 @@ def main():
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.construct_L()
 
-    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
+    np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
     np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
+    exit(0)
 
     for i in range(1):
         soft_obj.substep(i)
