@@ -51,10 +51,12 @@ class PD1D:
         self.mu = 0.45
         self.positional_node_weight = 1.e6
         self.positional_element_weight = 1.e3
-        self.contact_node_weight = 0.
-        self.contact_element_weight = 0.
+        self.contact_node_weight = 1.e6
+        self.contact_element_weight = 1.e3
         self.dim:int = 2
         self.solve_iteration = 20
+        # self.infinity = 1.e10
+        self.epsilon = 1.e-5
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -130,7 +132,7 @@ class PD1D:
         self.contact_vel.fill(0.)
         self.contact_ang_vel.fill(0.)
 
-        self.contact_vel[0] = ti.Vector([1.e-6, 1.e-6]) / self.dt
+        self.contact_vel[0] = ti.Vector([1.e-6, 0.]) / self.dt
 
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
@@ -375,7 +377,7 @@ class PD1D:
             distance_vec = (self.node_pos[idx2] - self.node_pos[idx1])
             distance_vec_norm = distance_vec.norm()
 
-            dq1 = -I2 / distance_vec_norm + distance_vec.outer_product(distance_vec) / tm.pow(distance_vec_norm, 3/2)
+            dq1 = -I2 / distance_vec_norm + distance_vec.outer_product(distance_vec) / tm.pow(distance_vec_norm, 3)
             dq2 = -dq1
             self.dBp_stretch_dqu[ele_idx][0:2, 0:2] = dq1
             self.dBp_stretch_dqu[ele_idx][0:2, 2:4] = dq2
@@ -392,6 +394,16 @@ class PD1D:
             u_average_unit = u_average.normalized()
 
             du_star = ti.Vector([-u_average_unit[1], u_average_unit[0]]) / 4
+            for d in range(2):
+                if ti.abs(u1[d]) > self.epsilon:
+                    pass
+                else:
+                    u1[d] = self.epsilon if u1[d] >= 0 else -self.epsilon
+                if ti.abs(u2[d]) > self.epsilon:
+                    pass
+                else:
+                    u2[d] = self.epsilon if u2[d] >= 0 else -self.epsilon
+            # print('u1:', u1, 'u2:', u2)
             du1 = 2 / ti.Vector([-u1[1], u1[0]])
             du2 = 2 / ti.Vector([-u2[1], u2[0]])
             tmp1 = du_star.outer_product(du1)
@@ -400,6 +412,7 @@ class PD1D:
             self.dBp_bend_du[angle_idx][0:2, 2:4] = tmp2
             self.dBp_bend_du[angle_idx][2:4, 0:2] = tmp1
             self.dBp_bend_du[angle_idx][2:4, 2:4] = tmp2
+            # print('du1:', du1)
 
             self.dBp_bend_du[angle_idx] = self.bend_weight * self.dBp_bend_du[angle_idx]
             self.AT_dBp_bend_du[angle_idx] = self.A_bend[None].transpose() @ self.dBp_bend_du[angle_idx]
@@ -455,10 +468,10 @@ class PD1D:
         for q_idx in self.contact_particle_list:
             for d in range(self.dim):
                 B[q_idx*self.dim+d, q_idx*self.dim+d] += self.contact_node_weight
-        # np.savetxt('A.csv', A, delimiter=',', fmt='%.10f')
+        np.savetxt('A.csv', A, delimiter=',', fmt='%.10f')
         np.savetxt('dA.csv', self.rhs_dA.to_numpy(), delimiter=',', fmt='%.10f')
-        # np.savetxt('B.csv', B, delimiter=',', fmt='%.10f')
-        exit()
+        np.savetxt('B.csv', B, delimiter=',', fmt='%.10f')
+        # exit()
         dx_dy_np = np.linalg.solve(A, B)
         for q_idx in self.contact_particle_list:
             idx = q_idx * self.dim + 0
@@ -575,7 +588,7 @@ def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    # np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
+    np.savetxt('lhs.csv', lhs_np, delimiter=',', fmt='%.8f')
 
     frame_name_list = []
 
@@ -588,10 +601,10 @@ def main():
         print(f'Node Pos 1: {soft_obj.node_pos[0]}')
     for q_idx in soft_obj.contact_particle_list:
         grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
-        np.savetxt(f'grad_diffdata_{q_idx}.csv', grad_diffdata_tmp, delimiter=',', fmt='%.8f')
+        np.savetxt(f'grad_diffdata_{q_idx}.csv', grad_diffdata_tmp, delimiter=',', fmt='%.10f')
 
     soft_obj.cal_grad()
-    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), delimiter=',', fmt='%.8f')
+    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy()/1.e-6, delimiter=',', fmt='%.10f')
 
 if __name__ == '__main__':
     main()
