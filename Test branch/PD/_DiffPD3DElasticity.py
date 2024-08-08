@@ -254,10 +254,10 @@ class SoftObject:
     @ti.kernel
     def construct_weight(self):
         for i in range(self.ELEMENT_NUM):
-            self.strain_weight[i] = self.mu * self.element_volume[i]
-            # self.volume_weight[i] = self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
-
-            self.volume_weight[i] = 0.
+            # self.strain_weight[i] = self.mu * self.element_volume[i]
+            self.volume_weight[i] = self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
+            self.strain_weight[i] = 0.
+            # self.volume_weight[i] = 0.
 
 
     def fix_particle_No(self):
@@ -521,12 +521,9 @@ class SoftObject:
 
     @ti.kernel
     def partial_p(self):
+        dim = self.dim
         for ele_idx in range(self.ELEMENT_NUM):
-            dim = self.dim
             A_i = self.A[ele_idx]
-            # F_i = self.F[ele_idx]
-            # U, sig, V = ti.svd(F_i, ti.f64)
-            # s1, s2, s3 = sig[0, 0], sig[1, 1], sig[2, 2]
             U_i = self.U[ele_idx]
             sig = self.sig[ele_idx]
             s1, s2, s3 = sig[0], sig[1], sig[2]
@@ -552,7 +549,7 @@ class SoftObject:
             PP_coef_A = ti.Matrix.zero(ti.f64, self.dim**2, self.dim**2)
 
             for d_idx in range(dim):
-                PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+self.dim], PP_coef_A[d_idx, d_idx+2*self.dim] = ss2*ss3, ss1*ss3, ss1*ss2
+                PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+dim], PP_coef_A[d_idx, d_idx+2*dim] = ss2*ss3, ss1*ss3, ss1*ss2
 
             for d_idx in range(dim):
                 PP_coef_A[d_idx+dim, d_idx], PP_coef_A[d_idx+dim, d_idx+2*dim] = (s1-2*ss1), -(s3-2*ss3)
@@ -818,13 +815,13 @@ def main():
     soft_obj.construct_L()
 
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
-    np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
 
     for i in range(1):
         soft_obj.substep(i)
-        # soft_obj.diff_pd(10)
+        soft_obj.diff_pd(10)
         # soft_obj.cal_ygrad()
-        soft_obj.diff_data()
+        # soft_obj.diff_data()
     # np.savetxt('rhs_dA.csv', soft_obj.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
     for q_idx in soft_obj.contact_particles_list:
         grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()

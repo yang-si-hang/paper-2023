@@ -55,7 +55,7 @@ def read_msh_file(file_path):
                 cell_nodes = parts[5:]
                 cells.append([int(node) for node in cell_nodes])
 
-    nodes_array = np.array(nodes)
+    nodes_array = np.array(nodes) * 0.05
     cells_array = np.array(cells)
 
     return nodes_array, cells_array
@@ -143,9 +143,9 @@ class SoftObject:
 
         node_np, element_np, volume_np = load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        # np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        # np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        # np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
+        np.savetxt('volume_np.csv', volume_np, fmt='%.8f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -217,7 +217,7 @@ class SoftObject:
         self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
         # contact_vel_np[:, 0] = 0.005
-        contact_vel_np[:, 0] = 1.e-6 / self.dt
+        contact_vel_np[:, 1] = 1.e-6 / self.dt
         self.contact_vel.from_numpy(contact_vel_np)
 
         self.construct_mass()
@@ -519,12 +519,9 @@ class SoftObject:
 
     @ti.kernel
     def partial_p(self):
+        dim = self.dim
         for ele_idx in range(self.ELEMENT_NUM):
-            dim = self.dim
             A_i = self.A[ele_idx]
-            # F_i = self.F[ele_idx]
-            # U, sig, V = ti.svd(F_i, ti.f64)
-            # s1, s2, s3 = sig[0, 0], sig[1, 1], sig[2, 2]
             U_i = self.U[ele_idx]
             sig = self.sig[ele_idx]
             s1, s2, s3 = sig[0], sig[1], sig[2]
@@ -550,7 +547,7 @@ class SoftObject:
             PP_coef_A = ti.Matrix.zero(ti.f64, self.dim**2, self.dim**2)
 
             for d_idx in range(dim):
-                PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+self.dim], PP_coef_A[d_idx, d_idx+2*self.dim] = ss2*ss3, ss1*ss3, ss1*ss2
+                PP_coef_A[d_idx, d_idx], PP_coef_A[d_idx, d_idx+dim], PP_coef_A[d_idx, d_idx+2*dim] = ss2*ss3, ss1*ss3, ss1*ss2
 
             for d_idx in range(dim):
                 PP_coef_A[d_idx+dim, d_idx], PP_coef_A[d_idx+dim, d_idx+2*dim] = (s1-2*ss1), -(s3-2*ss3)
@@ -661,7 +658,7 @@ class SoftObject:
         np.savetxt('A.csv', A, fmt='%.15f', delimiter=',')
         np.savetxt('B.csv', B, fmt='%.15f', delimiter=',')
         for i in self.contact_particles_list:
-            idx = i*self.dim + 0            # 只取x方向的位移
+            idx = i*self.dim + 1            # 只取x方向的位移
             self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
             np.savetxt('dx_dy.csv', dx_dy_np, fmt='%.15f', delimiter=',')
             # np.savetxt('dx_dy_contact.csv', dx_dy_np[:, idx].reshape(-1, self.dim), fmt='%.15f', delimiter=',')
@@ -808,9 +805,9 @@ def main():
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.construct_L()
 
-    np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
-    np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
-    exit(0)
+    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
+    # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
+    # exit(0)
 
     for i in range(1):
         soft_obj.substep(i)
