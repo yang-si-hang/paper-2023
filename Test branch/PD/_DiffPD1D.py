@@ -9,7 +9,7 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 import taichi as ti
 import taichi.math as tm
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
 from GGUI import * 
 
 
@@ -49,10 +49,11 @@ class PD1D:
         self.rho = 1.e3
         self.E = 2.e6
         self.mu = 0.45
-        self.positional_node_weight = 1.e6
-        self.positional_element_weight = 1.e3
-        self.contact_node_weight = 1.e6
-        self.contact_element_weight = 1.e3
+        self.positional_node_weight = 1.e8
+        self.positional_element_weight = 1.e5
+        self.contact_node_weight = 1.e8
+        # self.contact_element_weight = 1.e3
+        self.contact_element_weight = 0.
         self.dim:int = 2
         self.solve_iteration = 20
         # self.infinity = 1.e10
@@ -132,7 +133,7 @@ class PD1D:
         self.contact_vel.fill(0.)
         self.contact_ang_vel.fill(0.)
 
-        self.contact_vel[0] = ti.Vector([1.e-6, 0.]) / self.dt
+        self.contact_vel[0] = ti.Vector([0., 1.e-6]) / self.dt
 
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
@@ -230,18 +231,25 @@ class PD1D:
     def construct_L(self):
         # 用于与Finite difference比较进行验证
         for q_idx in self.contact_particle_list:
-            self.dL_dq[q_idx*self.dim + 0] = 1.
+            self.dL_dqu[q_idx*self.dim + 0] = 1.
 
 
     @ti.kernel
     def construct_desired_pos(self):
-        for idx in ti.static(range(self.contact_num)):
-            q_idx = self.contact_particle_list[idx]
-            u_idx = self.contact_element_list[idx]
+        # for idx in ti.static(range(self.contact_num)):
+        #     q_idx = self.contact_particle_list[idx]
+        #     u_idx = self.contact_element_list[idx]
 
-            self.node_desired_pos[idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[idx]
-            delta_theta = self.dt * self.contact_ang_vel[idx]
-            self.element_desired_quat[idx] = quatmul2d(self.element_quat[u_idx], ti.Vector([tm.cos(delta_theta), tm.sin(delta_theta)]))
+        #     self.node_desired_pos[idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[idx]
+        #     delta_theta = self.dt * self.contact_ang_vel[idx]
+        #     self.element_desired_quat[idx] = quatmul2d(self.element_quat[u_idx], ti.Vector([tm.cos(delta_theta), tm.sin(delta_theta)]))
+
+        for q_idx in ti.static(self.contact_particle_list):
+            self.node_desired_pos[q_idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[0]
+
+        for u_idx in ti.static(self.contact_element_list):
+            delta_theta = self.dt * self.contact_ang_vel[u_idx]
+            self.element_desired_quat[u_idx] = quatmul2d(self.element_quat[u_idx], ti.Vector([tm.cos(delta_theta), tm.sin(delta_theta)]))
 
 
     @ti.kernel
@@ -382,15 +390,22 @@ class PD1D:
             self.dBp_stretch_dqu[ele_idx][0:2, 0:2] = dq1
             self.dBp_stretch_dqu[ele_idx][0:2, 2:4] = dq2
             self.dBp_stretch_dqu[ele_idx][2:4, 4:6] = ti.Matrix([[1., 0.], [0., 1.]], ti.f64)
+            # self.dBp_stretch_dqu[ele_idx][2:4, 0:2] = dq1
+            # self.dBp_stretch_dqu[ele_idx][2:4, 2:4] = dq2
+            # self.dBp_stretch_dqu[ele_idx][0:2, 4:6] = ti.Matrix([[1., 0.], [0., 1.]], ti.f64)
 
             self.dBp_stretch_dqu[ele_idx] = self.stretch_weight * self.dBp_stretch_dqu[ele_idx]
             self.AT_dBp_stretch_dqu[ele_idx] = self.A_stretch[None].transpose() @ self.dBp_stretch_dqu[ele_idx]
+            # 对于Y方向的梯度，结果不正确!!!
+            print('A_stretch:', self.A_stretch[None].transpose())
+            print('dBp_stretch_dqu:', self.dBp_stretch_dqu[ele_idx])
+            print('AT_dBp_stretch_dqu:', self.AT_dBp_stretch_dqu[ele_idx])
 
         for angle_idx in range(self.ANGLE_NUM):
             idx1, idx2 = angle_idx, angle_idx + 1
             u1, u2 = self.element_quat[idx1], self.element_quat[idx2]
             u_average = (u1 + u2)
-            u_average_uorm = u_average.norm()
+            u_average_norm = u_average.norm()
             u_average_unit = u_average.normalized()
 
             du_star = ti.Vector([-u_average_unit[1], u_average_unit[0]]) / 4
@@ -468,13 +483,17 @@ class PD1D:
         for q_idx in self.contact_particle_list:
             for d in range(self.dim):
                 B[q_idx*self.dim+d, q_idx*self.dim+d] += self.contact_node_weight
+        for u_idx in self.contact_element_list:
+            for d in range(self.dim):
+                B[(u_idx+self.PARTICLE_NUM)*2+d, (u_idx+self.PARTICLE_NUM)*2+d] += self.contact_element_weight
         np.savetxt('A.csv', A, delimiter=',', fmt='%.10f')
         np.savetxt('dA.csv', self.rhs_dA.to_numpy(), delimiter=',', fmt='%.10f')
         np.savetxt('B.csv', B, delimiter=',', fmt='%.10f')
         # exit()
         dx_dy_np = np.linalg.solve(A, B)
+        np.savetxt('dx_dy.csv', dx_dy_np, delimiter=',', fmt='%.10f')
         for q_idx in self.contact_particle_list:
-            idx = q_idx * self.dim + 0
+            idx = q_idx * self.dim + 1
             self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
             # np.savetxt(f'grad_diffdata_{q_idx}.csv', dx_dy_np[:, idx].reshape(-1, self.dim), delimiter=',', fmt='%.8f')
 
@@ -482,7 +501,8 @@ class PD1D:
     def diff_pd(self, itr_num:ti.i32):
         self.partial_p()
         dA = self.rhs_dA.to_numpy()
-        par_L = self.z.to_numpy()
+        par_L = self.dL_dqu.to_numpy()
+        z_np = self.z.to_numpy()
         for itr in range(itr_num):
             rhs_diff_np = dA @ z_np + par_L
             z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
@@ -502,6 +522,7 @@ class PD1D:
             self.grad_finite[q_idx] = self.node_pos[q_idx] - self.node_pos_init[q_idx]
 
         for u_idx in range(self.ELEMENT_NUM):
+            # self.grad_finite[u_idx+self.PARTICLE_NUM] = quatmul2d(quatconj2d(self.element_quat_init[u_idx]), self.element_quat[u_idx])
             self.grad_finite[u_idx+self.PARTICLE_NUM] = self.element_quat[u_idx] - self.element_quat_init[u_idx]
         
 
@@ -509,8 +530,8 @@ class PD1D:
         self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
-        # for itr in range(self.solve_iteration):
-        for itr in range(1):
+        for itr in range(self.solve_iteration):
+        # for itr in range(1):
             self.local_solve()
             self.construct_rhs()
             # np.savetxt('rhs.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.10f')
@@ -580,7 +601,7 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObj, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObj(length=1., radius=0.01, seed_size=0.05)
+    soft_obj = MyObj(length=1., radius=0.01, seed_size=0.2)
     soft_obj.preset_gui(camera_pos=[0.5, 0.75, 0.3], camera_target=[0.5, 0., 0.3])
 
     soft_obj.precomputation()
