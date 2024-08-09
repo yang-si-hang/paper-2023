@@ -3,8 +3,9 @@ DiffPD的3D版本
 created at 2024-07-01 by hsy
 """
 
+import time
 import taichi as ti
-ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.gpu, device_memory_GB=6.0,  default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
 from scipy import sparse
@@ -797,8 +798,8 @@ class SoftObject:
 
 
 def main():
-    cube_shape = [0.1, 0.1, 0.1]
-    mesh_size = 0.1
+    cube_shape = [0.1, 0.02, 0.1]
+    mesh_size = 0.01
     mesh_file = 'Mesh/cube.msh'
     generate_msh(cube_shape, mesh_size, mesh_file)
     class MyObject(SoftObject):
@@ -817,18 +818,24 @@ def main():
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
 
-    for i in range(1):
+    time_list = []
+    for i in range(200):
+        time_start = time.time()
         soft_obj.substep(i)
         soft_obj.diff_pd(10)
         # soft_obj.cal_ygrad()
         # soft_obj.diff_data()
+        time_end = time.time()
+        time_list.append(time_end - time_start)
+        print('Time cost:', time_end - time_start, 's')
+    print('Average Time cost:', np.mean(time_list[1:]), 's')
     # np.savetxt('rhs_dA.csv', soft_obj.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
-    for q_idx in soft_obj.contact_particles_list:
-        grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
-        np.savetxt('grad_diffdata.csv', grad_diffdata_tmp, fmt='%.15f', delimiter=',')
-
-    soft_obj.cal_grad()
-    np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
+    # for q_idx in soft_obj.contact_particles_list:
+    #     grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
+    #     np.savetxt('grad_diffdata.csv', grad_diffdata_tmp, fmt='%.15f', delimiter=',')
+    #
+    # soft_obj.cal_grad()
+    # np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':
