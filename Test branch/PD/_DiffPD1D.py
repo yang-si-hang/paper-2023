@@ -134,6 +134,7 @@ class PD1D:
         self.contact_ang_vel.fill(0.)
 
         self.contact_vel[0] = ti.Vector([0., 1.e-6]) / self.dt
+        self.contact_vel[0] = ti.Vector([0., 1.e-6]) / self.dt
 
         self.node_desired_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
         self.element_desired_quat = ti.Vector.field(2, dtype=ti.f64, shape=self.contact_num)
@@ -231,6 +232,7 @@ class PD1D:
     def construct_L(self):
         # 用于与Finite difference比较进行验证
         for q_idx in self.contact_particle_list:
+            self.dL_dqu[q_idx*self.dim + 0] = 1.
             self.dL_dqu[q_idx*self.dim + 0] = 1.
 
 
@@ -406,6 +408,7 @@ class PD1D:
             u1, u2 = self.element_quat[idx1], self.element_quat[idx2]
             u_average = (u1 + u2)
             u_average_norm = u_average.norm()
+            u_average_norm = u_average.norm()
             u_average_unit = u_average.normalized()
 
             du_star = ti.Vector([-u_average_unit[1], u_average_unit[0]]) / 4
@@ -494,6 +497,7 @@ class PD1D:
         np.savetxt('dx_dy.csv', dx_dy_np, delimiter=',', fmt='%.10f')
         for q_idx in self.contact_particle_list:
             idx = q_idx * self.dim + 1
+            idx = q_idx * self.dim + 1
             self.grad_diffdata.from_numpy(dx_dy_np[:, idx].reshape(-1, self.dim))
             # np.savetxt(f'grad_diffdata_{q_idx}.csv', dx_dy_np[:, idx].reshape(-1, self.dim), delimiter=',', fmt='%.8f')
 
@@ -501,6 +505,8 @@ class PD1D:
     def diff_pd(self, itr_num:ti.i32):
         self.partial_p()
         dA = self.rhs_dA.to_numpy()
+        par_L = self.dL_dqu.to_numpy()
+        z_np = self.z.to_numpy()
         par_L = self.dL_dqu.to_numpy()
         z_np = self.z.to_numpy()
         for itr in range(itr_num):
@@ -530,6 +536,8 @@ class PD1D:
         self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
+        for itr in range(self.solve_iteration):
+        # for itr in range(1):
         for itr in range(self.solve_iteration):
         # for itr in range(1):
             self.local_solve()
