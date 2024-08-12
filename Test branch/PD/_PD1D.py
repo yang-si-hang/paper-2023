@@ -227,7 +227,8 @@ class PD1D:
     def construct_sn(self):
         # 参考soler2018cosserat的更新公式
         for q_idx in range(self.PARTICLE_NUM):
-            self.node_sn[q_idx] = self.node_pos[q_idx] + self.dt * self.node_vel[q_idx] + self.dt**2 * self.node_force[q_idx]        # shape: (2, 1)
+            self.node_sn[q_idx] = self.node_pos[q_idx] + self.dt * self.node_vel[q_idx] \
+                                + self.dt**2 * self.node_force[q_idx] / self.node_mass        # shape: (2, 1)
 
         for u_idx in range(self.ELEMENT_NUM):
             # 2d的情况
@@ -428,7 +429,7 @@ class PD1D:
     @ti.kernel
     def init_vel(self):
         # self.node_vel[0][1] = 10.
-        self.node_force[0][1] = 9.8 * self.node_mass * 20
+        self.node_force[0][1] = 9.8 * self.node_mass
 
 
     def substep(self, step_num, frame_name_list):
@@ -444,12 +445,12 @@ class PD1D:
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
             self.quat_normalize()
-        np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        exit(0)
+        # np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+        # exit(0)
 
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
-        frame_name_list = self.gui_show(ggui_set, SHOW_FLAG=True, WRITE_FLAG=True, itr_num=step_num, name_list=frame_name_list)
+        frame_name_list = self.gui_show(ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num, name_list=frame_name_list)
         return frame_name_list
 
 
@@ -471,7 +472,7 @@ def main():
 
     frame_name_list = []
 
-    for i in range(2000):
+    for i in range(200):
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
         # print(f'Iter: {i}--------------------------------------')
@@ -479,7 +480,7 @@ def main():
         # print(f'Node Distace Normalized: {soft_obj.node_distance_unit.to_numpy()}')
         # print(f'Element Quaternion: {soft_obj.element_quat.to_numpy()}')
 
-    image_to_video(frame_name_list, video_filename='output_video.mp4')
+    # image_to_video(frame_name_list, video_filename='output_video.mp4')
 
 if __name__ == '__main__':
     main()
