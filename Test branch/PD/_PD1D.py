@@ -10,7 +10,7 @@ from scipy import sparse
 import taichi as ti
 import taichi.math as tm
 # ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
-ti.init(arch=ti.gpu, debug=True,default_fp=ti.f64)
+ti.init(arch=ti.gpu, debug=True, default_fp=ti.f64)
 
 output_folder = 'FigureWrite'
 
@@ -58,7 +58,7 @@ class PD1D:
     def __init__(self, length, radius, seed_size:float):
         self.length = length
         self.radius = radius
-        self.dt = 1./100
+        self.dt = 1./1000
         self.rho = 1.e3
         self.E = 2.e6
         self.mu = 0.45
@@ -78,7 +78,7 @@ class PD1D:
         node_np, element_np, element_quat_np = generate_geometric(self.length, self.PARTICLE_NUM)
         np.savetxt('node_pos_init.csv', node_np, delimiter=',', fmt='%.6f')
         np.savetxt('element.csv', element_np, delimiter=',', fmt='%d')
-        np.savetxt('element_quat.csv', element_quat_np, delimiter=',', fmt='%.6f')
+        np.savetxt('element_quat_init.csv', element_quat_np, delimiter=',', fmt='%.6f')
 
         self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_NUM)
@@ -244,12 +244,12 @@ class PD1D:
     @ti.kernel
     def warm_start(self):
         for q_idx in range(self.PARTICLE_NUM):
-            self.node_pos_new[q_idx] = self.node_pos[q_idx]
-            # self.node_pos_new[q_idx] = self.node_sn[q_idx]
+            # self.node_pos_new[q_idx] = self.node_pos[q_idx]
+            self.node_pos_new[q_idx] = self.node_sn[q_idx]
 
         for u_idx in range(self.ELEMENT_NUM):
-            self.element_quat_new[u_idx] = self.element_quat[u_idx]
-            # self.element_quat_new[u_idx] = self.element_sn[u_idx]
+            # self.element_quat_new[u_idx] = self.element_quat[u_idx]
+            self.element_quat_new[u_idx] = self.element_sn[u_idx]
 
 
     @ti.kernel
@@ -390,6 +390,25 @@ class PD1D:
         self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.edge_show.from_numpy(self.element.to_numpy(dtype=np.int32))
+        self.quat_node = ti.Vector.field(2, dtype=ti.f32, shape=self.ELEMENT_NUM*2)
+        self.quat_node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.ELEMENT_NUM*2)
+        self.quat_show = ti.Vector.field(2, dtype=ti.i32, shape=self.ELEMENT_NUM)
+        self.quat_show.from_numpy(np.arange(0, self.ELEMENT_NUM*2).reshape(-1, 2))
+
+    
+    @ti.kernel
+    def quat_node_update_ghost(self):
+        self.quat_node[self.ELEMENT_NUM*2-1] = ti.cast(self.node_pos[self.PARTICLE_NUM-1], ti.f32)
+        ti.loop_config(serialize=True)
+        for u_idx in range(self.ELEMENT_NUM-1):
+            u_idx_inv = self.ELEMENT_NUM - u_idx - 1
+            quat = self.element_quat[u_idx_inv]
+            vec = quat
+            self.quat_node[u_idx_inv*2] = ti.cast(self.quat_node[u_idx_inv*2+1] - vec * self.l, ti.f32)
+            self.quat_node[u_idx_inv*2-1] = ti.cast(self.quat_node[u_idx_inv*2], ti.f32)
+        quat = self.element_quat[0]
+        vec = quat
+        self.quat_node[0] = self.quat_node[1] - ti.cast(vec * self.l, ti.f32)
 
 
     def gui_show(self, ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=None, name_list=None):
@@ -401,11 +420,15 @@ class PD1D:
             return
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
-        self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float32), 1, np.zeros(self.PARTICLE_NUM), axis=1))
+        self.node_show.from_numpy(np.insert(self.node_pos.to_numpy(dtype=np.float64), 1, np.zeros(self.PARTICLE_NUM), axis=1))
+        self.quat_node_update_ghost()
+        self.quat_node_show.from_numpy(np.insert(self.quat_node.to_numpy(dtype=np.float64), 1, np.zeros(self.ELEMENT_NUM*2), axis=1))
+        # print(f'Quat Node Show: {self.quat_node_show.to_numpy()}')
+        # print(f'Node Show: {self.node_show.to_numpy()}')
 
         scene.particles(self.node_show, radius=0.003, color=(0., 0., 0.))
-        scene.lines(self.node_show, width=2., indices=self.edge_show, color=(0., 0., 0.),
-                    vertex_count=0)
+        scene.lines(self.node_show, width=2., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
+        scene.lines(self.quat_node_show, width=2., indices=self.quat_show, color=(1., 0., 0.), vertex_count=0)
         canvas.scene(scene)
         canvas.set_background_color((1.0, 1.0, 1.0))
         # if WRITE_FLAG is True and itr_num % 10 == 0:
@@ -428,8 +451,8 @@ class PD1D:
 
     @ti.kernel
     def init_vel(self):
-        # self.node_vel[0][1] = 10.
-        self.node_force[0][1] = 9.8 * self.node_mass
+        self.node_vel[0][1] = 1.
+        self.node_force[0][0] = - 9.8 * self.node_mass
 
 
     def substep(self, step_num, frame_name_list):
@@ -437,16 +460,53 @@ class PD1D:
         self.construct_sn()
         self.warm_start()
 
-        # for itr in range(self.solve_iteration):
-        for itr in range(2):
+        ele_quat_theta1_list = []
+        ele_quat_theta2_list = []
+        distance_vec1_list = []
+        distance_vec2_list = []
+        distance_theta1_list = []
+        distance_theta2_list = []
+
+        for itr in range(self.solve_iteration):
+        # for itr in range(2):
             self.local_solve()
             self.construct_rhs()
             rhs_np = self.rhs.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
             self.update_pos_new(state_sol)
             self.quat_normalize()
-        # np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        # exit(0)
+            # np.savetxt('rhs_pd1d.csv', self.rhs.to_numpy(), delimiter=',', fmt='%.8f')
+            # exit(0)
+
+            distance_vec1 = self.node_pos_new[1] - self.node_pos_new[0]
+            distance_vec2 = self.node_pos_new[2] - self.node_pos_new[1]
+            theta1 = ti.atan2(distance_vec1[1], distance_vec1[0])
+            theta2 = ti.atan2(distance_vec2[1], distance_vec2[0])
+
+            distance_vec1_list.append(distance_vec1)
+            distance_vec2_list.append(distance_vec2)
+            distance_theta1_list.append(theta1*180/tm.pi)
+            distance_theta2_list.append(theta2*180/tm.pi)
+
+            ele_quat1 = self.element_quat_new[0]
+            ele_quat2 = self.element_quat_new[1]
+            quat_theta1 = ti.atan2(ele_quat1[1], ele_quat1[0])
+            quat_theta2 = ti.atan2(ele_quat2[1], ele_quat2[0])
+
+            ele_quat_theta1_list.append(quat_theta1*180/tm.pi)
+            ele_quat_theta2_list.append(quat_theta2*180/tm.pi)
+
+        data_dict = {
+            'distance_vec1': distance_vec1_list,
+            'distance_vec2': distance_vec2_list,
+            'distance_theta1': distance_theta1_list,
+            'distance_theta2': distance_theta2_list,
+            'ele_quat_theta1': ele_quat_theta1_list,
+            'ele_quat_theta2': ele_quat_theta2_list
+        }
+        if step_num == 0:
+            np.savez(f'local_solve.npz', **data_dict)
+            print('Save Local Solve Data')
 
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
@@ -472,13 +532,14 @@ def main():
 
     frame_name_list = []
 
-    for i in range(200):
+    for i in range(2000):
         frame_name_list = soft_obj.substep(i, frame_name_list)
+        # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        # print(f'Iter: {i}--------------------------------------')
-        # print(f'Node Position: {soft_obj.node_pos.to_numpy()}')
+        print(f'Iter: {i}--------------------------------------')
+        print(f'Node Position: {soft_obj.node_pos[0].to_numpy()}')
         # print(f'Node Distace Normalized: {soft_obj.node_distance_unit.to_numpy()}')
-        # print(f'Element Quaternion: {soft_obj.element_quat.to_numpy()}')
+        print(f'Element Quaternion: {soft_obj.element_quat[0].to_numpy()}')
 
     # image_to_video(frame_name_list, video_filename='output_video.mp4')
 
