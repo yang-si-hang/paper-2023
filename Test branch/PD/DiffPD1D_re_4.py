@@ -149,9 +149,9 @@ class PD1D:
     def __init__(self, length, radius, seed_size:float):
         self.length = length
         self.radius = radius
-        self.dt = 1./200
+        self.dt = 1./100
         self.rho = 1.e3
-        self.E = 2.e6
+        self.E = 5.e6
         self.mu = 0.45
         self.positional_node_weight = 1.e8
         self.positional_element_weight = 1.e8
@@ -161,7 +161,7 @@ class PD1D:
         self.contact_element_weight = 0.
         self.dim:int = 3
         self.quat_dim:int = 4
-        self.solve_iteration = 201
+        self.solve_iteration = 101
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -278,7 +278,7 @@ class PD1D:
 
 
     def construct_weight(self):
-        self.stretch_weight = self.E * self.section_area * self.l
+        self.stretch_weight = self.E * self.section_area * self.l# / 10
         # self.stretch_weight = 0.
         self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l# * 5
         # self.bend_weight = 0.
@@ -393,6 +393,7 @@ class PD1D:
             delta_quat = self.dt / 2 * quatmul(self.element_quat[u_idx], angle_vel_quat)
             element_sn_tmp = self.element_quat[u_idx] + delta_quat
             self.element_sn[u_idx] = quatnormalize(element_sn_tmp)
+            # 上面的计算方法在角速度较大时有误差
             # print('ele_sn:', self.element_sn[u_idx], 'ele_angle_vel:', ele_angle_vel_new)
 
         # for idx in ti.static(self.contact_particle_list):
@@ -750,22 +751,22 @@ class PD1D:
             ele_quat_theta1_list.append(quat_theta1*180/tm.pi)
             ele_quat_theta2_list.append(quat_theta2*180/tm.pi)
 
-            # if step_num == 17:
-                # print(f'Itr:{itr}------------------------------------------------------')
-                # print(f'Node sn: {self.node_pos_new.to_numpy()}')
-                # print(f'Ele sn: {self.element_quat_new.to_numpy()}')
-                # # print(f'Rhs Stretch Node: {np.array2string(rhs_stretch_np[0:self.PARTICLE_NUM*self.dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                # # print(f'Rhs Stretch Ele: {np.array2string(rhs_stretch_np[self.PARTICLE_NUM*self.dim:self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                # # print(f'Rhs Bend: {np.array2string(rhs_bend_np/self.bend_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                # print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
-                # print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
-                # print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
+            if step_num == 0:
+                print(f'Itr:{itr}------------------------------------------------------')
+                print(f'Node pos new: {self.node_pos_new.to_numpy()}')
+                print(f'Ele new: {self.element_quat_new.to_numpy()}')
+                # print(f'Rhs Stretch Node: {np.array2string(rhs_stretch_np[0:self.PARTICLE_NUM*self.dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+                # print(f'Rhs Stretch Ele: {np.array2string(rhs_stretch_np[self.PARTICLE_NUM*self.dim:self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+                # print(f'Rhs Bend: {np.array2string(rhs_bend_np/self.bend_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+                print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
+                print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
+                print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
 
-                # print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
-                # print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
+                print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
+                print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
 
-                # print('1:', 'Ele Quat:', ele_quat1, 'Ele Theta:', quat_theta1*180/tm.pi)
-                # print('2:', 'Ele Quat:', ele_quat2, 'Ele Theta:', quat_theta2*180/tm.pi)
+                print('1:', 'Ele Quat:', ele_quat1, 'Ele Theta:', quat_theta1*180/tm.pi)
+                print('2:', 'Ele Quat:', ele_quat2, 'Ele Theta:', quat_theta2*180/tm.pi)
 
             self.update_pos_new(state_sol)
 
@@ -777,7 +778,7 @@ class PD1D:
             'ele_quat_theta1': ele_quat_theta1_list,
             'ele_quat_theta2': ele_quat_theta2_list
         }
-        if step_num % 10 == 0:
+        if step_num % 20 == 0:
             np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
             print('Save Local Solve Data')
 
@@ -863,8 +864,8 @@ class PD1D:
     @ti.kernel
     def init_vel(self):
         # self.node_vel[0][2] = 0.1 * self.l
-        self.node_force[0][2] = 9.8 * self.node_mass[0] * 1
-        # self.element_torque[0] = ti.Vector([0., 0.3 * self.l, 0.])
+        # self.node_force[0][2] = 9.8 * self.node_mass[0] * 0.1
+        self.element_torque[0] = ti.Vector([0., 0.1 * self.l, 0.])
         # self.element_angle_vel[0] = ti.Vector([0., 0.5, 0.]) / self.l
 
 
@@ -888,10 +889,10 @@ def main():
 
     frame_name_list = []
 
-    for step in range(200):
+    for step in range(20):
         frame_name_list = soft_obj.substep(step, frame_name_list)
         # time.sleep(5)
-        print(f'Frame: {step}----------------------')
+        print(f'Frame: {step}------------------------------------------')
         print(f'Node Pos 1: {soft_obj.node_pos[0]}', f'Node Vel 1: {soft_obj.node_vel[0]}')
         print(f'Node Pos 2: {soft_obj.node_pos[1]}', f'Node Vel 2: {soft_obj.node_vel[1]}')
         theta1 = 2 * np.arccos(quatfromtwovectors_np(np.array([0,0,1]), soft_obj.node_pos[1]-soft_obj.node_pos[0])[0]) * 180 / np.pi
