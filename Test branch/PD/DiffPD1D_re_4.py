@@ -15,6 +15,8 @@ import taichi.math as tm
 ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
 np.set_printoptions(linewidth=200, precision=6)
 from GGUI import * 
+from Math_np import *
+from Math_ti import *
 
 
 output_folder = 'FigureWrite'
@@ -62,48 +64,6 @@ def quatnormalize(u):
     return u.normalized()
 
 
-def quatfromtwovectors_np(a, b):
-    # a -> b的旋转四元数
-    v1 = a / np.linalg.norm(a)
-    v2 = b / np.linalg.norm(b)
-    cos_theta = v1.dot(v2)
-
-    quat = np.zeros(4)
-    if cos_theta < -1 + 1e-6:
-        cos_theta = max(cos_theta, -1)
-        m = np.vstack((v1, v2))
-        u, s, vh = np.linalg.svd(m, ti.f64)             # 奇异值分解得到垂直的特征向量v3
-        axis_tmp = vh[2, :]
-        w2 = (1 + cos_theta) * 0.5              # w2=cos^2(theta/2)
-        w = np.sqrt(w2)
-        vec = axis_tmp * np.sqrt(1 - w2)
-        quat[0] = w
-        quat[1:] = vec
-    else:
-        axis_tmp = np.cross(v1, v2)             # 旋转轴*sin(theta)
-        s = np.sqrt((1 + cos_theta) * 2)        # s=2*cos(theta/2)
-        invs = 1 / s
-        vec = axis_tmp * invs
-        w = s * 0.5
-        quat[0] = w
-        quat[1:] = vec
-    
-    return quat
-
-
-def cal_element_quat(node_np, element_np):
-    ele_num = element_np.shape[0]
-    element_quat_init = np.zeros((ele_num, 4), dtype=np.float64)
-    e3 = np.array([0., 0., 1.])
-    for ele_idx in range(ele_num):
-        idx1, idx2 = element_np[ele_idx]
-        v = node_np[idx2, :] - node_np[idx1, :]
-        quat = quatfromtwovectors_np(e3, v)
-        element_quat_init[ele_idx] = quat
-    
-    return element_quat_init
-
-
 @ti.func
 def quatfromtwovectors(a, b):
     # a -> b的旋转四元数
@@ -144,6 +104,34 @@ def quatrotvec(u, v):
     return ti.Vector([q_rot[1], q_rot[2], q_rot[3]])
 
 
+def cal_element_quat(node_np, element_np):
+    ele_num = element_np.shape[0]
+    element_quat_init = np.zeros((ele_num, 4), dtype=np.float64)
+    e3 = np.array([0., 0., 1.])
+    for ele_idx in range(ele_num):
+        idx1, idx2 = element_np[ele_idx]
+        v = node_np[idx2, :] - node_np[idx1, :]
+        quat = quatfromtwovectors_np(e3, v)
+        element_quat_init[ele_idx] = quat
+    
+    return element_quat_init
+
+
+def quat_node_update_ghost_np(node_pos_end, ele_quat, l):
+    ele_num = ele_quat.shape[0]
+    quat_node = np.zeros((ele_num*2, 3), dtype=np.float32)
+    quat_node[-1] = node_pos_end
+    for ele_idx in range(ele_num-1, 0, -1):
+        quat = ele_quat[ele_idx]
+        vec = quatrotvec_np(quat, np.array([0., 0., 1.]))
+        quat_node[ele_idx*2] = quat_node[ele_idx*2+1] - vec * l
+        quat_node[ele_idx*2-1] = quat_node[ele_idx*2]
+    quat = ele_quat[0]
+    vec = quatrotvec_np(quat, np.array([0., 0., 1.]))
+    quat_node[0] = quat_node[1] - vec * l
+    return quat_node.astype(np.float32)
+
+
 @ti.data_oriented
 class PD1D:
     def __init__(self, length, radius, seed_size:float):
@@ -161,7 +149,7 @@ class PD1D:
         self.contact_element_weight = 0.
         self.dim:int = 3
         self.quat_dim:int = 4
-        self.solve_iteration = 101
+        self.solve_iteration = 200
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -426,6 +414,8 @@ class PD1D:
             distance_vec = (self.node_pos_new[idx2] - self.node_pos_new[idx1])
             # theta = tm.atan2(distance_vec[0], distance_vec[2])
             # print('ele_sn:', quat_new, 'quat theta', 2 * ti.atan2(quat_new[1], quat_new[0]) *180/tm.pi, 'node_sn1:', self.node_pos_new[idx1], 'distance theta:', theta*180/tm.pi)
+
+            # 考虑将约束变为两者的中间值
 
             d3 = quatrotvec(quat_new, e3)
             u_constaint = quatfromtwovectors(e3, distance_vec)
@@ -708,12 +698,19 @@ class PD1D:
         self.construct_sn()
         self.warm_start()
         
+        ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
         ele_quat_theta1_list = []
         ele_quat_theta2_list = []
         distance_vec1_list = []
         distance_vec2_list = []
         distance_theta1_list = []
         distance_theta2_list = []
+        data_dict = {'distance_vec1': distance_vec1_list,
+                     'distance_vec2': distance_vec2_list,
+                     'distance_theta1': distance_theta1_list,
+                     'distance_theta2': distance_theta2_list,
+                     'ele_quat_theta1': ele_quat_theta1_list,
+                     'ele_quat_theta2': ele_quat_theta2_list}
 
         # for itr in range(1):
         for itr in range(self.solve_iteration):
@@ -751,36 +748,31 @@ class PD1D:
             ele_quat_theta1_list.append(quat_theta1*180/tm.pi)
             ele_quat_theta2_list.append(quat_theta2*180/tm.pi)
 
-            if step_num == 0:
-                print(f'Itr:{itr}------------------------------------------------------')
-                print(f'Node pos new: {self.node_pos_new.to_numpy()}')
-                print(f'Ele new: {self.element_quat_new.to_numpy()}')
+            # if step_num == 0:
+                # print(f'Itr:{itr}------------------------------------------------------')
+                # print(f'Node pos new: {self.node_pos_new.to_numpy()}')
+                # print(f'Ele new: {self.element_quat_new.to_numpy()}')
                 # print(f'Rhs Stretch Node: {np.array2string(rhs_stretch_np[0:self.PARTICLE_NUM*self.dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
                 # print(f'Rhs Stretch Ele: {np.array2string(rhs_stretch_np[self.PARTICLE_NUM*self.dim:self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
                 # print(f'Rhs Bend: {np.array2string(rhs_bend_np/self.bend_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
-                print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
-                print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
+                # print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
+                # print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
+                # print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
 
-                print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
-                print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
+                # print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
+                # print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
 
-                print('1:', 'Ele Quat:', ele_quat1, 'Ele Theta:', quat_theta1*180/tm.pi)
-                print('2:', 'Ele Quat:', ele_quat2, 'Ele Theta:', quat_theta2*180/tm.pi)
+                # print('1:', 'Ele Quat:', ele_quat1, 'Ele Theta:', quat_theta1*180/tm.pi)
+                # print('2:', 'Ele Quat:', ele_quat2, 'Ele Theta:', quat_theta2*180/tm.pi)
 
             self.update_pos_new(state_sol)
 
-        data_dict = {
-            'distance_vec1': distance_vec1_list,
-            'distance_vec2': distance_vec2_list,
-            'distance_theta1': distance_theta1_list,
-            'distance_theta2': distance_theta2_list,
-            'ele_quat_theta1': ele_quat_theta1_list,
-            'ele_quat_theta2': ele_quat_theta2_list
-        }
-        if step_num % 20 == 0:
-            np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
-            print('Save Local Solve Data')
+            frame_name_list = self.gui_show_local_solve(ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num, name_list=frame_name_list)
+            time.sleep(0.4)
+
+        # if step_num % 20 == 0:
+        #     np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
+        #     print('Save Local Solve Data')
 
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
@@ -833,6 +825,30 @@ class PD1D:
         quat = self.element_quat[0]
         vec = quatrotvec(quat, ti.Vector([0., 0., 1.]))
         self.quat_node[0] = self.quat_node[1] - ti.cast(vec * self.l, ti.f32)
+
+
+    def gui_show_local_solve(self, ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=None, name_list=None):
+        window, canvas, scene = ggui_set['window'], ggui_set['canvas'], ggui_set['scene']
+        if SHOW_FLAG is False:
+            return
+        scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+        scene.ambient_light((0.8, 0.8, 0.8))
+        self.node_show.from_numpy(self.node_pos_new.to_numpy(dtype=np.float64))
+        quat_node_np = quat_node_update_ghost_np(self.node_pos_new[self.PARTICLE_NUM-1].to_numpy(), self.element_quat_new.to_numpy(), self.l)
+        self.quat_node.from_numpy(quat_node_np)
+
+        scene.particles(self.node_show, radius=0.003, color=(0., 0., 0.))
+        scene.lines(self.node_show, width=2., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
+        scene.lines(self.quat_node, width=2., indices=self.quat_show, color=(1., 0., 0.), vertex_count=0)
+        canvas.scene(scene)
+        canvas.set_background_color((1.0, 1.0, 1.0))
+        # if WRITE_FLAG is True and itr_num % 10 == 0:
+        if WRITE_FLAG is True:
+            filename = os.path.join(output_folder, f'frame_{itr_num:04d}.png')
+            window.save_image(f'{filename}')
+            name_list.append(filename)
+        window.show()
+        return name_list
 
 
     def gui_show(self, ggui_set, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=None, name_list=None):
@@ -889,9 +905,9 @@ def main():
 
     frame_name_list = []
 
-    for step in range(20):
+    for step in range(5):
         frame_name_list = soft_obj.substep(step, frame_name_list)
-        # time.sleep(5)
+        # time.sleep(0.5)
         print(f'Frame: {step}------------------------------------------')
         print(f'Node Pos 1: {soft_obj.node_pos[0]}', f'Node Vel 1: {soft_obj.node_vel[0]}')
         print(f'Node Pos 2: {soft_obj.node_pos[1]}', f'Node Vel 2: {soft_obj.node_vel[1]}')
