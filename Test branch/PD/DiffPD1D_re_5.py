@@ -1,8 +1,8 @@
 """
 DiffPD的一维版本,基于Cosserat杆理论,只有弯曲和拉伸
 由于观察到离散程度增大的时候,求解器的收敛速度会变慢(需要更大的迭代次数),与论文中的结果不一致
-改为使用三维的情况,并且与论文中的参数全部一致
-created at 2024-08-14 by hsy
+改为使用三维的情况,修改了弯曲约束的Local Solve
+created at 2024-08-18 by hsy
 """
 
 import time
@@ -149,9 +149,9 @@ class PD1D:
         self.bend_weight = 0.
 
         self.A_stretch = ti.Matrix.field(self.dim+self.quat_dim, 2*self.dim+self.quat_dim, dtype=ti.f64, shape=())
-        self.A_bend = ti.Matrix.field(2*self.quat_dim, 2*self.quat_dim, dtype=ti.f64, shape=())
+        self.A_bend = ti.Matrix.field(self.quat_dim, 2*self.quat_dim, dtype=ti.f64, shape=())
         self.Bp_stretch = ti.Vector.field(self.dim+self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
-        self.Bp_bend = ti.Vector.field(2*self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
+        self.Bp_bend = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim, self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim)
         self.lhs.fill(0.)
@@ -217,9 +217,9 @@ class PD1D:
 
 
     def construct_weight(self):
-        # self.stretch_weight = self.E * self.section_area * self.l# / 10
-        self.stretch_weight = 0.
-        self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l# * 5
+        self.stretch_weight = self.E * self.section_area * self.l# / 10
+        # self.stretch_weight = 0.
+        self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l / 2
         # self.bend_weight = 0.
 
 
@@ -244,9 +244,12 @@ class PD1D:
         for d in ti.static(range(self.quat_dim)):
             self.A_stretch[None][d+3, d+6] = 1.
 
+        # for d in ti.static(range(self.quat_dim)):
+        #     self.A_bend[None][d, d] = 1.
+        #     self.A_bend[None][d+4, d+4] = 1.
         for d in ti.static(range(self.quat_dim)):
             self.A_bend[None][d, d] = 1.
-            self.A_bend[None][d+4, d+4] = 1.
+            self.A_bend[None][d, d+4] = -1.
 
         # print('A_stretch:', self.A_stretch[None])
         # print('A_bend:', self.A_bend[None])
@@ -378,26 +381,27 @@ class PD1D:
             # print('d3:', d3, 'u_constraint:', u_constraint)
 
         for angle_idx in range(self.ANGLE_NUM):
-            idx1, idx2 = angle_idx, angle_idx + 1
-            u1, u2 = self.element_quat_new[idx1], self.element_quat_new[idx2]
-            cos_theta = u1.dot(u2) / (u1.norm() * u2.norm())
-            u_average1, u_average2 = ti.Vector.zero(ti.f64, 4), ti.Vector.zero(ti.f64, 4)
-            if cos_theta < 0:
-                # print('cos_theta is negative:', cos_theta)
-                # print('u1:', u1, 'u2:', u2)
-                # print('u1 angle:', 2 * ti.atan2(u1[2], u1[0]) * 180/tm.pi, 'u2 angle:', 2 * ti.atan2(u2[2], u2[0]) * 180/tm.pi)
-                cos_theta = -cos_theta
-                u1_inv, u2_inv = -u1, -u2
-                u_average1 = (u1 + u2_inv) / ti.sqrt((1 + cos_theta) / 2) / 2
-                u_average2 = (u1_inv + u2) / ti.sqrt((1 + cos_theta) / 2) / 2
-                # print('u_average1:', u_average1, 'u_average2:', u_average2)
-            else:
-                u_average1 = (u1 + u2) / ti.sqrt((1 + cos_theta) / 2) / 2
-                u_average2 = u_average1
-            u_average1 = u_average1.normalized()
-            u_average2 = u_average2.normalized()
-            self.Bp_bend[angle_idx] = ti.Vector([u_average1[0], u_average1[1], u_average1[2], u_average1[3],
-                                                 u_average2[0], u_average2[1], u_average2[2], u_average2[3]])
+            # idx1, idx2 = angle_idx, angle_idx + 1
+            # u1, u2 = self.element_quat_new[idx1], self.element_quat_new[idx2]
+            # cos_theta = u1.dot(u2) / (u1.norm() * u2.norm())
+            # u_average1, u_average2 = ti.Vector.zero(ti.f64, 4), ti.Vector.zero(ti.f64, 4)
+            # if cos_theta < 0:
+            #     # print('cos_theta is negative:', cos_theta)
+            #     # print('u1:', u1, 'u2:', u2)
+            #     # print('u1 angle:', 2 * ti.atan2(u1[2], u1[0]) * 180/tm.pi, 'u2 angle:', 2 * ti.atan2(u2[2], u2[0]) * 180/tm.pi)
+            #     cos_theta = -cos_theta
+            #     u1_inv, u2_inv = -u1, -u2
+            #     u_average1 = (u1 + u2_inv) / ti.sqrt((1 + cos_theta) / 2) / 2
+            #     u_average2 = (u1_inv + u2) / ti.sqrt((1 + cos_theta) / 2) / 2
+            #     # print('u_average1:', u_average1, 'u_average2:', u_average2)
+            # else:
+            #     u_average1 = (u1 + u2) / ti.sqrt((1 + cos_theta) / 2) / 2
+            #     u_average2 = u_average1
+            # u_average1 = u_average1.normalized()
+            # u_average2 = u_average2.normalized()
+            # self.Bp_bend[angle_idx] = ti.Vector([u_average1[0], u_average1[1], u_average1[2], u_average1[3],
+            #                                      u_average2[0], u_average2[1], u_average2[2], u_average2[3]])
+            self.Bp_bend[angle_idx] = ti.Vector([0, 0, 0, 0])
 
 
     @ti.kernel
@@ -703,19 +707,19 @@ class PD1D:
             ele_quat_theta1_list.append(quat_theta1*180/tm.pi)
             ele_quat_theta2_list.append(quat_theta2*180/tm.pi)
 
-            if step_num == 2:
+            if step_num == 0:
                 print(f'Itr:{itr}------------------------------------------------------')
-                print(f'Node pos new: {self.node_pos_new.to_numpy()}')
-                print(f'Ele new: {self.element_quat_new.to_numpy()}')
-                print(f'Rhs Stretch Node: {np.array2string(rhs_stretch_np[0:self.PARTICLE_NUM*self.dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                print(f'Rhs Stretch Ele: {np.array2string(rhs_stretch_np[self.PARTICLE_NUM*self.dim:self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
-                print(f'Rhs Bend: {np.array2string(rhs_bend_np/self.bend_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+                # print(f'Node pos new: {self.node_pos_new.to_numpy()}')
+                # print(f'Ele new: {self.element_quat_new.to_numpy()}')
+            #     print(f'Rhs Stretch Node: {np.array2string(rhs_stretch_np[0:self.PARTICLE_NUM*self.dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+            #     print(f'Rhs Stretch Ele: {np.array2string(rhs_stretch_np[self.PARTICLE_NUM*self.dim:self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim]/self.stretch_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
+                # print(f'Rhs Bend: {np.array2string(rhs_bend_np/self.bend_weight, formatter={"float_kind": lambda x: f"{x:.8e}"})}')
                 # print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
                 # print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
-                print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
+                # print('Node Pos1:', state_sol[0:3], 'Node Pos2:', state_sol[3:6], 'Node Pos3:', state_sol[6:9])
 
-                print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
-                print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
+                # print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
+                # print('2:', 'distance vec:', distance_vec2, 'theta:', theta2*180/tm.pi)
 
                 print('1:', 'Ele Quat:', ele_quat1, 'Ele Theta:', quat_theta1*180/tm.pi)
                 print('2:', 'Ele Quat:', ele_quat2, 'Ele Theta:', quat_theta2*180/tm.pi)
@@ -726,7 +730,7 @@ class PD1D:
             # time.sleep(0.4)
 
         if step_num % 1 == 0:
-            np.savez(f'DataWrite/local_solve_nostretch_{step_num}.npz', **data_dict)
+            np.savez(f'DataWrite/local_solve_nostretch_new_{step_num}.npz', **data_dict)
             print('Save Local Solve Data')
 
         self.update_vel_pos()
@@ -836,7 +840,7 @@ class PD1D:
     def init_vel(self):
         # self.node_vel[0][2] = 0.1 * self.l
         # self.node_force[0][2] = 9.8 * self.node_mass[0]# * 0.1
-        self.element_torque[0] = ti.Vector([0., 1 * 9.8 * self.node_mass[0] * self.l, 0.])
+        self.element_torque[0] = ti.Vector([0., 0.1 * 9.8 * self.node_mass[0] * self.l, 0.])
         # self.element_angle_vel[0] = ti.Vector([0., 0.5, 0.]) / self.l
 
 
