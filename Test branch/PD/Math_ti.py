@@ -9,12 +9,23 @@ def quatconj(u):
 
 
 @ti.func
+def quatconj2d(u):
+    # 实部在前,虚部在后
+    return ti.Vector([u[0], -u[1]])
+
+
+@ti.func
 def quatmul(u1, u2):
     tmp1 = u1[0] * u2[0] - u1[1] * u2[1] - u1[2] * u2[2] - u1[3] * u2[3]
     tmp2 = u1[0] * u2[1] + u1[1] * u2[0] + u1[2] * u2[3] - u1[3] * u2[2]
     tmp3 = u1[0] * u2[2] - u1[1] * u2[3] + u1[2] * u2[0] + u1[3] * u2[1]
     tmp4 = u1[0] * u2[3] + u1[1] * u2[2] - u1[2] * u2[1] + u1[3] * u2[0]
     return ti.Vector([tmp1, tmp2, tmp3, tmp4])
+
+
+@ti.func
+def quatmul2d(u1, u2):
+    return ti.Vector([u1[0]*u2[0]-u1[1]*u2[1], u1[0]*u2[1]+u1[1]*u2[0]])
 
 
 @ti.func
