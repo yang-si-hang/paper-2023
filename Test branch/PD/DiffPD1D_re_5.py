@@ -1,7 +1,7 @@
 """
 DiffPD的一维版本,基于Cosserat杆理论,只有弯曲和拉伸
 由于观察到离散程度增大的时候,求解器的收敛速度会变慢(需要更大的迭代次数),与论文中的结果不一致
-改为使用三维的情况,修改了弯曲约束的Local Solve
+改为使用三维的情况,修改了弯曲约束的Local Solve,收敛速度更快
 created at 2024-08-18 by hsy
 """
 
@@ -332,7 +332,7 @@ class PD1D:
             ele_angle_vel_new = ele_angle_vel_old + self.dt * self.ele_inv_inertia_matrix[u_idx] @ \
                                 (self.element_torque[u_idx] - ele_angle_vel_old.cross(self.ele_inertia_matrix[u_idx] @ ele_angle_vel_old))
             angle_vel_quat = ti.Vector([0., ele_angle_vel_new[0], ele_angle_vel_new[1], ele_angle_vel_new[2]], ti.f64)
-            delta_quat = self.dt / 2 * quatmul(self.element_quat[u_idx], angle_vel_quat)
+            delta_quat = self.dt * quatmul(self.element_quat[u_idx], angle_vel_quat) / 2.                   # \Delta t * \dot q
             element_sn_tmp = self.element_quat[u_idx] + delta_quat
             self.element_sn[u_idx] = quatnormalize(element_sn_tmp)
             # 上面的计算方法在角速度较大时有误差
