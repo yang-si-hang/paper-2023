@@ -73,7 +73,7 @@ class PD1D:
         # self.contact_weight = 0.
         self.dim:int = 2
         self.quat_dim:int = 2
-        self.solve_iteration = 200
+        self.solve_iteration = 20
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -490,8 +490,9 @@ class PD1D:
     @ti.kernel
     def init_vel(self):
         # self.node_vel[0][1] = 1.
-        # self.node_force[0][1] = -9.8 * self.node_mass[0]
-        self.ele_torque[0] = 9.8 * self.node_mass[0]
+        self.node_force[0][1] = -9.8 * self.node_mass[0]
+        # self.ele_torque[0] = 9.8 * self.node_mass[0]
+        # 相同的力和力矩效果,变形效果不一致,差别很大
 
 
     def substep(self, step_num, frame_name_list):
@@ -587,14 +588,14 @@ def main():
 
     frame_name_list = []
 
-    for i in range(100):
+    for i in range(500):
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
         print(f'Iter: {i} --------------------------------------')
         print(f'Node Position: {soft_obj.node_pos[0].to_numpy()}')
         # print(f'Node Distace Normalized: {soft_obj.node_distance_unit.to_numpy()}')
-        print(f'Element Quaternion: {soft_obj.ele_quat[0].to_numpy()}')
+        print(f'Element Quaternion: {soft_obj.ele_quat[0].to_numpy()}; Vel: {soft_obj.ele_angle_vel[0]}')
 
     # image_to_video(frame_name_list, video_filename='output_video.mp4')
 

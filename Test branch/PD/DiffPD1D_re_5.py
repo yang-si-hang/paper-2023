@@ -100,7 +100,7 @@ class PD1D:
         self.contact_element_weight = 0.
         self.dim:int = 3
         self.quat_dim:int = 4
-        self.solve_iteration = 100
+        self.solve_iteration = 200
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -849,7 +849,7 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObj, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObj(length=1., radius=0.01, seed_size=0.3)
+    soft_obj = MyObj(length=1., radius=0.01, seed_size=0.2)
     soft_obj.preset_gui(camera_pos=[0.5, 0.75, 0.3], camera_target=[0.5, 0., 0.3])
 
     soft_obj.precomputation()
