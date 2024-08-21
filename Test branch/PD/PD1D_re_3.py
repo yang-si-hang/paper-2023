@@ -11,7 +11,7 @@ from scipy import sparse
 import taichi as ti
 import taichi.math as tm
 # ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
-np.set_printoptions(linewidth=200)
+np.set_printoptions(linewidth=160)
 ti.init(arch=ti.gpu, debug=True, default_fp=ti.f64)
 
 output_folder = 'FigureWrite'
@@ -53,9 +53,9 @@ class PD1D:
         self.rho = 1.e3
         self.E = 2.e7
         self.mu = 0.45
-        self.positional_node_weight = 1.e8
-        self.positional_ele_weight = 1.e8
-        self.contact_node_weight = 0.
+        self.positional_node_weight = 1.e5
+        self.positional_ele_weight = 1.e5
+        self.contact_node_weight = 1.e5
         self.contact_ele_weight = 0.
         self.dim:int = 2
         self.quat_dim:int = 2
@@ -156,7 +156,7 @@ class PD1D:
     def construct_weight(self):
         # self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l
         self.bend_weight = 4 * self.E / self.l * tm.pi * self.radius ** 4 / 4
-        self.length_weight = 1.e6
+        self.length_weight = 1.e4
 
 
     @ti.kernel
@@ -279,13 +279,11 @@ class PD1D:
             u2_residual = (1 - 1/u2.norm()) * u2
             self.Bp_bend[angle_idx] = u1_residual - u2_residual
 
+        self.Bp_length[None].fill(0.)
         for u_idx in range(self.ELEMENT_NUM):
             u = self.ele_quat_new[u_idx]
             u_residual = (1 - 1/u.norm()) * u
-            self.Bp_length[None] = u_residual * self.l
-
-        for u_idx in range(self.ELEMENT_NUM):
-            self.Bp_normalize[u_idx] = self.ele_quat_new[u_idx].normalized()
+            self.Bp_length[None] += u_residual * self.l
 
 
     @ti.kernel
@@ -366,10 +364,11 @@ class PD1D:
                 self.node_end_pos[q_idx][d] = self.node_end_pos_new[q_idx][d]
 
         for u_idx in range(self.ELEMENT_NUM):
-            delta_quat = quat2rot(quatconj(self.ele_quat[u_idx])) @ self.ele_quat_new[u_idx]
+            ele_quat_tmp = self.ele_quat_new[u_idx].normalized()
+            delta_quat = quat2rot(quatconj(self.ele_quat[u_idx])) @ ele_quat_tmp
             angle_vel_tmp = ti.atan2(delta_quat[1], delta_quat[0]) / self.dt
             self.ele_angle_vel[u_idx] = angle_vel_tmp
-            self.ele_quat[u_idx] = self.ele_quat_new[u_idx].normalized()
+            self.ele_quat[u_idx] = ele_quat_tmp
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -485,12 +484,15 @@ class PD1D:
             node_pos_new_bf = self.node_end_pos_new.to_numpy()
             ele_quat_new_bf = self.ele_quat_new.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
-            if itr == self.solve_iteration-1:
-                print(f'Rhs: \n{rhs_np}')
-                print(f'State Sol: \n{state_sol}')
+            # if itr == self.solve_iteration-1:
+            print(f'Bp_bend: \n{self.Bp_bend.to_numpy()}')
+            print(f'Bp_length: \n{self.Bp_length.to_numpy()}')
+            print(f'Rhs: \n{rhs_np}')
+            print(f'State Sol: \n{state_sol}')
+
             self.state_sol.from_numpy(state_sol)
             self.update_pos_new(state_sol)
-            self.quat_normalize()
+            # self.quat_normalize()
 
             ele_quat1 = self.ele_quat_new[0]
             ele_quat2 = self.ele_quat_new[1]
@@ -547,12 +549,12 @@ def main():
     np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
     np.savetxt('A_length.csv', soft_obj.A_length.to_numpy(), delimiter=',', fmt='%.8f')
     # np.savetxt('bend_constraint.csv', soft_obj.bend_constraint.to_numpy(), delimiter=',', fmt='%.8f')
-    soft_obj.init_vel()
-    # soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 1.e0
+    # soft_obj.init_vel()
+    soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 1.e0
 
     frame_name_list = []
 
-    for i in range(10):
+    for i in range(1):
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
