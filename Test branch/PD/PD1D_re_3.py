@@ -102,10 +102,12 @@ class PD1D:
         self.bend_weight = 0.
         self.ele_offset = 2 * self.dim
 
-        self.A_bend = ti.Matrix.field(self.quat_dim, 2*self.quat_dim, dtype=ti.f64, shape=())
+        # self.A_bend = ti.Matrix.field(self.quat_dim, 2*self.quat_dim, dtype=ti.f64, shape=())
+        self.A_bend = ti.Matrix.field(2*self.quat_dim, self.quat_dim, dtype=ti.f64, shape=())
         self.A_normalize = ti.Matrix.field(self.quat_dim, self.quat_dim, dtype=ti.f64, shape=())
         self.A_length = ti.field(dtype=ti.f64, shape=(2, 2*self.dim+self.ELEMENT_NUM*self.quat_dim))
-        self.Bp_bend = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
+        # self.Bp_bend = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
+        self.Bp_bend = ti.Vector.field(2*self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.Bp_length = ti.Vector.field(self.dim, dtype=ti.f64, shape=())
         self.Bp_normalize = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(2*self.dim+self.ELEMENT_NUM*self.quat_dim, 2*self.dim+self.ELEMENT_NUM*self.quat_dim))
@@ -157,6 +159,7 @@ class PD1D:
         # self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l
         self.bend_weight = 4 * self.E / self.l * tm.pi * self.radius ** 4 / 4
         self.length_weight = 1.e4
+        self.ele_normalize_weight = 1.e4
 
 
     @ti.kernel
@@ -164,6 +167,10 @@ class PD1D:
         dim = self.dim
         quat_dim  = self.quat_dim
         ele_offset = self.ele_offset
+
+        for q_idx in range(2):
+            for d in ti.static(range(self.dim)):
+                self.lhs[q_idx*dim+d, q_idx*dim+d] = 1.e-4 / self.dt ** 2
         
         for u_idx in range(self.ELEMENT_NUM):
             for d in ti.static(range(self.quat_dim)):
@@ -172,18 +179,19 @@ class PD1D:
 
         for d in range(self.quat_dim):
             self.A_bend[None][d, d] = 1.
-            self.A_bend[None][d, d+2] = -1.
+            # self.A_bend[None][d, d+2] = -1.
+            self.A_bend[None][d+2, d+2] = 1.
 
         # Rod length Constraint
         for d in range(self.dim):
-            self.A_length[d, d] = 1.
-            self.A_length[d, d+2] = -1.
+            self.A_length[d, d] = 0.
+            self.A_length[d, d+2] = 0.
         for u_idx in range(self.ELEMENT_NUM):
             self.A_length[0, ele_offset+u_idx*quat_dim] = self.l
             self.A_length[1, ele_offset+u_idx*quat_dim+1] = self.l
 
-        for d in range(self.quat_dim):
-            self.A_normalize[None][d, d] = 1.
+        # for d in range(self.quat_dim):
+        #     self.A_normalize[None][d, d] = 1.
 
         # Bend Constraint
         for angle_idx in range(self.ANGLE_NUM):
@@ -275,15 +283,21 @@ class PD1D:
     def local_solve(self):
         for angle_idx in range(self.ANGLE_NUM):
             u1, u2 = self.ele_quat_new[angle_idx], self.ele_quat_new[angle_idx+1]
-            u1_residual = (1 - 1/u1.norm()) * u1
-            u2_residual = (1 - 1/u2.norm()) * u2
-            self.Bp_bend[angle_idx] = u1_residual - u2_residual
+            # u1_residual = (1 - 1/u1.norm()) * u1
+            # u2_residual = (1 - 1/u2.norm()) * u2
+            # self.Bp_bend[angle_idx] = u1_residual - u2_residual
+
 
         self.Bp_length[None].fill(0.)
         for u_idx in range(self.ELEMENT_NUM):
             u = self.ele_quat_new[u_idx]
             u_residual = (1 - 1/u.norm()) * u
             self.Bp_length[None] += u_residual * self.l
+        self.Bp_length[None] = self.Bp_length[None] - self.node_end_pos_new[0] + self.node_end_pos_new[1]
+
+        # for u_idx in range(self.ELEMENT_NUM):
+        #     u = self.ele_quat_new[u_idx]
+        #     self.Bp_normalize[u_idx] = u.normalized()
 
 
     @ti.kernel
@@ -333,7 +347,7 @@ class PD1D:
 
         for idx in ti.static(range(self.contact_ele_num)):
             u_idx = self.contact_element_list[idx]
-            for d in ti.static(range(self.dim)):
+            for d in ti.static(range(self.quat_dim)):
                 self.rhs[ele_offset+u_idx*quat_dim+d] += self.contact_ele_weight * self.element_desired_quat[idx][d]
 
 
@@ -484,15 +498,22 @@ class PD1D:
             node_pos_new_bf = self.node_end_pos_new.to_numpy()
             ele_quat_new_bf = self.ele_quat_new.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
+            bend_constraint_error = np.zeros((self.ANGLE_NUM, 2))
+            for idx in range(self.ANGLE_NUM):
+                idx_start = idx * self.quat_dim + self.ele_offset
+                bend_constraint_error[idx] = state_sol[idx_start:idx_start+2] - state_sol[idx_start+2:idx_start+4] - self.Bp_bend[idx]
             # if itr == self.solve_iteration-1:
-            print(f'Bp_bend: \n{self.Bp_bend.to_numpy()}')
-            print(f'Bp_length: \n{self.Bp_length.to_numpy()}')
-            print(f'Rhs: \n{rhs_np}')
-            print(f'State Sol: \n{state_sol}')
+            # print(f'It:{itr}------------------------------------------------------')
+            # print(f'Bp_bend: \n{self.Bp_bend.to_numpy()}')
+            # print(f'Bend Constraint Error: \n{bend_constraint_error}')
+            # print(f'Bp_length: \n{self.Bp_length.to_numpy()}')
+            # print(f'Length Constraint Error: \n{self.A_length.to_numpy() @ state_sol - self.Bp_length.to_numpy()}')
+            # print(f'Rhs: \n{rhs_np}')
+            # print(f'State Sol: \n{state_sol}')
 
             self.state_sol.from_numpy(state_sol)
             self.update_pos_new(state_sol)
-            # self.quat_normalize()
+            self.quat_normalize()
 
             ele_quat1 = self.ele_quat_new[0]
             ele_quat2 = self.ele_quat_new[1]
@@ -543,22 +564,23 @@ def main():
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
-    s_lhs_np = sparse.csc_matrix(lhs_np)
-    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-
     np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
     np.savetxt('A_length.csv', soft_obj.A_length.to_numpy(), delimiter=',', fmt='%.8f')
     # np.savetxt('bend_constraint.csv', soft_obj.bend_constraint.to_numpy(), delimiter=',', fmt='%.8f')
+
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
     # soft_obj.init_vel()
     soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 1.e0
 
     frame_name_list = []
 
-    for i in range(1):
+    for i in range(30):
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        print(f'Iter: {i} --------------------------------------')
+        print(f'Step Num: {i} --------------------------------------')
         print(f'Node Position: {soft_obj.node_end_pos.to_numpy()}')
         print(f'Element Quaternion: {soft_obj.ele_quat.to_numpy()}')
         print(f'Element Angle Vel: {soft_obj.ele_angle_vel.to_numpy()}')

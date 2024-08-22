@@ -1,6 +1,8 @@
 """
 使用PD仿真1D的绳变形,基于Cosserat理论
 改写Stretch & bend constraint的计算方式,并且只考虑在X-Y平面上的变形
+改写之后,在只给力矩的条件下,收敛速度依然很慢,而且模拟效果也不对(ELement的姿态会来回传播并震荡),只有在分成10段的时候表现良好
+如果只有接触点的运动,效果反而可以接受,但初始情况下,依然存在震荡现象
 created at 2024-08-18 by hsy
 """
 
@@ -12,8 +14,7 @@ import taichi as ti
 import taichi.math as tm
 # ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
 ti.init(arch=ti.gpu, debug=True, default_fp=ti.f64)
-# from Math_ti import *
-# from Math_np import *
+np.set_printoptions(linewidth=200)
 
 output_folder = 'FigureWrite'
 
@@ -61,14 +62,15 @@ class PD1D:
         self.radius = radius
         self.dt = 1./100
         self.rho = 1.e3
-        self.E = 2.e7
+        self.E = 2.e6
         self.mu = 0.45
-        self.positional_node_weight = 1.e8
-        self.positional_ele_weight = 1.e8
-        # self.contact_weight = 0.
+        self.positional_node_weight = 1.e6
+        self.positional_ele_weight = 1.e6
+        self.contact_node_weight = 1.e6
+        self.contact_ele_weight = 0.
         self.dim:int = 2
         self.quat_dim:int = 2
-        self.solve_iteration = 50
+        self.solve_iteration = 20
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -122,6 +124,7 @@ class PD1D:
         self.Bp_shear = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.Bp_bend = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim, self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim))
+        self.lhs_shear = ti.field(dtype=ti.f64, shape=(self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim, self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_NUM*self.dim+self.ELEMENT_NUM*self.quat_dim)
         self.lhs.fill(0.)
 
@@ -144,9 +147,9 @@ class PD1D:
         self.construct_mass()
         self.construct_weight()
 
-        print(f'Particle Num: {self.PARTICLE_NUM}, Element Num: {self.ELEMENT_NUM}, Angle Num: {self.ANGLE_NUM}')
-        print(f'node_mass: {self.node_mass[0]}, element_inertia: {self.ele_inertia[0]}, stretch_weight: {self.stretch_weight}, bend_weight: {self.bend_weight}')
-        print(f'Contact Node: {self.contact_particle_list}, Contact Element: {self.contact_element_list}')
+        print(f'Particle Num: {self.PARTICLE_NUM}; Element Num: {self.ELEMENT_NUM}; Angle Num: {self.ANGLE_NUM}')
+        print(f'node_mass: {self.node_mass[0]}; element_inertia: {self.ele_inertia[0]}; stretch_weight: {self.stretch_weight}; shear weight: {self.shear_weight}; bend_weight: {self.bend_weight}')
+        print(f'Contact Node: {self.contact_particle_list}; Contact Element: {self.contact_element_list}')
         print(f'Fix Node: {self.fix_particle_list}, Fix Element: {self.fix_quaternion_list}')
 
 
@@ -160,13 +163,13 @@ class PD1D:
             self.ele_inertia[u_idx] = J1
             self.ele_inv_inertia[u_idx] = 1. / self.ele_inertia[u_idx]
             # 参考soler2018cosserat,未进行修改(理论方法未知)
-            self.ele_inertia_vector[u_idx] = ti.Vector([0., J1])
+            self.ele_inertia_vector[u_idx] = ti.Vector([J1, J1])
             # 实际测试:[J1, J1]与[0, J1]的结果是一样的
 
 
     def construct_weight(self):
-        # self.stretch_weight = self.E * self.section_area * self.l
-        # self.shear_weight = self.G * self.section_area * self.l
+        self.stretch_weight = self.E * self.section_area * self.l
+        self.shear_weight = self.G * self.section_area * self.l
         # self.bend_weight = 2 * self.G * tm.pi * self.radius ** 4 / self.l
         self.bend_weight = 4 * self.E / self.l * tm.pi * self.radius ** 4 / 4
         # self.bend_weight = 1.e1
@@ -191,9 +194,9 @@ class PD1D:
             self.A_stretch[None][d, d+2] = 1. / self.l
 
         for d in range(self.dim):
-            self.A_shear[None][d, d] = 1. / self.l
-            self.A_shear[None][d, d+2] = -1. / self.l
-            self.A_shear[None][d, d+4] = 1
+            self.A_shear[None][d, d] = -1. / self.l
+            self.A_shear[None][d, d+2] = 1. / self.l
+            self.A_shear[None][d, d+4] = -1
 
         for d in range(self.dim):
             self.A_bend[None][d, d] = 1.
@@ -221,6 +224,7 @@ class PD1D:
             ATA = A_i.transpose() @ A_i
             for A_row_idx, A_col_idx in ti.static(ti.ndrange(6, 6)):
                 self.lhs[qu_idx_vec[A_row_idx], qu_idx_vec[A_col_idx]] += self.shear_weight * ATA[A_row_idx, A_col_idx]
+                self.lhs_shear[qu_idx_vec[A_row_idx], qu_idx_vec[A_col_idx]] += self.shear_weight * ATA[A_row_idx, A_col_idx]
 
         # Bend Constraint
         for angle_idx in range(self.ANGLE_NUM):
@@ -243,16 +247,24 @@ class PD1D:
             for d in ti.static(range(self.dim)):
                 self.lhs[qu_idx+d, qu_idx+d] += self.positional_ele_weight * A_i_eye[d, d]
 
+        # Contact Constraint
+        for q_idx in ti.static(self.contact_particle_list):
+            A_i_eye = ti.Matrix([[1., 0.], [0., 1.]])
+            for d in ti.static(range(self.dim)):
+                self.lhs[q_idx*dim+d, q_idx*dim+d] += self.contact_node_weight * A_i_eye[d, d]
 
-    # @ti.kernel
-    # def construct_desired_pos(self):
-    #     for idx in ti.static(range(self.contact_num)):
-    #         q_idx = self.contact_particle_list[idx]
-    #         u_idx = self.contact_element_list[idx]
 
-    #         self.node_desired_pos[idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[idx]
-    #         delta_theta = self.dt * self.contact_ang_vel[idx]
-    #         self.element_desired_quat[idx] = quatmul2d(self.element_quat[u_idx], ti.Vector([tm.cos(delta_theta), tm.sin(delta_theta)]))
+    @ti.kernel
+    def construct_desired_pos(self):
+        for idx in ti.static(range(self.contact_par_num)):
+            q_idx = self.contact_particle_list[idx]
+            self.node_desired_pos[idx] = self.node_pos[q_idx] + self.dt * self.contact_vel[idx]
+
+        for idx in ti.static(range(self.contact_ele_num)):
+            u_idx = self.contact_element_list[idx]
+            delta_quat = self.dt * quat2rot(self.ele_quat[u_idx]) @ ti.Vector([0., self.contact_ang_vel[idx]])
+            ele_desired_quat_tmp = self.ele_quat[u_idx] + delta_quat
+            self.element_desired_quat[idx] = ele_desired_quat_tmp.normalized()
 
 
     @ti.kernel
@@ -294,7 +306,7 @@ class PD1D:
             idx1, idx2 = self.ele_indices[ele_idx]
             distance_vec = (self.node_pos_new[idx2] - self.node_pos_new[idx1]) / self.l
             diatance = distance_vec.norm()
-            self.Bp_shear[ele_idx] = (1/diatance - 1) * distance_vec
+            self.Bp_shear[ele_idx] = (1 - 1/diatance) * distance_vec
 
         for angle_idx in range(self.ANGLE_NUM):
             self.Bp_bend[angle_idx] = ti.Vector([0., 0.])
@@ -353,15 +365,16 @@ class PD1D:
             for d in ti.static(range(self.quat_dim)):
                 self.rhs[ele_offset+u_idx*quat_dim+d] += self.positional_ele_weight * self.ele_quat_init[u_idx][d]
 
-        # for idx in ti.static(range(self.contact_num)):
-        #     q_idx = self.contact_particle_list[idx]
-        #     for d in ti.static(range(self.dim)):
-        #         self.rhs[q_idx*dim+d] += self.contact_weight * self.node_desired_pos[idx][d]
+        for idx in ti.static(range(self.contact_par_num)):
+            q_idx = self.contact_particle_list[idx]
+            for d in ti.static(range(self.dim)):
+                self.rhs[q_idx*dim+d] += self.contact_node_weight * self.node_desired_pos[idx][d]
 
-        # for idx in ti.static(range(self.contact_num)):
-        #     u_idx = self.contact_element_list[idx] + self.PARTICLE_NUM
-        #     for d in ti.static(range(self.dim)):
-        #         self.rhs[u_idx*dim+d] += self.contact_weight * self.element_desired_quat[idx][d]
+        for idx in ti.static(range(self.contact_ele_num)):
+            u_idx = self.contact_element_list[idx]
+            for d in ti.static(range(self.quat_dim)):
+                self.rhs[ele_offset+u_idx*quat_dim+d] += self.contact_ele_weight * self.element_desired_quat[idx][d]
+
 
 
     @ti.kernel
@@ -455,13 +468,14 @@ class PD1D:
             return
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
-        self.node_show.from_numpy(np.hstack((self.node_pos.to_numpy(dtype=np.float64), np.zeros((self.PARTICLE_NUM, 1)))))
+        self.node_show.from_numpy(np.hstack((self.node_pos.to_numpy(), np.zeros((self.PARTICLE_NUM, 1)))))
         self.quat_node_update_ghost()
-        self.quat_node_show.from_numpy(np.hstack((self.quat_node.to_numpy(dtype=np.float64), np.zeros((self.ELEMENT_NUM*2, 1)))))
+        self.quat_node_show.from_numpy(np.hstack((self.quat_node.to_numpy(), np.zeros((self.ELEMENT_NUM*2, 1)))))
         # print(f'Quat Node Show: {self.quat_node_show.to_numpy()}')
         # print(f'Node Show: {self.node_show.to_numpy()}')
 
         scene.particles(self.node_show, radius=0.003, color=(0., 0., 0.))
+        scene.particles(self.quat_node_show, radius=0.003, color=(0., 0., 1.))
         scene.lines(self.node_show, width=2., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
         scene.lines(self.quat_node_show, width=2., indices=self.quat_show, color=(1., 0., 0.), vertex_count=0)
         canvas.scene(scene)
@@ -490,7 +504,11 @@ class PD1D:
 
 
     def substep(self, step_num, frame_name_list):
-        # self.construct_desired_pos()
+        dim = self.dim
+        quat_dim = self.quat_dim
+        ele_offset = self.ele_offset
+
+        self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
 
@@ -508,11 +526,21 @@ class PD1D:
             node_pos_new_bf = self.node_pos_new.to_numpy()
             ele_quat_new_bf = self.ele_quat_new.to_numpy()
             state_sol = self.pre_fact_lhs_solve(rhs_np)
-            self.update_pos_new(state_sol)
-            self.quat_normalize()
 
-            distance_vec1 = self.node_pos_new[1] - self.node_pos_new[0]
-            distance_vec2 = self.node_pos_new[2] - self.node_pos_new[1]
+            stretch_constraint_error = np.zeros((self.ELEMENT_NUM, 2))
+            for idx in range(self.ELEMENT_NUM):
+                q_idx1, q_idx2 = self.ele_indices[idx]
+                stretch_constraint_error[idx] = (-state_sol[q_idx1*2:q_idx1*2+2] + state_sol[q_idx2*2:q_idx2*2+2]) / self.l - self.Bp_stretch[idx]
+            shear_constraint_error = np.zeros((self.ELEMENT_NUM, 2))
+            for idx in range(self.ELEMENT_NUM):
+                q_idx1, q_idx2 = self.ele_indices[idx]
+                shear_constraint_error[idx] = (-state_sol[q_idx1*2:q_idx1*2+2] + state_sol[q_idx2*2:q_idx2*2+2]) / self.l - state_sol[self.ele_offset+idx*2:self.ele_offset+idx*2+2] - self.Bp_shear[idx]
+
+            self.update_pos_new(state_sol)
+            # self.quat_normalize()
+
+            distance_vec1 = state_sol[2:4] - state_sol[0:2]
+            distance_vec2 = state_sol[4:6] - state_sol[2:4]
             theta1 = ti.atan2(distance_vec1[1], distance_vec1[0])
             theta2 = ti.atan2(distance_vec2[1], distance_vec2[0])
 
@@ -521,8 +549,8 @@ class PD1D:
             distance_theta1_list.append(theta1*180/tm.pi)
             distance_theta2_list.append(theta2*180/tm.pi)
 
-            ele_quat1 = self.ele_quat_new[0]
-            ele_quat2 = self.ele_quat_new[1]
+            ele_quat1 = state_sol[ele_offset:ele_offset+2]
+            ele_quat2 = state_sol[ele_offset+2:ele_offset+4]
             quat_theta1 = ti.atan2(ele_quat1[1], ele_quat1[0])
             quat_theta2 = ti.atan2(ele_quat2[1], ele_quat2[0])
 
@@ -531,12 +559,15 @@ class PD1D:
 
             if step_num < 0:
                 print(f'Itr:{itr}------------------------------------------------------')
-                print(f'Node pos new: {node_pos_new_bf}')
-                print(f'Ele new: {ele_quat_new_bf}')
+                print(f'Node pos new: \n{node_pos_new_bf.flatten()}')
+                print(f'Ele new: \n{ele_quat_new_bf.flatten()}')
 
-                print(f'Bp Stretch: {self.Bp_stretch.to_numpy()}')
-                print(f'Bp Shear: {self.Bp_shear.to_numpy()}')
-                print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
+                print(f'Bp Stretch: \n{self.Bp_stretch.to_numpy().flatten()}')
+                print(f'Bp Shear: \n{self.Bp_shear.to_numpy().flatten()}')
+                # print(f'Bp Bend: {self.Bp_bend.to_numpy()}')
+
+                print(f'Stretch Constraint Error: \n{stretch_constraint_error}')
+                print(f'Shear Constraint Error: \n{shear_constraint_error}')
 
                 print('Node Pos1:', state_sol[0:2], 'Node Pos2:', state_sol[2:4], 'Node Pos3:', state_sol[4:6])
                 print('1:', 'distance vec:', distance_vec1, 'quat:', ti.Vector([ti.cos(theta1/2), ti.sin(theta1/2)]), 'theta:', theta1*180/tm.pi)
@@ -553,7 +584,7 @@ class PD1D:
             'ele_quat_theta1': ele_quat_theta1_list,
             'ele_quat_theta2': ele_quat_theta2_list
         }
-        if step_num % 5 == 0:
+        if step_num == 0:
             np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
             print('Save Local Solve Data')
 
@@ -568,29 +599,31 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObject, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.2)
+    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.1)
     soft_obj.preset_gui(camera_pos=[0.5, -0.3, 0.75], camera_target=[0.5, -0.3, 0.])
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
+    np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
+    np.savetxt('lhs_shear.csv', soft_obj.lhs_shear.to_numpy(), delimiter=',', fmt='%.8f')
+
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
-    soft_obj.init_vel()
-    # print(f'Torque: {soft_obj.ele_torque[0]}')
+    # soft_obj.init_vel()
+    soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 1.e-1
 
     frame_name_list = []
 
-    for i in range(50):
+    for i in range(500):
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
-        print(f'Iter: {i} --------------------------------------')
-        print(f'Node Position: {soft_obj.node_pos[0].to_numpy()}')
+        print(f'Step Num: {i} --------------------------------------')
+        print(f'Node Position 0: {soft_obj.node_pos[0].to_numpy()}; Vel: {soft_obj.node_vel[0]}')
         # print(f'Node Distace Normalized: {soft_obj.node_distance_unit.to_numpy()}')
-        print(f'Element Quaternion: {soft_obj.ele_quat[0].to_numpy()}; Vel: {soft_obj.ele_angle_vel[0]}')
-
+        print(f'Element Quaternion 0: {soft_obj.ele_quat[0].to_numpy()}; Vel: {soft_obj.ele_angle_vel[0]}')
+        print(f'End Pos Error: {soft_obj.node_pos[0].to_numpy() + soft_obj.l * np.sum(soft_obj.ele_quat.to_numpy(), axis=0) - soft_obj.node_pos[soft_obj.PARTICLE_NUM-1].to_numpy()}')
     # image_to_video(frame_name_list, video_filename='output_video.mp4')
 
 if __name__ == '__main__':
