@@ -10,8 +10,10 @@ from _CVVideo import *
 from scipy import sparse
 import taichi as ti
 import taichi.math as tm
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 # ti.init(arch=ti.gpu, device_memory_GB=6.0, debug=True,default_fp=ti.f64)
-np.set_printoptions(linewidth=200)
+np.set_printoptions(linewidth=160)
 ti.init(arch=ti.gpu, debug=True, default_fp=ti.f64)
 
 output_folder = 'FigureWrite'
@@ -49,16 +51,16 @@ class PD1D:
     def __init__(self, length, radius, seed_size:float):
         self.length = length
         self.radius = radius
-        self.dt = 1./100
+        self.dt = 1./1000
         self.rho = 1.e3
-        self.E = 2.e7
+        self.E = 2.e6
         self.mu = 0.45
-        self.positional_node_weight = 1.e5
-        self.contact_node_weight = 0.
+        self.positional_node_weight = 1.e6
+        self.contact_node_weight = 1.e6
         self.contact_ele_weight = 0.
         self.dim:int = 2
         self.quat_dim:int = 2
-        self.solve_iteration = 200
+        self.solve_iteration = 30
         self.G = self.E / 2 / (1 + self.mu)
         self.section_area = tm.pi * self.radius ** 2
 
@@ -89,6 +91,7 @@ class PD1D:
         self.distance_vec = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         # self.ele_quat_new = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         # self.ele_quat_residual = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.ele_angle = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.ele_angle_vel = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         # self.ele_torque = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         # self.ele_sn = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -106,10 +109,10 @@ class PD1D:
         # self.ele_offset = 2 * self.dim
 
         self.A_stretch = ti.Matrix.field(self.dim, 2*self.dim, dtype=ti.f64, shape=())
-        self.A_bend = ti.Matrix.field(2*self.quat_dim, 3*self.quat_dim, dtype=ti.f64, shape=())
+        self.A_bend = ti.Matrix.field(2*self.quat_dim, 3*self.dim, dtype=ti.f64, shape=())
         # self.A_normalize = ti.Matrix.field(self.quat_dim, self.quat_dim, dtype=ti.f64, shape=())
         # self.A_length = ti.field(dtype=ti.f64, shape=(2, 2*self.dim+self.ELEMENT_NUM*self.quat_dim))
-        self.Bp_stretch = ti.Vector.field(self.dim, dtype=ti.f64, shape=())
+        self.Bp_stretch = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.Bp_bend = ti.Vector.field(2*self.quat_dim, dtype=ti.f64, shape=self.ANGLE_NUM)
         # self.Bp_length = ti.Vector.field(self.dim, dtype=ti.f64, shape=())
         # self.Bp_normalize = ti.Vector.field(self.quat_dim, dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -140,7 +143,7 @@ class PD1D:
         self.construct_weight()
 
         print(f'Particle Num: {self.PARTICLE_NUM}; Element Num: {self.ELEMENT_NUM}; Angle Num: {self.ANGLE_NUM}')
-        print(f'Stretch weight: {self.stretch_weight}; Bend weight: {self.bend_weight:.6e}')
+        print(f'Node Mass: {self.node_mass[0]}; Stretch weight: {self.stretch_weight}; Bend weight: {self.bend_weight}')
         print(f'Contact Node: {self.contact_particle_list}')
         print(f'Fix Node: {self.fix_particle_list}')
 
@@ -169,9 +172,8 @@ class PD1D:
     @ti.kernel
     def precomputation(self):
         dim = self.dim
-        quat_dim  = self.quat_dim
 
-        for q_idx in range(2):
+        for q_idx in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
                 self.lhs[q_idx*dim+d, q_idx*dim+d] = self.node_mass[q_idx] / self.dt ** 2
         
@@ -275,8 +277,8 @@ class PD1D:
     @ti.kernel
     def construct_sn(self):
         # 参考soler2018cosserat的更新公式
-        for q_idx in range(2):
-            self.node_sn[q_idx] = self.node_pos[q_idx] + self.dt * self.node_vel[q_idx]
+        for q_idx in range(self.PARTICLE_NUM):
+            self.node_sn[q_idx] = self.node_pos[q_idx] + self.dt * self.node_vel[q_idx] + self.dt**2 * self.node_force[q_idx] / self.node_mass[q_idx] 
 
         # for u_idx in range(self.ELEMENT_NUM):
         #     ele_angle_vel_old = self.ele_angle_vel[u_idx]
@@ -300,14 +302,23 @@ class PD1D:
 
     @ti.kernel
     def local_solve(self):
+        for u_idx in range(self.ELEMENT_NUM):
+            idx1, idx2 = self.ele_indices[u_idx]
+            self.Bp_stretch[u_idx] = (self.node_pos_new[idx2] - self.node_pos_new[idx1]).normalized()
+            # print(f'Node pos new: {self.node_pos_new[idx1]}, {self.node_pos_new[idx2]}')
+            # print(f'Bp Stretch: {self.Bp_stretch[u_idx]}')
+
         for angle_idx in range(self.ANGLE_NUM):
             idx1, idx2, idx3 = angle_idx, angle_idx+1, angle_idx+2
-            u1 = self.node_pos[idx2] - self.node_pos[idx1]
-            u2 = self.node_pos[idx3] - self.node_pos[idx2]
+            u1 = self.node_pos_new[idx2] - self.node_pos_new[idx1]
+            u2 = self.node_pos_new[idx3] - self.node_pos_new[idx2]
+            # print(f'u1: {u1}, u2: {u2}')
             u1_normalized = u1.normalized()
             u2_normalized = u2.normalized()
+            # print(f'u1 normalized: {u1_normalized}, u2 normalized: {u2_normalized}')
             cos_theta = u1_normalized.dot(u2_normalized)
-            u_average = (u1_normalized + u2_normalized) / ti.sqrt((1 + cos_theta / 2)) / 2
+            u_average = (u1_normalized + u2_normalized) / ti.sqrt((1 + cos_theta) / 2) / 2
+            # print(f'cos theta: {cos_theta}; u average: {u_average}')
             for d in range(self.dim):
                 self.Bp_bend[angle_idx][d] = u_average[d]
                 self.Bp_bend[angle_idx][d+2] = u_average[d]
@@ -328,18 +339,20 @@ class PD1D:
     def construct_rhs(self):
         self.rhs.fill(0.)
         dim = self.dim
-        quat_dim = self.quat_dim
 
         for q_idx in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
-                self.rhs[q_idx*dim+d] = self.node_mass[q_idx] * self.node_sn[q_idx][d] / self.dt ** 2
+                self.rhs[q_idx*dim+d] += self.node_mass[q_idx] * self.node_sn[q_idx][d] / self.dt ** 2
+        # for idx in self.rhs:
+        #     print(f'Rhs {idx}: {self.rhs[idx]}')
 
         for ele_idx in range(self.ELEMENT_NUM):
             idx1, idx2 = self.ele_indices[ele_idx]
             q_idx_vec = ti.Vector([idx1*dim, idx1*dim+1, idx2*dim, idx2*dim+1])
-            AT_Bp_i = self.stretch_weight * self.A_stretch[None].transpose() @ self.Bp_stretch[None]
+            AT_Bp_i = self.stretch_weight * self.A_stretch[None].transpose() @ self.Bp_stretch[ele_idx]
             for d in range(4):
                 self.rhs[q_idx_vec[d]] += AT_Bp_i[d]
+            # print(f'Rhs Stretch: {AT_Bp_i}')
 
         for angle_idx in range(self.ANGLE_NUM):
             idx1, idx2, idx3 = angle_idx, angle_idx+1, angle_idx+2
@@ -347,6 +360,7 @@ class PD1D:
             AT_Bp_i = self.bend_weight * self.A_bend[None].transpose() @ self.Bp_bend[angle_idx]
             for d in range(6):
                 self.rhs[q_idx_vec[d]] += AT_Bp_i[d]
+            # print(f'Rhs Bend: {AT_Bp_i}')
 
         # # Bend Constraint
         # for angle_idx in range(self.ANGLE_NUM):
@@ -381,7 +395,7 @@ class PD1D:
 
     @ti.kernel
     def update_pos_new(self, sol:ti.types.ndarray()):
-        for q_idx in range(2):
+        for q_idx in range(self.PARTICLE_NUM):
             for d in ti.static(range(self.dim)):
                 self.node_pos_new[q_idx][d] = sol[q_idx*self.dim+d]
 
@@ -393,7 +407,7 @@ class PD1D:
     #         u_normalized = u_tmp.normalized()
     #         self.ele_quat_new[u_idx] = u_normalized
 
-    
+
     @ti.kernel
     def update_vel_pos(self):
         for q_idx in range(self.PARTICLE_NUM):
@@ -408,6 +422,7 @@ class PD1D:
             angle_vel_tmp = ti.atan2(delta_quat[1], delta_quat[0]) / self.dt
             self.ele_angle_vel[u_idx] = angle_vel_tmp
             self.ele_quat[u_idx] = ele_quat_new
+            self.ele_angle[u_idx] = ti.atan2(self.ele_quat[u_idx][1], self.ele_quat[u_idx][0])
 
 
     def gui_set(self, pos, target, FOV=60):
@@ -509,8 +524,6 @@ class PD1D:
         self.construct_sn()
         self.warm_start()
 
-        ele_quat_theta1_list = []
-        ele_quat_theta2_list = []
         distance_vec1_list = []
         distance_vec2_list = []
         distance_theta1_list = []
@@ -520,7 +533,7 @@ class PD1D:
             self.local_solve()
             self.construct_rhs()
             rhs_np = self.rhs.to_numpy()
-
+            # print(f'Rhs: \n{rhs_np}')
             # np.savetxt('rhs.csv', rhs_np, delimiter=',', fmt='%.8f')
             # exit(0)
             node_pos_new_bf = self.node_pos_new.to_numpy()
@@ -528,22 +541,24 @@ class PD1D:
 
             bend_constraint_error = np.zeros((self.ANGLE_NUM, 4))
             for idx in range(self.ANGLE_NUM):
-                u1_error = state_sol[idx*dim+2:idx*dim+4] - state_sol[idx*dim:idx*dim+2] - self.Bp_bend[idx].to_numpy()[0:2]
-                u2_error = state_sol[idx*dim+4:idx*dim+6] - state_sol[idx*dim+2:idx*dim+4] - self.Bp_bend[idx].to_numpy()[2:4]
+                u1_error = (state_sol[idx*dim+2:idx*dim+4] - state_sol[idx*dim:idx*dim+2]) / self.l - self.Bp_bend[idx].to_numpy()[0:2]
+                u2_error = (state_sol[idx*dim+4:idx*dim+6] - state_sol[idx*dim+2:idx*dim+4]) / self.l - self.Bp_bend[idx].to_numpy()[2:4]
                 bend_constraint_error[idx] = np.concatenate((u1_error, u2_error))       # 按行拼接
             stretch_constraint_error = np.zeros((self.ELEMENT_NUM, 2))
             for idx in range(self.ELEMENT_NUM):
-                stretch_constraint_error[idx] = state_sol[idx*dim+2:idx*dim+4] - state_sol[idx*dim:idx*dim+2] - self.Bp_stretch[None].to_numpy()
+                stretch_constraint_error[idx] = (state_sol[idx*dim+2:idx*dim+4] - state_sol[idx*dim:idx*dim+2]) / self.l - self.Bp_stretch[idx].to_numpy()
 
-            # if itr == self.solve_iteration-1:
-            # print(f'It:{itr}------------------------------------------------------')
-            # print(f'Sate Sol: \n{state_sol}')
-            # print(f'Bp_stretch: \n{self.Bp_stretch.to_numpy()}')
-            # print(f'Strecth Constraint Error: \n{stretch_constraint_error}')
-            # print(f'Bp_bend: \n{self.Bp_bend.to_numpy()}')
-            # print(f'Bend Constraint Error: \n{bend_constraint_error}')
+            if itr == self.solve_iteration-1:
+                print(f'Itr: {itr}------------------------------------------------------')
+                print(f'Node sn: \n{self.node_sn.to_numpy()}')
+                # print(f'Bp_stretch: \n{self.Bp_stretch.to_numpy()}')
+                # print(f'Strecth Constraint Error: \n{stretch_constraint_error}')
+                print(f'Bp_bend: \n{self.Bp_bend.to_numpy()}')
+                print(f'Bend Constraint Error: \n{bend_constraint_error}')
+                print(f'Sate Sol: \n{state_sol}')
+            # print(f'Rhs solve: \n{self.lhs.to_numpy() @ self.node_pos_init.to_numpy().flatten()}')
+            # print(f'Node Pos Init: \n{self.node_pos_init.to_numpy()}')
             # print(f'Rhs: \n{rhs_np}')
-            # print(f'State Sol: \n{state_sol}')
 
             self.state_sol.from_numpy(state_sol)
             self.update_pos_new(state_sol)
@@ -563,13 +578,11 @@ class PD1D:
             'distance_vec1': distance_vec1_list,
             'distance_vec2': distance_vec2_list,
             'distance_theta1': distance_theta1_list,
-            'distance_theta2': distance_theta2_list,
-            'ele_quat_theta1': ele_quat_theta1_list,
-            'ele_quat_theta2': ele_quat_theta2_list
+            'distance_theta2': distance_theta2_list
         }
-        # if step_num == 0:
-        #     np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
-        #     print('Save Local Solve Data')
+        if step_num == 0:
+            np.savez(f'DataWrite/local_solve_{step_num}.npz', **data_dict)
+            print('Save Local Solve Data')
 
         self.update_vel_pos()
         ggui_set = {'window': self.window, 'canvas': self.canvas, 'scene': self.scene}
@@ -582,7 +595,7 @@ def main():
         def __init__(self, length, radius, seed_size):
             super(MyObject, self).__init__(length, radius, seed_size)
 
-    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.2)
+    soft_obj = MyObject(length=1., radius=0.01, seed_size=0.1)
     soft_obj.preset_gui(camera_pos=[0.5, -0.3, 0.75], camera_target=[0.5, -0.3, 0.])
 
     soft_obj.precomputation()
@@ -590,27 +603,64 @@ def main():
     np.savetxt('lhs_pd1d.csv', lhs_np, delimiter=',', fmt='%.8f')
     np.savetxt('lhs_stretch.csv', soft_obj.lhs_stretch.to_numpy(), delimiter=',', fmt='%.8f')
     np.savetxt('lhs_bend.csv', soft_obj.lhs_bend.to_numpy(), delimiter=',', fmt='%.8f')
+    print(f'A stretch: \n{soft_obj.A_stretch.to_numpy()}')
+    print(f'A bend: \n{soft_obj.A_bend.to_numpy()}')
 
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    soft_obj.init_vel()
-    # soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 1.e0
+    # soft_obj.init_vel()
+    # soft_obj.contact_vel[0] = ti.Vector([0.1, -0.1]) * 0.2
+    soft_obj.contact_vel[0] = ti.Vector([0, 1.e-6]) / soft_obj.dt
+    # angle_vel = 0.01
 
     frame_name_list = []
+    pos_ararry_list = []
+    # vel_array_list = []
 
-    for i in range(1):
+    pos_ararry_list.append(soft_obj.node_pos.to_numpy())
+
+    for i in range(100):
+        # soft_obj.contact_vel[1] = ti.Vector([0.1, -0.1]) * 0.2 + ti.Vector([ti.sin(soft_obj.ele_angle[0]), ti.cos(soft_obj.ele_angle[0])]) * angle_vel
+
         frame_name_list = soft_obj.substep(i, frame_name_list)
         # time.sleep(1.)
         # np.savetxt('rhs.csv', soft_obj.rhs.to_numpy(), delimiter=',', fmt='%.8f')
         print(f'Step Num: {i} --------------------------------------')
-        print(f'Node Position: {soft_obj.node_pos.to_numpy().flatten()}')
-        print(f'Element Quaternion: {soft_obj.ele_quat.to_numpy().flatten()}')
-        print(f'Length Error: {np.linalg.norm(soft_obj.distance_vec.to_numpy(), axis=1) - soft_obj.l}')
-        # print(f'End Pos Error: {soft_obj.node_end_pos[0].to_numpy() + soft_obj.l * np.sum(soft_obj.ele_quat.to_numpy(), axis=0) - soft_obj.node_end_pos[1].to_numpy()}')
-        # print(f'Element Quaternion: {soft_obj.ele_quat[0].to_numpy()}; Vel: {soft_obj.ele_angle_vel[0]}')
+        print(f'Node Position: \n{soft_obj.node_pos.to_numpy().flatten()}')
+        pos_ararry_list.append(soft_obj.node_pos.to_numpy())
+        print(f'Element Angle: \n{soft_obj.ele_angle.to_numpy()}')
+        print(f'Length Error: \n{np.linalg.norm(soft_obj.distance_vec.to_numpy(), axis=1) - soft_obj.l}')
+        # print(f'Difference Method: \n{(soft_obj.node_pos.to_numpy() - soft_obj.node_pos_init.to_numpy())/1.e-6}')
+        print(f'Difference Error: \n{soft_obj.node_vel.to_numpy() * soft_obj.dt / 1.e-6}')
 
+    np.savez('DataWrite/pos_array.npz', pos_array=pos_ararry_list)
     # image_to_video(frame_name_list, video_filename='output_video.mp4')
+
 
 if __name__ == '__main__':
     main()
+
+    data = np.load('DataWrite/local_solve_0.npz')
+    distance_vec1 = data['distance_vec1']
+    distance_vec2 = data['distance_vec2']
+    distance_theta1 = data['distance_theta1']
+    distance_theta2 = data['distance_theta2']
+
+    fig = plt.figure(figsize=(8, 6), dpi=100)
+    gs = gridspec.GridSpec(2, 1)
+
+    ax_theta = fig.add_subplot(gs[0])
+    ax_theta.plot(distance_theta1, label='Theta1')
+    ax_theta.plot(distance_theta2, label='Theta2')
+
+    ax_length = fig.add_subplot(gs[1])
+    ax_length.plot(np.linalg.norm(distance_vec1, axis=1), label='Length1')
+    ax_length.plot(np.linalg.norm(distance_vec2, axis=1), label='Length2')
+
+    axs = [ax_theta, ax_length]
+    for ax in axs:
+        ax.legend()
+        ax.grid()
+
+    # plt.show()
