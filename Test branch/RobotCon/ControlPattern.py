@@ -89,6 +89,7 @@ class MyObject(SoftObject):
         self.get_marker_element()
         self.read_desired_pos()
 
+
     def get_marker_element(self):
         mesh_nodes = self.tri.points
         for i in range(POINTS_NUM):
