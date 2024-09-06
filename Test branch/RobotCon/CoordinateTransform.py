@@ -29,31 +29,47 @@ def line_plane_intersection(line_dir, plane_normal, plane_point)->npt.NDArray:
 def dot_in_soft(dots_pixel:npt.NDArray, trans_soft:npt.NDArray, intrinsic:npt.NDArray)->npt.NDArray:
     """
     将标记点的像素坐标转换到软体的二维坐标系
-    :return:
     """
     intrisic_inv = np.linalg.inv(intrinsic)
-    plane_normal = trans_soft[:3, 2]            # Z轴方向
-    plane_point = trans_soft[:3, 3]             # 变换矩阵的平移部分
+    plane_normal = trans_soft[:3, 2]                # Z轴方向
+    plane_point = trans_soft[:3, 3]                 # 变换矩阵的平移部分
 
     dots_soft_list = []
-    for dot_pixel in dots_pixel:                # dot_pixel shape: (POINTS_NUM, 2)
-        dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
-        dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
-        dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
 
-        dots_soft_list.append(dot_soft[:2])         # shape: (POINTS_NUM, 2)
+    dim = dots_pixel.ndim
+    if dim == 2:
+        for dot_pixel in dots_pixel:                    # dot_pixel shape: (POINTS_NUM, 2)
+            dot_camera = pixel_to_camera_coordinates(dot_pixel, intrisic_inv)
+            dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)       # 在相机坐标系下的三维位置
+            dot_soft = np.linalg.inv(trans_soft) @ np.append(dot_soft, 1.)
 
-    return np.array(dots_soft_list)
+            dots_soft_list.append(dot_soft[:2])         # shape: (POINTS_NUM, 2)
+        return np.array(dots_soft_list)
+    else:
+        dot_camera = pixel_to_camera_coordinates(dots_pixel, intrisic_inv)
+        dot_soft = line_plane_intersection(dot_camera, plane_normal, plane_point)
+
+        return dot_soft[:2]
 
 
-def dot_in_pixel(dot_soft, trans_soft, intrinsic):
+def dot_in_pixel(dots_soft, trans_soft, intrinsic):
     """
     将软体坐标系中的点转换到像素坐标
     """
-    dot_soft = np.append(dot_soft, 0.)
-    dot_camera = trans_soft @ np.append(dot_soft, 1.)
-    dot_pixel = intrinsic @ dot_camera[:3]
-    return dot_pixel[:2] / dot_pixel[2]
+    dim = dots_soft.ndim
+    if dim == 2:
+        dots_pixel = np.zeros((dots_soft.shape[0], 2))
+        for idx, dot_soft in enumerate(dots_soft):
+            dot_soft = np.append(dot_soft, 0.)
+            dot_camera = trans_soft @ np.append(dot_soft, 1.)
+            dot_pixel = intrinsic @ dot_camera[:3]
+            dots_pixel[idx, :] = dot_pixel[:2] / dot_pixel[2]
+        return dots_pixel
+    else:
+        dot_soft = np.append(dots_soft, 0.)
+        dot_camera = trans_soft @ np.append(dot_soft, 1.)
+        dot_pixel = intrinsic @ dot_camera[:3]
+        return dot_pixel[:2] / dot_pixel[2]
 
 
 def feature_barycentric_coordinates(p, mesh_nodes)->npt.NDArray[np.float64]:

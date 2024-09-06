@@ -35,6 +35,7 @@ def main():
             cv2.imshow(window_name, frame)
             key = cv2.waitKey(10)
 
+    cv2.imwrite('zed_image.png', frame)
     # 关闭相机
     zed.close()
 

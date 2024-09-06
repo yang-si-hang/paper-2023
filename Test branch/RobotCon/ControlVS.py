@@ -16,10 +16,10 @@ if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
 # Define the lower and upper bounds for the red color in HSV
-lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
+lower_red_1 = np.array([0, 65, 100])  # Adjust these values as needed
 upper_red_1 = np.array([10, 255, 255])
 
-lower_red_2 = np.array([156, 43, 46])
+lower_red_2 = np.array([156, 65, 100])
 upper_red_2 = np.array([180, 255, 255])
 red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 

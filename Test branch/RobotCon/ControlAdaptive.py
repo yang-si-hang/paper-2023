@@ -18,11 +18,11 @@ if not os.path.exists(output_folder):
 
 POINTS_NUM = 4
 
-# Define the lower and upper bounds for the red color in HSV
-lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
+# Adjust these values as needed
+lower_red_1 = np.array([0, 65, 100])
 upper_red_1 = np.array([10, 255, 255])
 
-lower_red_2 = np.array([156, 43, 46])
+lower_red_2 = np.array([156, 65, 100])
 upper_red_2 = np.array([180, 255, 255])
 red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
 
@@ -108,6 +108,7 @@ def main():
 
     dot_desired = dot_in_pixel(dot_pos_desired, trans_soft, intrinsic)
     dot_pos = dot_pos_init
+    end_movement_np = np.zeros(2)
 
     dot_pixel_list = []
     loss_list = []

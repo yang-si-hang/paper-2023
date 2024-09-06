@@ -15,7 +15,7 @@ from scipy.stats import chi2
 from sklearn.cluster import KMeans
 
 
-POINTS_NUM:int = 2
+POINTS_NUM:int = 4
 
 
 def init_camera():
@@ -139,7 +139,7 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
     # Convert color image to OpenCV format
     color_image_rgb = cv2.cvtColor(image_bgra, cv2.COLOR_BGRA2RGB)
     color_image_bgr = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2BGR)
-    # cv2.imwrite('color_image_bgr.png', color_image_bgr)
+    cv2.imwrite('color_image_bgr.png', color_image_bgr)
 
     # Convert the image to the HSV color space (for red detection)
     hsv = cv2.cvtColor(color_image_rgb, cv2.COLOR_RGB2HSV)
@@ -156,15 +156,15 @@ def image_process(image_bgra:npt.NDArray, color_range:list):
 
     # 使用闭运算，可能会破坏掉边界
     closed_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
-    # cv2.imwrite('closed_mask.png', closed_mask)
+    cv2.imwrite('closed_mask.png', closed_mask)
 
     # Apply the mask to the original image
     masked_image = cv2.bitwise_and(color_image_bgr, color_image_bgr, mask=closed_mask)
-    # cv2.imwrite('masked_image.png', masked_image)
+    cv2.imwrite('masked_image.png', masked_image)
 
     # Convert the image to grayscale
     gray = cv2.cvtColor(masked_image, cv2.COLOR_RGB2GRAY)
-    # cv2.imwrite('gray.png', gray)
+    cv2.imwrite('gray.png', gray)
 
     blurred_image = cv2.GaussianBlur(gray, (5, 5), 0)           # 应用高斯模糊，减少图像中的噪声
 
@@ -292,10 +292,10 @@ def dot_filter(dots, area):
 
 def main():
     # Define the lower and upper bounds for the red color in HSV
-    lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
+    lower_red_1 = np.array([0, 65, 100])  # Adjust these values as needed
     upper_red_1 = np.array([10, 255, 255])
 
-    lower_red_2 = np.array([156, 43, 46])
+    lower_red_2 = np.array([156, 65, 100])
     upper_red_2 = np.array([180, 255, 255])
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
     

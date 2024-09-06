@@ -1,5 +1,5 @@
 """
-获得期望变形下的标记点位置
+获得期望变形下的标记点位置,使用Zed mini相机拍摄并处理
 """
 
 
@@ -10,13 +10,11 @@ from DotsPatternDetect import init_camera, init_region_range, get_image
 from CoordinateTransform import dot_in_soft
 
 def main():
-    # Define the lower and upper bounds for the red color in HSV
-    lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
-    upper_red_1 = np.array([10, 255, 255])
+    cv2.namedWindow('Canny', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('Canny', 1080, 720)
 
-    lower_red_2 = np.array([156, 43, 46])
-    upper_red_2 = np.array([180, 255, 255])
-    red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
+    red_range_np = np.loadtxt('data/red_range.csv', dtype=np.int32, delimiter=',')
+    red_range = [row for row in red_range_np]
 
     camera_data = np.load('data/camera_param.npz')
     trans_soft = camera_data['matrix1']

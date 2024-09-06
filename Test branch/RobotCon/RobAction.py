@@ -10,7 +10,7 @@ import copy
 
 
 class URROb:
-    def __init__(self, control_frequency, ur_ip='192.168.253.10'):
+    def __init__(self, control_frequency, ur_ip='192.168.253.101'):
         self.UR_IP = ur_ip
         self.rtde_frequency = control_frequency
         self.record_variable = []

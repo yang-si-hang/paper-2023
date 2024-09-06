@@ -79,14 +79,15 @@ def init_region_range(zed_id, image_init, red_range:list)->npt.NDArray[np.float3
     for i in range(itr_num):
         image_bgra = get_image(zed_id, image_init)
         edges = image_process(image_bgra, red_range)
+        # dots:list2d
         dots, area, ellipse = ellipse_fitting(edges)
 
-        # cv2.imshow('Canny', edges)
-        # # 设置按键（例如，按 'c' 继续）
-        # while True:
-        #     key = cv2.waitKey(1) & 0xFF
-        #     if key == ord('c'):
-        #         break
+        cv2.imshow('Canny', edges)
+        # 设置按键（例如，按 'c' 继续）
+        while True:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c'):
+                break
 
         if dots is None:
             # print('No dots detected!')
@@ -214,7 +215,7 @@ def ellipse_fitting(edges:npt.NDArray[np.uint8])->Tuple[list, list, list]:
     # 检查层级信息，层级信息存储在hierarchy[0]中，格式为[next, previous, first_child, parent]
     if hierarchy is not None:
         for idx, contour in enumerate(contours):
-            # # 检查是否有父轮廓，parent index = hierarchy[0, idx, 3] 不为-1则为内轮廓
+            # 检查是否有父轮廓，parent index = hierarchy[0, idx, 3] 不为-1则为内轮廓
             if hierarchy[0, idx, 3] == -1:
                 center_result = cal_center(contour)
                 if center_result is not None:
@@ -340,11 +341,11 @@ def dot_filter(dots, area):
 
 
 def main():
-    # Define the lower and upper bounds for the red color in HSV
-    lower_red_1 = np.array([0, 43, 46])  # Adjust these values as needed
+    # Adjust these values as needed
+    lower_red_1 = np.array([0, 65, 100])
     upper_red_1 = np.array([10, 255, 255])
 
-    lower_red_2 = np.array([156, 43, 46])
+    lower_red_2 = np.array([156, 65, 100])
     upper_red_2 = np.array([180, 255, 255])
     red_range = [lower_red_1, upper_red_1, lower_red_2, upper_red_2]
     
