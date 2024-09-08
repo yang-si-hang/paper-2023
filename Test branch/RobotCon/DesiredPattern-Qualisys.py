@@ -63,9 +63,9 @@ async def receive_qualysis(connection)->list:
 
 
 async def main():
-    origin_pos = np.array([0.3815, 0.0117, 0.0810])
-    x_deviation = np.array([0.3820, 0.1272, 0.0827])
-    y_deviation = np.array([0.5201, 0.0114, 0.0784])
+    origin_pos = np.array([0.3852, 0.0127, 0.081])
+    x_deviation = np.array([0.3868, 0.1278, 0.0827])
+    y_deviation = np.array([0.5231, 0.0128, 0.0784])
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'CAPTURE DESIRED SHAPE'
@@ -116,7 +116,7 @@ async def main():
     print(f'Center positions: {sorted_centers}')
     dots_pos_center = np.array([center for index, center in sorted_centers])
 
-    dots_pos_center_soft = transformation_matrix @ np.c_[dots_pos_center, np.ones(POINTS_NUM)].T
+    dots_pos_center_soft = np.linalg.inv(transformation_matrix) @ np.c_[dots_pos_center, np.ones(POINTS_NUM)].T
     dots_pos_center_soft = dots_pos_center_soft[:3].T
 
     print(f'Desired points position in Qualysis world frame: \n{np.array_str(dots_pos_center, precision=6, suppress_small=True)}')

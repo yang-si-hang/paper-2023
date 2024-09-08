@@ -449,11 +449,8 @@ class SoftObject:
             self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
 
 
-
     @ti.kernel
     def update_pos_new(self, sol:ti.types.ndarray()):
-
-
         for i in range(self.PARTICLE_NUM):
             idx0, idx1 = i*self.dim, i*self.dim+1
             self.node_pos_new[i].x = sol[idx0]

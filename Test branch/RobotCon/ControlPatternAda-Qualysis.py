@@ -95,7 +95,7 @@ def read_desired_pos(dot_pos_init):
 
 def pos_in_soft(pos:npt.NDArray)->npt.NDArray:
     # 将世界坐标系的位置转换到软体坐标系
-    pos_soft = trans_matrix @ np.c_[pos, np.ones(POINTS_NUM)].T
+    pos_soft = np.linalg.inv(trans_matrix) @ np.c_[pos, np.ones(POINTS_NUM)].T
     pos_soft = pos_soft[:3].T
     return pos_soft
 
@@ -126,8 +126,8 @@ def cal_loss(dot_pos_soft:npt.NDArray, dot_pos_desired:npt.NDArray, Ja:npt.NDArr
     return error, L, dL_dx
 
 
-def update_jacobian(delta_action, delta_pos, Ja:npt.NDArray):
-    factor = 1.e1
+def update_jacobian(factor:float, delta_action, delta_pos, Ja:npt.NDArray):
+    # factor = 1.e1
 
     a = Ja.flatten()
     W = np.zeros((2*POINTS_NUM, 4*POINTS_NUM))
@@ -186,16 +186,20 @@ async def main():
         await connection.new()
 
     dots_pos_init = await init_maker(connection)
-    print(f'The initial position of dots: \n{dots_pos_init}')
+    dots_pos_soft = pos_in_soft(dots_pos_init)
+    print(f'The initial position of dots in soft frame: \n{dots_pos_soft}')
     if dots_pos_init.shape[0] != POINTS_NUM:
         raise ValueError('Error dots number!')
     dots_pos_desired, dots_pos_soft_desired = read_desired_pos(dots_pos_init)
+    dots_initial_error = dots_pos_soft_desired[:, :2] - dots_pos_soft[:, :2]
+    print(f'Dots Movement Error & its lenght:\n')
+    for idx, error in enumerate(dots_initial_error):
+        print(f'{error}; {np.linalg.norm(error)}')
 
     MyRob = URROb(500)
     MyRob.record_variable = ['timestamp', 'actual_TCP_pose', 'actual_TCP_speed']
     MyRob.start_record_data('experiment_data.csv')
 
-    dots_pos_soft = pos_in_soft(dots_pos_init)
     end_movement_np = np.zeros(2)
 
     dots_soft_list = []
@@ -209,7 +213,7 @@ async def main():
 
     try:
         for step in range(200):
-            print(f'{step}-------------------------------------')
+            print(f'Step {step} -------------------------------------')
             dots_data = await receive_qualysis(connection)
             # print(dots_data)
             dots_pos = [point for index, point in sorted(zip(dots_data['idx'], dots_data['pos']))]
@@ -222,7 +226,7 @@ async def main():
 
             _, loss_tmp, dL_daction = cal_loss(dots_pos_soft[:,:2], dots_pos_soft_desired[:,:2], ja)
             # `end_movement_np` is i step, `delta_pos`= `i+1 step` - `i step`
-            ja_new, ja_error, delta_pos_ada = update_jacobian(end_movement_np, delta_pos[:,:2], ja)
+            ja_new, ja_error, delta_pos_ada = update_jacobian(1.e5, end_movement_np, delta_pos[:,:2], ja)
             ja = ja_new
 
             end_speed_np = -learning_rate * dL_daction
