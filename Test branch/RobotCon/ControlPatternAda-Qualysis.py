@@ -170,7 +170,8 @@ async def receive_qualysis(connection):
 async def main():
     learning_rate = 1.e1
     dt = 1./100
-    ja = np.tile(np.eye(2, 2), (POINTS_NUM, 1))
+    # ja = np.tile(np.eye(2, 2), (POINTS_NUM, 1))
+    ja = np.tile(np.ones((2, 2)), (POINTS_NUM, 1))
 
     # camera_id, image_init, window_name = init_camera()
     camera_id, image = init_camera(1080, 30)
@@ -231,7 +232,7 @@ async def main():
 
             end_speed_np = -learning_rate * dL_daction
             end_movement_np = end_speed_np * dt
-            end_movement_np = action_compress(end_movement_np)
+            end_movement_np = action_compress(end_movement_np, 8.e-4)
             end_movement = end_movement_np.tolist()
 
             print(f'Loss items: {loss_tmp}; Loss sum: {np.sum(loss_tmp)}')
@@ -276,7 +277,7 @@ async def main():
         np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
 
         # 将保存的图像转换为视频
-        image_to_video(frame_name_list, 'DataAnalyse/output_video.mp4')
+        image_to_video(frame_name_list, 'output_video.mp4')
 
     # 停止数据流
     await connection.stream_frames_stop()

@@ -63,9 +63,9 @@ async def receive_qualysis(connection)->list:
 
 
 async def main():
-    origin_pos = np.array([0.3852, 0.0127, 0.081])
-    x_deviation = np.array([0.3868, 0.1278, 0.0827])
-    y_deviation = np.array([0.5231, 0.0128, 0.0784])
+    origin_pos = np.array([0.3858, 0.0135, 0.0812])
+    x_deviation = np.array([0.3875, 0.1302, 0.0827])
+    y_deviation = np.array([0.5237, 0.0129, 0.0785])
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'CAPTURE DESIRED SHAPE'

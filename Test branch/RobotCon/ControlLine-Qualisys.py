@@ -1,6 +1,7 @@
 """
 实物实验,使用Strain Constraint & Volume Constraint的DiffPD进行控制
-created at 2024-07-17 by hsy
+使一个Marker点的位移是直线,构造一个关于距离误差和直线偏离误差的损失函数
+created at 2024-09-10 by hsy
 """
 
 import time
@@ -25,7 +26,8 @@ if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
 # pattern中有几个点，重新赋值
-POINTS_NUM:int = 4
+POINTS_NUM:int = 1
+selected_index = []
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip:str = '192.168.253.1'
@@ -105,6 +107,7 @@ def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
 
 async def receive_qualysis(connection):
     captured_data = {}
+    selected_data = {'idx': [], 'pos': []}
 
     # Define the callback to capture data
     def on_packet(packet):
@@ -125,7 +128,12 @@ async def receive_qualysis(connection):
 
     await connection.stream_frames(components=["3dnolabels"], on_packet=on_packet)
 
-    return captured_data
+    for idx, pos in zip(captured_data['idx'], captured_data['pos']):
+        if idx in selected_index:
+            selected_data['idx'].append(idx)
+            selected_data['pos'].append(pos)
+
+    return selected_data
 
 
 class MyObject(SoftObject):
@@ -140,12 +148,13 @@ class MyObject(SoftObject):
         self.dot_pos_soft = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
-        # self.dot_soft_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
+        self.desired_direct = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos.from_numpy(marker_pos_init)
         self.dot_pos_init.from_numpy(marker_pos_init)
 
         self.get_marker_element()
-        self.read_desired_pos()
+        self.define_desired_pos()
+        # self.read_desired_pos()
 
 
     def get_marker_element(self):
@@ -161,25 +170,31 @@ class MyObject(SoftObject):
                 print("The dot is not in the mesh object.")
 
 
-    def read_desired_pos(self):
-        data = np.load('data/desired_pos.npz')
-        pos_desired = data['desired_pos']
-        pos_soft_desired = data['desired_pos_soft']
-        tree = KDTree(self.dot_pos_init.to_numpy())
-        _, indices = tree.query(pos_soft_desired[:,:2])
-        ordered_pos_desired = pos_desired[indices]
-        ordered_pos_soft_desired = pos_soft_desired[indices]
-        # self.dot_pos_desired.from_numpy(ordered_pos_desired)
-        self.dot_pos_desired.from_numpy(ordered_pos_soft_desired[:,:2])
-        print("The desired position in World frame: \n", np.array_str(ordered_pos_desired, precision=6))
-        print('The desired position in Soft frame: \n', np.array_str(ordered_pos_soft_desired, precision=6))
+    # def read_desired_pos(self):
+    #     data = np.load('data/desired_pos.npz')
+    #     pos_desired = data['desired_pos']
+    #     pos_soft_desired = data['desired_pos_soft']
+    #     tree = KDTree(self.dot_pos_init.to_numpy())
+    #     _, indices = tree.query(pos_soft_desired[:,:2])
+    #     ordered_pos_desired = pos_desired[indices]
+    #     ordered_pos_soft_desired = pos_soft_desired[indices]
+    #     # self.dot_pos_desired.from_numpy(ordered_pos_desired)
+    #     self.dot_pos_desired.from_numpy(ordered_pos_soft_desired[:,:2])
+    #     print("The desired position in World frame: \n", np.array_str(ordered_pos_desired, precision=6))
+    #     print('The desired position in Soft frame: \n', np.array_str(ordered_pos_soft_desired, precision=6))
+    #
+    #     dots_initial_error = self.dot_pos_desired.to_numpy() - self.dot_pos_init.to_numpy()
+    #     print(f'Dots Movement Error & its length:')
+    #     for idx, error in enumerate(dots_initial_error):
+    #         print(f'{error}; {np.linalg.norm(error)}')
+    #
+    #     return ordered_pos_desired, ordered_pos_soft_desired
 
-        dots_initial_error = self.dot_pos_desired.to_numpy() - self.dot_pos_init.to_numpy()
-        print(f'Dots Movement Error & its length:')
-        for idx, error in enumerate(dots_initial_error):
-            print(f'{error}; {np.linalg.norm(error)}')
-
-        return ordered_pos_desired, ordered_pos_soft_desired
+    def define_desired_pos(self):
+        for i in range(POINTS_NUM):
+            self.dot_pos_desired[i] = self.dot_pos_init[i] + ti.Vector([0.01, 0.00])
+            direct_tmp = self.dot_pos_desired[i] - self.dot_pos_init[i]
+            self.desired_direct[i] = direct_tmp.normalized()
 
 
     @ti.kernel
@@ -217,19 +232,27 @@ class MyObject(SoftObject):
         :param marker_pos_soft: shape: (POINTS_NUM, 2)
         """
         dim = self.dim
-        error = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+        factor = 2.e0
+        error_dist = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+        error_pen = np.zeros((POINTS_NUM, 2), dtype=np.float64)
         self.dL.fill(0.)
         for marker_i in range(POINTS_NUM):
             barycentric = self.barycentrics[marker_i]
             desired_pos = self.dot_pos_desired[marker_i]
+            direct = self.desired_direct[marker_i]
             current_pos = marker_pos_soft[marker_i]
-            error[marker_i] = (current_pos - desired_pos).to_numpy()
+            error_dist[marker_i] = (current_pos - desired_pos).to_numpy()
+            error_pen_tmp = (current_pos - desired_pos) - tm.dot(direct, current_pos-desired_pos) * direct
+            error_pen[marker_i] = error_pen_tmp.to_numpy()
+            dL_pen = 2 * error_pen_tmp @ (np.eye(dim) - np.outer(direct, direct))
             # print(f'Soft Coordinate Error： {error[marker_i]}')
             for idx, ele_idx in enumerate(self.marker_elements[marker_i]):
                 self.dL[ele_idx * dim] += 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
                 self.dL[ele_idx * dim + 1] += 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
+                self.dL[ele_idx * dim] += factor * dL_pen[0] * barycentric[idx]
+                self.dL[ele_idx * dim + 1] += factor * dL_pen[1] * barycentric[idx]
 
-        return error, np.linalg.norm(error, axis=1) ** 2
+        return error_dist, error_pen, np.linalg.norm(error_dist, axis=1) ** 2, np.linalg.norm(error_pen, axis=1) ** 2
 
 
     def diff_pd(self, itr_num:int):
@@ -272,12 +295,12 @@ class MyObject(SoftObject):
 
 
     def compute_gradient(self, dot_soft):
-        error, loss_tmp = self.construct_L_soft(dot_soft)
-        self.loss = loss_tmp
+        error_dist, error_pen, loss_dist, loss_pen = self.construct_L_soft(dot_soft)
+        self.loss = loss_dist + loss_pen
         self.diff_pd(10)
         self.compute_grad_y()
 
-        return loss_tmp
+        return loss_dist, loss_pen
 
 
 async def main():
@@ -343,14 +366,15 @@ async def main():
             dots_pos_model_new = soft_obj.dot_pos.to_numpy()
             delta_pos_model = dots_pos_model_new - dots_pos_model
             dots_pos_model = dots_pos_model_new
-            loss_tmp = soft_obj.compute_gradient(dots_pos_soft)
+            loss_dist, loss_pen = soft_obj.compute_gradient(dots_pos_soft)
 
             end_speed_np = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
             end_movement_np = action_compress(end_speed_np * soft_obj.dt, 8.e-4)
             end_movement = end_movement_np.tolist()
 
             soft_obj.actuate_action(end_movement_np / soft_obj.dt)
-            print(f'Loss items: {loss_tmp}; Loss sum: {np.sum(loss_tmp)}')
+            print(f'Loss distance items: {loss_dist}; Loss sum: {np.sum(loss_dist)}')
+            print(f'Loss Pendicular items: {loss_pen}; Loss sum: {np.sum(loss_pen)}')
             print(f'The tool movement: {end_movement}')
             # print(f'Contact Point Pos: {soft_obj.node_pos[15]}')
 
@@ -361,7 +385,7 @@ async def main():
             dots_soft_list.append(dots_pos_soft.flatten())
             delta_pos_list.append(delta_pos.flatten())
             delta_pos_model_list.append(delta_pos_model.flatten())
-            loss_list.append(loss_tmp)
+            loss_list.append(loss_dist + loss_pen)
             rob_movement_list.append(end_movement)
             contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
 
