@@ -1,6 +1,5 @@
 """
 使用liver.msh作为几何网格文件,施加预先指定的变形,模拟变形效果
-
 """
 
 import Sofa
@@ -123,7 +122,8 @@ def main():
             contact_pos_np[i, :] = copy.deepcopy(dofs.findData('position').value[q_idx])
             print(f'Contact position {q_idx}: {contact_pos_np[i, :]}')
 
-    save_pos(dofs, script_dir + '/node_end_pos.csv')
+    # save_pos(dofs, script_dir + '/node_end_pos.csv')
+    save_pos(dofs, script_dir + '/Mesh/node_desired_pos.csv')
 
     # Sofa.Gui.GUIManager.MainLoop(root)
     # Sofa.Gui.GUIManager.closeGUI()

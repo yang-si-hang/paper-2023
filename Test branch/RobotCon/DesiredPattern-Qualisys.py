@@ -63,9 +63,10 @@ async def receive_qualysis(connection)->list:
 
 
 async def main():
-    origin_pos = np.array([0.3858, 0.0135, 0.0812])
-    x_deviation = np.array([0.3875, 0.1302, 0.0827])
-    y_deviation = np.array([0.5237, 0.0129, 0.0785])
+    # 用来生成软体坐标系相对于世界坐标系的变换矩阵
+    origin_pos = np.array([0.3899, 0.01, 0.081])
+    x_deviation = np.array([0.3911, 0.1247, 0.0826])
+    y_deviation = np.array([0.5268, 0.0105, 0.0784])
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'CAPTURE DESIRED SHAPE'
@@ -83,8 +84,9 @@ async def main():
 
     transformation_matrix = np.eye(4)
     transformation_matrix[:3, :3] = rotation_matrix
-    transformation_matrix[:3, 3] = origin_pos + 0.0048 * z_axis - 0.015 / 2 * y_axis
+    transformation_matrix[:3, 3] = origin_pos + 0.0048 * z_axis - 0.015 / 2 * x_axis
     np.savetxt('data/transformation_matrix.csv', transformation_matrix, fmt='%.10f', delimiter=',')
+    exit(0)
 
     connection = await qtm_rt.connect(qualysis_ip)
     if connection is None:

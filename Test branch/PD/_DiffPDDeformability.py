@@ -654,8 +654,8 @@ def main(contact_idx_list):
 
 
 if __name__ == '__main__':
-    params = [5, 76, 118]
-    # params = [1]
+    # params = [5, 76, 118]
+    params = [10]
     for param in params:
         print(f'Contact idx: {[param]}')
         main([param])

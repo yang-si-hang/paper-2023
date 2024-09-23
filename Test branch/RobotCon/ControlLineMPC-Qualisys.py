@@ -1,9 +1,13 @@
 """
 实物实验,使用Strain Constraint & Volume Constraint的DiffPD进行控制
-created at 2024-07-17 by hsy
+使一个Marker点的位移是直线,构造一个关于距离误差和直线偏离误差的损失函数
+使用MPC框架进行控制
+created at 2024-09-10 by hsy
 """
 
 import time
+import cProfile
+import sys
 import os
 import cv2
 import numpy as np
@@ -11,13 +15,14 @@ import numpy.typing as npt
 import asyncio
 import pkg_resources
 import qtm_rt
+import tifffile.geodb
 from scipy.spatial import KDTree
 from scipy.stats import zscore
+from casadi import *
+import do_mpc
 from ControlSimulation import *
 from RobAction import URROb
-# from DotsPatternDetect import *
 from ZedUtilize import *
-# from CVVideo import *
 from CoordinateTransform import *
 
 output_folder = 'captured_frames'
@@ -25,7 +30,9 @@ if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
 # pattern中有几个点，重新赋值
-POINTS_NUM:int = 4
+POINTS_NUM:int = 1
+selected_index = [489]
+j_measure = np.zeros((2, 2))
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip:str = '192.168.253.1'
@@ -105,13 +112,14 @@ def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
 
 async def receive_qualysis(connection):
     captured_data = {}
+    selected_data = {'idx': [], 'pos': []}
 
     # Define the callback to capture data
     def on_packet(packet):
         nonlocal captured_data
         header, markers = packet.get_3d_markers_no_label()
-        if header.marker_count != POINTS_NUM:
-            return
+        # if header.marker_count != POINTS_NUM:
+        #     return
 
         markers_pos = []
         markers_idx = []
@@ -125,7 +133,13 @@ async def receive_qualysis(connection):
 
     await connection.stream_frames(components=["3dnolabels"], on_packet=on_packet)
 
-    return captured_data
+    for idx, pos in zip(captured_data['idx'], captured_data['pos']):
+        if idx in selected_index:
+            selected_data['idx'].append(idx)
+            selected_data['pos'].append(pos)
+
+    return selected_data
+    # return captured_data
 
 
 class MyObject(SoftObject):
@@ -140,12 +154,16 @@ class MyObject(SoftObject):
         self.dot_pos_soft = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
-        # self.dot_soft_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
+        self.desired_direct = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
+        self.jacobian = ti.field(ti.f64, shape=(2, 2))
         self.dot_pos.from_numpy(marker_pos_init)
         self.dot_pos_init.from_numpy(marker_pos_init)
 
+        self.dJ = ti.Vector.field(2, dtype=ti.f64, shape=2*self.PARTICLE_NUM)
+        self.z_j = ti.Vector.field(2, dtype=ti.f64, shape=2*self.PARTICLE_NUM)
+
         self.get_marker_element()
-        self.read_desired_pos()
+        self.define_desired_pos()
 
 
     def get_marker_element(self):
@@ -161,25 +179,11 @@ class MyObject(SoftObject):
                 print("The dot is not in the mesh object.")
 
 
-    def read_desired_pos(self):
-        data = np.load('data/desired_pos.npz')
-        pos_desired = data['desired_pos']
-        pos_soft_desired = data['desired_pos_soft']
-        tree = KDTree(self.dot_pos_init.to_numpy())
-        _, indices = tree.query(pos_soft_desired[:,:2])
-        ordered_pos_desired = pos_desired[indices]
-        ordered_pos_soft_desired = pos_soft_desired[indices]
-        # self.dot_pos_desired.from_numpy(ordered_pos_desired)
-        self.dot_pos_desired.from_numpy(ordered_pos_soft_desired[:,:2])
-        print("The desired position in World frame: \n", np.array_str(ordered_pos_desired, precision=6))
-        print('The desired position in Soft frame: \n', np.array_str(ordered_pos_soft_desired, precision=6))
-
-        dots_initial_error = self.dot_pos_desired.to_numpy() - self.dot_pos_init.to_numpy()
-        print(f'Dots Movement Error & its length:')
-        for idx, error in enumerate(dots_initial_error):
-            print(f'{error}; {np.linalg.norm(error)}')
-
-        return ordered_pos_desired, ordered_pos_soft_desired
+    def define_desired_pos(self):
+        for i in range(POINTS_NUM):
+            self.dot_pos_desired[i] = self.dot_pos_init[i] + ti.Vector([0.006, -0.008])
+            direct_tmp = self.dot_pos_desired[i] - self.dot_pos_init[i]
+            self.desired_direct[i] = direct_tmp.normalized()
 
 
     @ti.kernel
@@ -211,37 +215,60 @@ class MyObject(SoftObject):
         return error, np.linalg.norm(error, axis=1) ** 2
 
 
-    def construct_L_soft(self, marker_pos_soft:npt.NDArray):
+    def construct_L_soft(self, marker_pos_soft:npt.NDArray)->[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         在Soft的二维坐标系上计算loss
         :param marker_pos_soft: shape: (POINTS_NUM, 2)
         """
         dim = self.dim
-        error = np.zeros((POINTS_NUM, 2), dtype=np.float64)
-        self.dL.fill(0.)
+        factor = 2.e0
+        error_dist = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+        error_pen = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+        # self.dL.fill(0.)
+        self.dJ.fill(0.)
         for marker_i in range(POINTS_NUM):
             barycentric = self.barycentrics[marker_i]
             desired_pos = self.dot_pos_desired[marker_i]
-            current_pos = marker_pos_soft[marker_i]
-            error[marker_i] = (current_pos - desired_pos).to_numpy()
-            # print(f'Soft Coordinate Error： {error[marker_i]}')
-            for idx, ele_idx in enumerate(self.marker_elements[marker_i]):
-                self.dL[ele_idx * dim] += 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
-                self.dL[ele_idx * dim + 1] += 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
+            direct = self.desired_direct[marker_i]
+            current_pos = ti.Vector([marker_pos_soft[marker_i][0], marker_pos_soft[marker_i][1]])
+            error_dist[marker_i] = (current_pos - desired_pos).to_numpy()
+            error_pen_tmp = (current_pos - desired_pos) - direct.dot(current_pos-desired_pos) * direct
+            error_pen[marker_i] = factor * error_pen_tmp.to_numpy()
+            dL_pen = 2 * error_pen_tmp.to_numpy() @ (np.eye(dim) - np.outer(direct, direct))
 
-        return error, np.linalg.norm(error, axis=1) ** 2
+            for idx, ele_idx in enumerate(self.marker_elements[marker_i]):
+                self.dJ[ele_idx * dim][0] += barycentric[idx]
+                self.dJ[ele_idx * dim + 1][1] += barycentric[idx]
+
+                # self.dL[ele_idx * dim] += 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
+                # self.dL[ele_idx * dim + 1] += 2 * (current_pos[1] - desired_pos[1]) * barycentric[idx]
+                # self.dL[ele_idx * dim] += factor * dL_pen[0] * barycentric[idx]
+                # self.dL[ele_idx * dim + 1] += factor * dL_pen[1] * barycentric[idx]
+
+        return error_dist, error_pen, np.linalg.norm(error_dist, axis=1) ** 2, np.linalg.norm(error_pen, axis=1) ** 2
 
 
     def diff_pd(self, itr_num:int):
         self.partial_p()
         dA = self.rhs_dA.to_numpy()
-        par_L = self.dL.to_numpy()
-        z_np = self.z.to_numpy()
-        for itr in ti.static(range(itr_num)):
-            rhs_diff_np = dA @ z_np + par_L
-            z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
-            z_np = z_new_np
-        self.z.from_numpy(z_np)
+        # par_L = self.dL.to_numpy()
+        # z_np = self.z.to_numpy()
+        # for itr in ti.static(range(itr_num)):
+        #     rhs_diff_np = dA @ z_np + par_L
+        #     z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+        #     z_np = z_new_np
+        # self.z.from_numpy(z_np)
+        par_J = self.dJ.to_numpy()
+        z_j_np = self.z_j.to_numpy()
+        z_j_np_new = np.zeros((self.PARTICLE_NUM*2, 2))
+        for idx in range(2):
+            z_tmp = z_j_np[:, idx]
+            for itr in range(itr_num):
+                rhs_diff_np = dA @ z_tmp + par_J[:, idx]
+                z_new_np = self.pre_fact_lhs_solve(rhs_diff_np)
+                z_tmp = z_new_np
+            z_j_np_new[:, idx] = z_tmp
+        self.z_j.from_numpy(z_j_np_new)
 
 
     @ti.kernel
@@ -250,6 +277,41 @@ class MyObject(SoftObject):
             idx0, idx1 = i * self.dim, i * self.dim + 1
             self.grad_y[i].x = self.z[idx0] * self.node_mass[i] / self.dt ** 2
             self.grad_y[i].y = self.z[idx1] * self.node_mass[i] / self.dt ** 2
+
+
+    def calc_jacobian_pd(self):
+        contact_idx = self.grasp_particle_list[0]
+        for idx in range(2):
+            self.jacobian[idx, 0] = self.z_j[contact_idx * 2][idx] * self.node_mass[contact_idx] / self.dt ** 2
+            self.jacobian[idx, 1] = self.z_j[contact_idx * 2 + 1][idx] * self.node_mass[contact_idx] / self.dt ** 2
+
+
+    def diff_data(self):
+        self.partial_p()
+        dim = self.dim
+        contact_idx = self.grasp_particle_list[0]
+        mass_np = self.node_mass.to_numpy()/self.dt**2             # M/h**2
+        mass_dim_np = np.empty(mass_np.size*2, dtype=mass_np.dtype)
+        mass_dim_np[0::2] = mass_np
+        mass_dim_np[1::2] = mass_np
+        M_np = np.diag(mass_dim_np)
+        A = M_np + self.A_strain.to_numpy() + self.A_positional.to_numpy() - self.rhs_dA.to_numpy()
+        B = M_np
+        dx_dy_np = np.linalg.solve(A, B)
+        self.grasp_dx_dy.from_numpy(dx_dy_np[:, contact_idx*dim:contact_idx*dim+2])
+
+
+    def calc_jobain(self):
+        self.jacobian.fill(0.)
+        jacobian_np = np.zeros((2, 2))
+        element_np = self.marker_elements[0].to_numpy()
+        barycentric = self.barycentrics[0].to_numpy()
+        grasp_dx_dy = self.grasp_dx_dy.to_numpy()
+        for idx in range(3):
+            node_idx = element_np[idx]
+            j_tmp = grasp_dx_dy[node_idx*2:node_idx*2+2, :]
+            jacobian_np += barycentric[idx] * j_tmp
+        self.jacobian.from_numpy(jacobian_np)
 
 
     def substep(self, step_num:int):
@@ -268,19 +330,62 @@ class MyObject(SoftObject):
 
 
     def actuate_action(self, contact_speed):
-        self.GRASP_VEL[0] = contact_speed
+        self.GRASP_VEL[0] = contact_speed.flatten()         # 1D array
 
 
-    def compute_gradient(self, dot_soft):
-        error, loss_tmp = self.construct_L_soft(dot_soft)
-        self.loss = loss_tmp
+    def compute_gradient(self, dot_soft)->[npt.NDArray, npt.NDArray]:
+        error_dist, error_pen, loss_dist, loss_pen = self.construct_L_soft(dot_soft)
+        self.loss = loss_dist + loss_pen
         self.diff_pd(10)
-        self.compute_grad_y()
+        self.calc_jacobian_pd()
+        # self.compute_grad_y()
+        # self.diff_data()
+        # self.calc_jobain()
 
-        return loss_tmp
+        return loss_dist, loss_pen
+
+
+def init_mpc(s_desired, direct):
+    def tvp_fun(t_now):
+        global j_measure
+        tvp_template = mpc.get_tvp_template()
+        tvp_template['_tvp', :, 'j'] = j_measure
+        return tvp_template
+
+    model_type = 'discrete'  # either 'discrete' or 'continuous'
+    model = do_mpc.model.Model(model_type)
+
+    # marker点的二维位置作为状态
+    s = model.set_variable(var_type='_x', var_name='s', shape=(2, 1))
+    contact_action = model.set_variable(var_type='_u', var_name='contact_action', shape=(2, 1))
+    j = model.set_variable(var_type='_tvp', var_name='j', shape=(2, 2))
+
+    model.set_rhs('s', vertcat(s + j @ contact_action))
+    print_dicts = {'ipopt.print_level': 0, 'print_time': 0}
+
+    model.setup()
+    mpc = do_mpc.controller.MPC(model)
+    mpc.set_param(n_horizon=5, t_step=0.01, store_full_solution=True, nlpsol_opts=print_dicts)
+
+    factor = 2.e0
+    error_dist = s - s_desired
+    error_pen = (s - s_desired) - dot(direct, s - s_desired) * direct
+    mterm = dot(error_dist, error_dist) + factor * dot(error_pen, error_pen)
+    lterm = dot(error_dist, error_dist) + factor * dot(error_pen, error_pen)
+    mpc.set_objective(mterm=mterm, lterm=lterm)
+    mpc.set_rterm(contact_action=0.)
+
+    # mpc.bounds['lower', '_u', 'contact_action'] = -5.e-4 * np.ones((2, 1))
+    # mpc.bounds['upper', '_u', 'contact_action'] = 5.e-4 * np.ones((2, 1))
+    mpc.set_nl_cons('action lenth', vertcat(contact_action[0]**2 + contact_action[1]**2), ub=8.e-4**2)
+    mpc.set_tvp_fun(tvp_fun)
+    mpc.setup()
+
+    return mpc
 
 
 async def main():
+    global j_measure
     obj_shape = [0.14, 0.14]
     obj_seed_size = 0.01
     learning_rate = 1.e1
@@ -315,18 +420,29 @@ async def main():
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    soft_obj.substep(1)
+    loss_dist, loss_pen = soft_obj.compute_gradient(dots_pos_soft)
+    print(f"Loss distance items: {loss_dist}; Loss pendicular items: {np.sum(loss_dist)}")
+
+    mpc = init_mpc(soft_obj.dot_pos_desired[0], soft_obj.desired_direct[0])
+    j_measure = soft_obj.jacobian.to_numpy()
+    print(f"Inital j: \n{j_measure}")
+    mpc.x0 = dots_pos_soft_2d.reshape(-1, 1)
+    mpc.set_initial_guess()
+
     dots_pos_soft = dots_pos_soft_2d
     dots_pos_model = soft_obj.dot_pos.to_numpy()
     dots_soft_list = []
     delta_pos_list = []
     delta_pos_model_list = []
+    j_measure_list = []
     loss_list = []
     rob_movement_list = []
-    contact_pos_list = []
+    # contact_pos_list = []
     frame_name_list = []
 
     try:
-        for step in range(200):
+        for step in range(100):
             print(f'Step: {step} ------------------------------------')
             dots_data = await receive_qualysis(connection)
             dots_pos = [point for index, point in sorted(zip(dots_data['idx'], dots_data['pos']))]
@@ -341,14 +457,17 @@ async def main():
             dots_pos_model_new = soft_obj.dot_pos.to_numpy()
             delta_pos_model = dots_pos_model_new - dots_pos_model
             dots_pos_model = dots_pos_model_new
-            loss_tmp = soft_obj.compute_gradient(dots_pos_soft)
+            loss_dist, loss_pen = soft_obj.compute_gradient(dots_pos_soft)
+            j_measure = soft_obj.jacobian.to_numpy()
 
-            end_speed_np = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
-            end_movement_np = action_compress(end_speed_np * soft_obj.dt, 8.e-4)
-            end_movement = end_movement_np.tolist()
+            end_movement_np = mpc.make_step(dots_pos_soft_new.reshape(-1, 1))
+            # end_speed_np = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[0]].to_numpy()
+            # end_movement_np = action_compress(end_movement_np, 8.e-4)
+            end_movement = end_movement_np.flatten().tolist()
 
             soft_obj.actuate_action(end_movement_np / soft_obj.dt)
-            print(f'Loss items: {loss_tmp}; Loss sum: {np.sum(loss_tmp)}')
+            print(f'Loss distance items: {loss_dist}; Loss sum: {np.sum(loss_dist)}')
+            print(f'Loss Pendicular items: {loss_pen}; Loss sum: {np.sum(loss_pen)}')
             print(f'The tool movement: {end_movement}')
             # print(f'Contact Point Pos: {soft_obj.node_pos[15]}')
 
@@ -359,9 +478,10 @@ async def main():
             dots_soft_list.append(dots_pos_soft.flatten())
             delta_pos_list.append(delta_pos.flatten())
             delta_pos_model_list.append(delta_pos_model.flatten())
-            loss_list.append(loss_tmp)
+            j_measure_list.append(j_measure.flatten())
+            loss_list.append(list(loss_dist) + list(loss_pen))
             rob_movement_list.append(end_movement)
-            contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
+            # contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
 
             color_image = get_image(camera_id, image)
             cv2.imshow(window_name, color_image)
@@ -384,9 +504,10 @@ async def main():
         np.savetxt('dots_soft_list.csv', np.array(dots_soft_list), fmt='%.10f', delimiter=',')
         np.savetxt('delta_pos_list.csv', np.array(delta_pos_list), fmt='%.10f', delimiter=',')
         np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
-        np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10f', delimiter=',')
+        np.savetxt('j_measure_list.csv', np.array(j_measure_list), fmt='%.10f', delimiter=',')
+        np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10e', delimiter=',')
         np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
-        np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
+        # np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
 
         # 将保存的图像转换为视频
         image_to_video(frame_name_list, 'output_video.mp4')

@@ -27,7 +27,7 @@ if not os.path.exists(output_folder):
 
 # pattern中有几个点，重新赋值
 POINTS_NUM:int = 1
-selected_index = []
+selected_index = [480]
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip:str = '192.168.253.1'
@@ -113,8 +113,8 @@ async def receive_qualysis(connection):
     def on_packet(packet):
         nonlocal captured_data
         header, markers = packet.get_3d_markers_no_label()
-        if header.marker_count != POINTS_NUM:
-            return
+        # if header.marker_count != POINTS_NUM:
+        #     return
 
         markers_pos = []
         markers_idx = []
@@ -134,6 +134,7 @@ async def receive_qualysis(connection):
             selected_data['pos'].append(pos)
 
     return selected_data
+    # return captured_data
 
 
 class MyObject(SoftObject):
@@ -226,7 +227,7 @@ class MyObject(SoftObject):
         return error, np.linalg.norm(error, axis=1) ** 2
 
 
-    def construct_L_soft(self, marker_pos_soft:npt.NDArray):
+    def construct_L_soft(self, marker_pos_soft:npt.NDArray)->[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         在Soft的二维坐标系上计算loss
         :param marker_pos_soft: shape: (POINTS_NUM, 2)
@@ -240,11 +241,11 @@ class MyObject(SoftObject):
             barycentric = self.barycentrics[marker_i]
             desired_pos = self.dot_pos_desired[marker_i]
             direct = self.desired_direct[marker_i]
-            current_pos = marker_pos_soft[marker_i]
+            current_pos = ti.Vector([marker_pos_soft[marker_i][0], marker_pos_soft[marker_i][1]])
             error_dist[marker_i] = (current_pos - desired_pos).to_numpy()
-            error_pen_tmp = (current_pos - desired_pos) - tm.dot(direct, current_pos-desired_pos) * direct
-            error_pen[marker_i] = error_pen_tmp.to_numpy()
-            dL_pen = 2 * error_pen_tmp @ (np.eye(dim) - np.outer(direct, direct))
+            error_pen_tmp = (current_pos - desired_pos) - direct.dot(current_pos-desired_pos) * direct
+            error_pen[marker_i] = factor * error_pen_tmp.to_numpy()
+            dL_pen = 2 * error_pen_tmp.to_numpy() @ (np.eye(dim) - np.outer(direct, direct))
             # print(f'Soft Coordinate Error： {error[marker_i]}')
             for idx, ele_idx in enumerate(self.marker_elements[marker_i]):
                 self.dL[ele_idx * dim] += 2 * (current_pos[0] - desired_pos[0]) * barycentric[idx]
@@ -294,7 +295,7 @@ class MyObject(SoftObject):
         self.GRASP_VEL[0] = contact_speed
 
 
-    def compute_gradient(self, dot_soft):
+    def compute_gradient(self, dot_soft)->[npt.NDArray, npt.NDArray]:
         error_dist, error_pen, loss_dist, loss_pen = self.construct_L_soft(dot_soft)
         self.loss = loss_dist + loss_pen
         self.diff_pd(10)
@@ -345,11 +346,9 @@ async def main():
     delta_pos_model_list = []
     loss_list = []
     rob_movement_list = []
-    contact_pos_list = []
+    # contact_pos_list = []
     frame_name_list = []
 
-    # old_gray = bgr2gray(color_image_bgr, [0.2, 0.2, 0.6])
-    # detected_marker_old = dots_init
     try:
         for step in range(200):
             print(f'Step: {step} ------------------------------------')
@@ -385,9 +384,9 @@ async def main():
             dots_soft_list.append(dots_pos_soft.flatten())
             delta_pos_list.append(delta_pos.flatten())
             delta_pos_model_list.append(delta_pos_model.flatten())
-            loss_list.append(loss_dist + loss_pen)
+            loss_list.append(list(loss_dist) + list(loss_pen))
             rob_movement_list.append(end_movement)
-            contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
+            # contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
 
             color_image = get_image(camera_id, image)
             cv2.imshow(window_name, color_image)
@@ -412,7 +411,7 @@ async def main():
         np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
         np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10f', delimiter=',')
         np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
-        np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
+        # np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
 
         # 将保存的图像转换为视频
         image_to_video(frame_name_list, 'output_video.mp4')
