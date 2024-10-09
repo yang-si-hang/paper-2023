@@ -1,5 +1,6 @@
 """
-Minimize the loss with multi grasping points by DiffPD.
+Minimize the loss with multi contact points by DiffPD.
+created at 2024-10-09 by hsy
 """
 
 import taichi as ti
@@ -102,7 +103,7 @@ class SoftObject:
         # Determine the marker node idx
         self.marker_idx = 42
         self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
-        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
+        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.1])*0.01
         print('marker node desired pos:', self.marker_pos_desired[0])
 
         # Print the information
@@ -707,6 +708,7 @@ def main():
     grasp_pos_list = []
     grasp_grad_list = []
     for itr in range(100):
+        print(f"Step: {itr}---------------------------------------------------")
         soft_obj.substep(itr)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
