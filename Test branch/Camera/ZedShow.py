@@ -28,7 +28,7 @@ def main():
         # 捕获图像
         if zed.grab() == sl.ERROR_CODE.SUCCESS:
             # 将图像从ZED相机转移到图像矩阵
-            zed.retrieve_image(image, sl.VIEW.LEFT)
+            zed.retrieve_image(image, sl.VIEW.RIGHT)
             # 将图像矩阵转换为OpenCV格式
             frame = image.get_data()
             # 显示图像

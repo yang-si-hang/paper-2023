@@ -1,5 +1,6 @@
 """
 获得期望变形下的标记点位置,使用Qualisys捕捉标记球的位置作为期望位置
+还可以用来计算软体坐标系相对于Qualisys坐标系的变换矩阵
 """
 
 import os
@@ -64,9 +65,9 @@ async def receive_qualysis(connection)->list:
 
 async def main():
     # 用来生成软体坐标系相对于世界坐标系的变换矩阵
-    origin_pos = np.array([0.3899, 0.01, 0.081])
-    x_deviation = np.array([0.3911, 0.1247, 0.0826])
-    y_deviation = np.array([0.5268, 0.0105, 0.0784])
+    origin_pos = np.array([0.339, 0.0754, 0.097])
+    x_deviation = np.array([0.2136, 0.076, 0.0974])
+    y_deviation = np.array([0.3398, 0.2108, 0.1006])
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'CAPTURE DESIRED SHAPE'

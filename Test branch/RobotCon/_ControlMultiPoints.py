@@ -1,5 +1,6 @@
 """
-Minimize the loss with multi grasping points by DiffPD.
+Minimize the loss with multi contact points by DiffPD.
+created at 2024-10-09 by hsy
 """
 
 import taichi as ti
@@ -13,15 +14,12 @@ from scipy.sparse.linalg import spsolve
 
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size):
+    def __init__(self, shape, seed_size, contact_idx:list):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./120
         self.rho = 1.145
         self.E, self.nu = 5.e5, 0.4
-        # self.GRASP_VEL = ti.Vector.field(2, dtype=ti.f64, shape=1)
-        # self.GRASP_VEL[0] = ti.Vector([0.020918, 0.013936]) / 5.
-        # self.GRASP_VEL[0] = ti.Vector([0., 0.])
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e10
         self.grasp_mass = 1.e5
@@ -29,11 +27,13 @@ class SoftObject:
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
-        node_np, edge_np, element_np = self.mesh_object()
+        node_np, edge_np, element_np, tri = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
-        # np.savetxt('element.csv', element_np, fmt='%f', delimiter=',')
+        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
         self.edge_np = edge_np
+        self.tri = tri
+        exit(0)
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = edge_np.shape[0]
@@ -55,6 +55,7 @@ class SoftObject:
         # This is only for 2D, should be changed for 3D!!!
         self.element = ti.Vector.field(3, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
+        self.elemnt_strain = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.strain_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.volume_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
         self.element.from_numpy(element_np.astype(np.int32))
@@ -87,7 +88,8 @@ class SoftObject:
         self.z.fill(1.)
 
         self.fix_particle_list = self.fix_particle_No()
-        self.grasp_particle_list = [10, 120]
+        # self.grasp_particle_list = [10, 120]
+        self.grasp_particle_list = contact_idx
         self.GRASP_N = len(self.grasp_particle_list)
         self.grasp_particle_ti = ti.field(int, shape=self.GRASP_N)
         self.grasp_particle_ti.from_numpy(np.array(self.grasp_particle_list))
@@ -102,14 +104,14 @@ class SoftObject:
         # Determine the marker node idx
         self.marker_idx = 42
         self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=1)
-        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.])*0.01
+        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx] + ti.Vector([0.2, 0.1])*0.01
         print('marker node desired pos:', self.marker_pos_desired[0])
 
         # Print the information
         print('Particle number: ', self.PARTICLE_NUM)
         print('Element number: ', self.ELEMENT_NUM)
         print('Edge number: ', self.EDGE_NUM)
-        # print('Grasp particle No.: ', self.grasp_particle_list)
+        print('Contact Node Indices: ', self.grasp_particle_list)
 
 
     def mesh_object(self):
@@ -149,7 +151,7 @@ class SoftObject:
 
         edge = np.array(list(edge_set))
 
-        return node, edge, element
+        return node, edge, element, tri
 
 
     def mesh_object_3d(self):
@@ -339,6 +341,7 @@ class SoftObject:
         """
         Minimize the energy function
         """
+        area = self.seed_size**2 / 2.
         for i in range(self.ELEMENT_NUM):
             # Strain constriant
             ia, ib, ic = self.element[i]
@@ -365,6 +368,7 @@ class SoftObject:
 
             PP = ti.Matrix.rows([[D[0]+sig[0,0], 0.], [0., D[1]+sig[1,1]]])
             self.Bp[self.ELEMENT_NUM + i] = U @ PP @ V.transpose()
+            self.elemnt_strain[i] = (ti.sqrt(sig[0,0]**2 + sig[1,1]**2) - 1.) * area        # 粗略操作,乘ele的面积
 
 
     @ti.kernel
@@ -390,9 +394,6 @@ class SoftObject:
                 else:
                     weight = self.volume_weight[i]
                 AT_Bp *= weight
-                # print('A_i:', A_i.transpose())
-                # print('Bp_i_vec:', Bp_i_vec)
-                # print('AT_Bp:', AT_Bp)
 
                 q_ia_x_idx = ia * dim
                 q_ia_y_idx = ia * dim + 1
@@ -417,7 +418,6 @@ class SoftObject:
             q_i_y_idx = par_idx * dim + 1
             self.rhs[q_i_x_idx] += weight_p * self.node_init_pos[par_idx].x
             self.rhs[q_i_y_idx] += weight_p * self.node_init_pos[par_idx].y
-
 
 
     @ti.kernel
@@ -676,7 +676,7 @@ class SoftObject:
 def main():
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size):
-            super().__init__(shape, seed_size)
+            super().__init__(shape, seed_size, [10, 120])
 
     soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.01)
     soft_obj.preset()
@@ -707,6 +707,7 @@ def main():
     grasp_pos_list = []
     grasp_grad_list = []
     for itr in range(100):
+        print(f"Step: {itr}---------------------------------------------------")
         soft_obj.substep(itr)
         soft_obj.control_grasp()
         loss_list.append(soft_obj.loss)
