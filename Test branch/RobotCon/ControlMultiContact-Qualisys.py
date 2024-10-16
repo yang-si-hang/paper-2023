@@ -24,11 +24,13 @@ if not os.path.exists(output_folder):
 
 # pattern中有几个点，重新赋值
 POINTS_NUM: int = 1
+selected_index = [390]
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip: str = '192.168.253.1'
 qualysis_password: str = ''
 
+# 实验之前需要标定软体坐标系，确定Qualisys到软体坐标系的变换矩阵
 trans_matrix = np.loadtxt('data/transformation_matrix.csv', delimiter=',')
 
 def remove_outliers_and_get_center(positions):
@@ -60,7 +62,7 @@ async def init_maker(connection)->npt.NDArray:
     step_num:int = 50
     dots_dict = {}
     for step in range(step_num):
-        dot_data = await receive_qualysis(connection)
+        dot_data = await receive_qualysis(connection, selected_index)
         idxs = dot_data['idx']
         for idx, idx_value in enumerate(idxs):
             if idx_value not in dots_dict:
@@ -101,19 +103,21 @@ def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
         return vec
 
 
-async def receive_qualysis(connection):
+async def receive_qualysis(connection, choose_idx:list):
+    # 只检测指定序号的标记点
     captured_data = {}
+    selected_data = {'idx': [], 'pos': []}
 
     # Define the callback to capture data
     def on_packet(packet):
         nonlocal captured_data
         header, markers = packet.get_3d_markers_no_label()
-        if header.marker_count != POINTS_NUM:
-            return
+        # if header.marker_count != POINTS_NUM:
+        #     return
 
         markers_pos = []
         markers_idx = []
-        for idx, marker in enumerate(markers):
+        for _, marker in enumerate(markers):
             # 转换到单位米
             markers_pos.append([marker.x/1000., marker.y/1000., marker.z/1000.])
             markers_idx.append(marker.id)
@@ -123,7 +127,13 @@ async def receive_qualysis(connection):
 
     await connection.stream_frames(components=["3dnolabels"], on_packet=on_packet)
 
-    return captured_data
+    if choose_idx:
+        for idx, pos in zip(captured_data['idx'], captured_data['pos']):
+            if idx in choose_idx:
+                selected_data['idx'].append(idx)
+                selected_data['pos'].append(pos)
+
+    return selected_data
 
 
 class MyObject(SoftObject):
@@ -140,6 +150,9 @@ class MyObject(SoftObject):
         self.dot_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=POINTS_NUM)
         self.dot_pos.from_numpy(marker_pos_init)
         self.dot_pos_init.from_numpy(marker_pos_init)
+
+        self.get_marker_element()
+        self.read_desired_pos(user_defined=True)
 
 
     def get_marker_element(self):
@@ -228,6 +241,7 @@ class MyObject(SoftObject):
         self.update_vel_pos()
         self.get_marker_pos()
 
+
     def actuate_action(self, contact_speed:npt.NDArray):
         # for idx in range(self.GRASP_N):
         #     self.GRASP_VEL[idx] = contact_speed
@@ -246,7 +260,7 @@ class MyObject(SoftObject):
 async def main():
     obj_shape = [0.14, 0.14]
     obj_seed_size = 0.01
-    learning_rate = 1.e1
+    learning_rate = 5.e0
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'Zed Camera Image'
@@ -275,7 +289,8 @@ async def main():
     left_rob.start_record_data('left_robot_data.csv')
     right_rob.start_record_data('right_robot_data.csv')
 
-    soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [15, 255])
+    # soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [15, 255])
+    soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [15])
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
@@ -283,7 +298,7 @@ async def main():
 
     dots_pos_soft = dots_pos_soft_2d
     dots_pos_model = soft_obj.dot_pos.to_numpy()
-    contact_speed_np = np.zeros((POINTS_NUM, 2), dtype=np.float64)
+    contact_speed_np = np.zeros((soft_obj.GRASP_N, 2), dtype=np.float64)
     dots_soft_list = []
     delta_pos_list = []
     delta_pos_model_list = []
@@ -294,9 +309,9 @@ async def main():
     frame_name_list = []
 
     try:
-        for step in range(200):
+        for step in range(150):
             print(f'Step: {step} ------------------------------------')
-            dots_data = await receive_qualysis(connection)
+            dots_data = await receive_qualysis(connection, selected_index)
             dots_pos = [point for index, point in sorted(zip(dots_data['idx'], dots_data['pos']))]
             dots_pos = np.array(dots_pos)
             dots_pos_soft_new = pos_in_soft(dots_pos)[:,:2]
@@ -313,27 +328,28 @@ async def main():
 
             for idx in range(soft_obj.GRASP_N):
                 contact_speed_tmp = -learning_rate * soft_obj.grad_y[soft_obj.grasp_particle_list[idx]].to_numpy()
-                contact_speed_np[idx, :] = action_compress(contact_speed_tmp, 8.e-4)
+                contact_speed_np[idx, :] = action_compress(contact_speed_tmp, 5.e-4)
             end_move = contact_speed_np.tolist()
 
             soft_obj.actuate_action(contact_speed_np / soft_obj.dt)
             print(f'Loss items: {loss_tmp}; Loss sum: {np.sum(loss_tmp)}')
-            print(f'The tool movement: Left: {end_move[0]}; Right: {end_move[1]}')
+            # print(f'The tool movement: Left: {end_move[0]}; Right: {end_move[1]}')
+            print(f"The tool movement: {end_move}")
 
             # 机器人控制
             left_rob.move_add_movel([end_move[0][1], end_move[0][0], 0., 0., 0., 0.], a=0.1, v=0.1)
-            right_rob.move_add_movel([end_move[1][1], end_move[1][0], 0., 0., 0., 0.], a=0.1, v=0.1)
+            # right_rob.move_add_movel([end_move[1][1], end_move[1][0], 0., 0., 0., 0.], a=0.1, v=0.1)
 
             # 写入数据
             dots_soft_list.append(dots_pos_soft.flatten())
-            delta_pos_list.append(delta_pos.flatten())
-            delta_pos_model_list.append(delta_pos_model.flatten())
+            # delta_pos_list.append(delta_pos.flatten())
+            # delta_pos_model_list.append(delta_pos_model.flatten())
             loss_list.append(loss_tmp)
-            rob_movement_list.append(end_move[0,:]+end_move[1,:])
+            # rob_movement_list.append(end_move[0]+end_move[1])
             contact_pos_list.append(soft_obj.node_pos[15].to_numpy().tolist()+soft_obj.node_pos[255].to_numpy().tolist())
             strain_sum_list.append(np.sum(soft_obj.elemnt_strain.to_numpy()))
 
-            color_image = get_image(camera_id, image)
+            color_image = get_image(camera_id, image, 'RIGHT')
             cv2.imshow(window_name, color_image)
             frame_name_list = image_save(color_image, step, frame_name_list, output_folder)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -355,11 +371,11 @@ async def main():
         cv2.destroyAllWindows()
 
         np.savetxt('dots_soft_list.csv', np.array(dots_soft_list), fmt='%.10f', delimiter=',')
-        np.savetxt('delta_pos_list.csv', np.array(delta_pos_list), fmt='%.10f', delimiter=',')
-        np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
+        # np.savetxt('delta_pos_list.csv', np.array(delta_pos_list), fmt='%.10f', delimiter=',')
+        # np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
         np.savetxt('strain_sum_list.csv', np.array(strain_sum_list), fmt='%.10f', delimiter=',')
         np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10f', delimiter=',')
-        np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
+        # np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
         np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
 
         np.savetxt('final_strain.csv', soft_obj.elemnt_strain.to_numpy(), fmt='%.10f', delimiter=',')

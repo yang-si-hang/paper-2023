@@ -161,6 +161,7 @@ if __name__ == '__main__':
 
     freq = 500
     MyUR = URROb(freq)
+
     MyUR.record_variable = ['timestamp', 'target_TCP_pose', 'actual_TCP_pose', 'target_TCP_speed', 'actual_TCP_speed']
 
     MyUR.start_record_data()

@@ -36,11 +36,18 @@ def init_camera(resolution:int, fps:int):
     return zed, image
 
 
-def get_image(zed, image):
+def get_image(zed, image, camera_view:str='RIGHT'):
     # 捕获图像
+    view_type = None
+    if camera_view == 'LEFT':
+        view_type = sl.VIEW.LEFT
+    elif camera_view == 'RIGHT':
+        view_type = sl.VIEW.RIGHT
+    else:
+        ValueError('Camera view not supported')
     if zed.grab() == sl.ERROR_CODE.SUCCESS:
         # 将图像从ZED相机转移到图像矩阵
-        zed.retrieve_image(image, sl.VIEW.RIGHT)    # 你可以选择 LEFT 或 RIGHT
+        zed.retrieve_image(image, view_type)    # 你可以选择 LEFT 或 RIGHT
         # 将图像矩阵转换为opencv格式
         frame = image.get_data()
         color_image = frame
