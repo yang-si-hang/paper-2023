@@ -3,7 +3,6 @@ Construct a 2D square simulation scene by SOFA
 Apply node movement in every simulation step
 """
 import time
-
 import Sofa
 import SofaRuntime
 import Sofa.Gui

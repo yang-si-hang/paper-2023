@@ -1,6 +1,7 @@
 """
-DiffPD的3D版本
-created at 2024-07-01 by hsy
+DiffPD的3D版本,控制一个长方体海绵上一个点
+固定点和接触点由用户给定
+created at 2024-10-16 by hsy
 """
 
 import time
@@ -8,9 +9,10 @@ import taichi as ti
 ti.init(arch=ti.gpu, device_memory_GB=6.0,  default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
+import numpy.typing as npt
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
-from GenMsh import generate_msh
+np.set_printoptions(linewidth=200)
 
 
 def cal_tet_volume(vertices):
@@ -20,7 +22,7 @@ def cal_tet_volume(vertices):
     return volume
 
 
-def read_msh_file(file_path):
+def read_msh_file(file_path:str):
     with open(file_path, 'r') as file:
         lines = file.readlines()
 
@@ -62,7 +64,7 @@ def read_msh_file(file_path):
     return nodes_array, cells_array
 
 
-def load_msh(file_path):
+def load_msh(file_path:str):
     nodes_array, elements_array = read_msh_file(file_path)
     elements_array = elements_array - 1
     # 打印节点和单元信息
@@ -94,7 +96,37 @@ def get_tetrahedron_edges(tet_indices):
             unique_edges.add(edge)
 
     # 将集合转换为numpy数组
-    return np.array(list(unique_edges))
+    return np.array(list(unique_edges)).astype(np.int32)
+
+
+def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
+    """
+    Compress action vector in a safe range
+    """
+    length = np.linalg.norm(vec)
+
+    if length > max_length:
+        factor = max_length / length
+        return vec * factor
+    else:
+        return vec
+
+
+def find_ele_from_nodes(elements:npt.NDArray, target_nodes:set)->list:
+    """
+    根据目标节点集合找到包含且只包含目标节点集合的四面体
+    """
+    result = []         # 存储符合条件的四面体序号
+
+    # 遍历每个四面体
+    for i, tet in enumerate(elements):
+        # 如果四面体节点集合是目标节点集合的子集
+        if set(tet).issubset(target_nodes):
+            result.append(i)
+
+    # print("只包含目标节点集合中的四面体序号:", result)
+
+    return result
 
 
 @ti.func
@@ -128,25 +160,52 @@ def qr_solve9(A, b):
     return x
 
 
+def gui_set(pos:list, target:list, FOV=60):
+    # init the window, canvas, scene and camerea
+    window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
+    scene = ti.ui.Scene()
+    camera = ti.ui.Camera()
+
+    # initialize camera position
+    camera.position(pos[0], pos[1], pos[2])
+    camera.lookat(target[0], target[1], target[2])
+    camera.projection_mode(ti.ui.ProjectionMode.Perspective)
+    # 设置相机的向上轴的方向，在相机模型中是-Y轴
+    camera.up(0., 1., 0.)
+    camera.z_near(0.01)
+    camera.fov(FOV)
+
+    # set the camera, you can move around by pressing 'wasdeq'
+    camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
+    scene.set_camera(camera)
+
+    # set the light
+    scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+    scene.ambient_light((1., 1., 1.))
+    return window, camera, scene
+
+
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size, mesh_file):
+    def __init__(self, shape, seed_size, mesh_file, contact_list):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./100
-        self.rho = 1.e3
+        self.rho = 26.
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e8
+        self.contact_mass = 5.
         self.solve_iteration = int(10)
-        self.E, self.nu = 5.e4, 0.45
+        self.E, self.nu = 3.e5, 0.3
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, element_np, volume_np = load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%f', delimiter=',')
+        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('volume.csv', volume_np, fmt='%.8f', delimiter=',')
+        # exit(0)
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -159,6 +218,7 @@ class SoftObject:
         self.node_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.node_init_pos.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
+        self.node_mass.fill(0.)
 
         self.element = ti.Vector.field(self.dim+1, dtype=ti.i32, shape=self.ELEMENT_NUM)
         self.element_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_NUM)
@@ -197,39 +257,38 @@ class SoftObject:
         self.dL_dq = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
         self.dL_dy = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
         self.z = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)
-        self.dx_const = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)          # dx_dy中的常数部分
-
-        # Finite difference
-        self.delta = ti.cast(1.e-6, ti.f64)
-        self.grad_finite = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
-        self.grad_diffdata = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
+        # self.dx_const = ti.field(ti.f64, shape=self.dim*self.PARTICLE_NUM)          # dx_dy中的常数部分
 
         self.dL_dq.fill(0.)
         self.z.fill(0.)
 
-        self.fix_particle_list = self.fix_particle_No()
-        # self.fix_particle_list = [0, 1, 12]
+        # self.fix_particle_list = self.fix_particle_No()
+        self.fix_particle_list = [206, 207, 208, 209] + [228, 229, 230, 231]
         self.bottom_particles_list, self.BOTTOM_NUM = self.extract_bottom_particles()
-        # self.contact_particles_list = self.contact_particles_indice()
-        self.contact_particles_list = [5]       # 最底层的左上角节点
+        # self.contact_particles_list = [10, 11, 12, 13] + [32, 33, 34, 35]       # 两侧中间的节点
+        self.contact_particles_list = contact_list
         self.contact_num = len(self.contact_particles_list)
+        self.contact_particles_ti = ti.field(dtype=ti.i32, shape=self.contact_num)
+        self.contact_particles_ti.from_numpy(np.array(self.contact_particles_list).astype(np.int32))
         self.contact_vel = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
-        self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
+        self.contact_vel.fill(0.)
         contact_vel_np = np.zeros((self.contact_num, self.dim))
-        # contact_vel_np[:, 0] = 0.005
-        contact_vel_np[:, 0] = 1.e-6 / self.dt
-        self.contact_vel.from_numpy(contact_vel_np)
-        self.sample_particles_list = [132]
 
+        # self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
+        self.marker_idx_list = [121]
+        self.marker_pos_desired = ti.Vector.field(self.dim, dtype=ti.f64, shape=1)
+        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx_list[0]] + ti.Vector([0., 0., 0.05])
+
+        self.fixed_ele_list = find_ele_from_nodes(element_np, set(self.fix_particle_list + self.contact_particles_list))
         self.construct_mass()
         self.construct_B()
         self.construct_weight()
 
         # Print the information
-        print('Particle number:', self.PARTICLE_NUM)
-        print('Element number:', self.ELEMENT_NUM)
-        print('Contact particles number:', self.contact_num)
-        print('Fixed particles indices:', self.fix_particle_list)
+        print('Particle number:', self.PARTICLE_NUM, ';', 'Element number:', self.ELEMENT_NUM)
+        # print('Contact particles number:', self.contact_num)
+        # print('Fixed particles indices:', self.fix_particle_list)
+        # print(f"Fixed weight element indices: {self.fixed_ele_list}")
 
 
     @ti.kernel
@@ -240,6 +299,9 @@ class SoftObject:
             self.node_mass[idx2] += self.element_volume[ele_idx] * self.rho / 4
             self.node_mass[idx3] += self.element_volume[ele_idx] * self.rho / 4
             self.node_mass[idx4] += self.element_volume[ele_idx] * self.rho / 4
+
+        for idx in ti.static(self.contact_particles_list):
+            self.node_mass[idx] = self.contact_mass
 
 
     @ti.kernel
@@ -255,10 +317,14 @@ class SoftObject:
     @ti.kernel
     def construct_weight(self):
         for i in range(self.ELEMENT_NUM):
-            # self.strain_weight[i] = self.mu * self.element_volume[i]
+            self.strain_weight[i] = self.mu * self.element_volume[i]
             self.volume_weight[i] = self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
-            self.strain_weight[i] = 0.
+            # self.strain_weight[i] = 0.
             # self.volume_weight[i] = 0.
+        # 为固定点相关的网格单元赋予较大的权重
+        # for i in ti.static(self.fixed_ele_list):
+        #     self.strain_weight[i] = 1.e5 * self.mu * self.element_volume[i]
+        #     self.volume_weight[i] = 1.e5 * self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
 
 
     def fix_particle_No(self):
@@ -290,36 +356,6 @@ class SoftObject:
         fix_particles_list = list(fix_particles_set)
 
         return fix_particles_list
-
-
-    def contact_particles_indice(self):
-        """
-        Find the indice of contact particles
-        """
-        contact_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
-        L = self.shape[0]
-        H = self.shape[1]
-        W = self.shape[2]
-        seed_size = self.seed_size
-
-        @ti.kernel
-        def cal_contact_constraint(L: float, H: float, W: float, seed_size: float):
-            EPS = seed_size / 3
-            for idx in range(self.PARTICLE_NUM):
-                x_temp = self.node_init_pos[idx].x
-                y_temp = self.node_init_pos[idx].y
-                z_temp = self.node_init_pos[idx].z
-                contact_flag_temp = (x_temp > L - EPS)
-                contact_flag[idx] = contact_flag_temp
-
-        cal_contact_constraint(L, H, W, seed_size)
-        contact_particles_set = set()
-        for i in range(self.PARTICLE_NUM):
-            if contact_flag[i]:
-                contact_particles_set.add(i)
-        contact_particles_list = list(contact_particles_set)
-
-        return contact_particles_list
 
 
     @ti.kernel
@@ -383,50 +419,41 @@ class SoftObject:
                 self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
                 self.A_poistional[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
 
-        for q_idx in ti.static(self.contact_particles_list):
-            A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-            weight = self.positional_weight
-            qi_idx_x, qi_idx_y, qi_idx_z = q_idx * self.dim, q_idx * self.dim + 1, q_idx * self.dim + 2
-            q_idx_vec = ti.Vector([qi_idx_x, qi_idx_y, qi_idx_z])
-            for dim_idx in ti.static(range(self.dim)):
-                lhs_idx = q_idx_vec[dim_idx]
-                self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
-                self.A_poistional[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
-
-
-    def construct_L(self):
-        for q_idx in self.contact_particles_list:
-            self.dL_dq[q_idx*self.dim+0] = 1.
-
-
-    @ti.kernel
-    def construct_desired_pos(self):
-        for i in ti.static(range(self.contact_num)):
-            q_idx = self.contact_particles_list[i]
-            self.node_desired_pos[i] = self.node_pos[q_idx] + self.dt * self.contact_vel[i]
+        # for q_idx in ti.static(self.contact_particles_list):
+        #     A_i_eye = ti.Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        #     weight = self.positional_weight
+        #     qi_idx_x, qi_idx_y, qi_idx_z = q_idx * self.dim, q_idx * self.dim + 1, q_idx * self.dim + 2
+        #     q_idx_vec = ti.Vector([qi_idx_x, qi_idx_y, qi_idx_z])
+        #     for dim_idx in ti.static(range(self.dim)):
+        #         lhs_idx = q_idx_vec[dim_idx]
+        #         self.lhs[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
+        #         self.A_poistional[lhs_idx, lhs_idx] += weight * A_i_eye[dim_idx, dim_idx]
 
 
     @ti.kernel
     def construct_sn(self):
-        for i in range(self.PARTICLE_NUM):
-            for d in ti.static(range(self.dim)):
-                self.sn[i*self.dim + d] = self.node_pos[i][d] + self.dt * self.node_vel[i][d]
+        dim = self.dim
+        for idx in range(self.PARTICLE_NUM):
+            self.sn[idx*dim+0] = self.node_pos[idx].x + self.dt * self.node_vel[idx].x
+            self.sn[idx*dim+1] = self.node_pos[idx].y + self.dt * self.node_vel[idx].y
+            self.sn[idx*dim+2] = self.node_pos[idx].z + self.dt * self.node_vel[idx].z
 
-        # for i in range(self.contact_num):
-        #     q_idx = self.contact_particles_list[i]
-        #     for d in ti.static(range(self.dim)):
-        #         self.sn[q_idx*self.dim + d] = self.node_pos[q_idx][d] + self.contact_vel[i][d] * self.dt
-
-        # for i in ti.static(range(self.contact_num)):
-        #     q_idx = self.contact_particles_list[i]
-        #     self.sn[q_idx*self.dim + 0] = self.node_pos[q_idx][0] + self.delta
+        ti.loop_config(serialize=True)
+        for idx in range(self.contact_num):
+            idx_value = self.contact_particles_ti[idx]
+            self.sn[idx_value*dim+0] += self.contact_vel[idx].x * self.dt
+            self.sn[idx_value*dim+1] += self.contact_vel[idx].y * self.dt
+            self.sn[idx_value*dim+2] += self.contact_vel[idx].z * self.dt
 
 
     @ti.kernel
     def warm_start(self):
         for i in range(self.PARTICLE_NUM):
-            for d in ti.static(range(self.dim)):
-                self.node_pos_new[i][d] = self.node_pos[i][d]
+            self.node_pos_new[i].x = self.sn[i*self.dim+0]
+            self.node_pos_new[i].y = self.sn[i*self.dim+1]
+            self.node_pos_new[i].z = self.sn[i*self.dim+2]
+            # for d in ti.static(range(self.dim)):
+            #     self.node_pos_new[i][d] = self.node_pos[i][d]
 
 
     @ti.kernel
@@ -443,7 +470,7 @@ class SoftObject:
             self.U[ele_idx], self.sig[ele_idx], self.V[ele_idx] = U, ti.Vector([sig[0, 0], sig[1, 1], sig[2, 2]]), V
             self.Bp[ele_idx] = U @ V.transpose()                                # Strain contraint
 
-            D, max_it, tol = ti.Vector([5., 5., 5.]), 50, 1.e-6
+            D, max_it, tol = ti.Vector([3., 3., 3.]), 50, 1.e-6
             for itr in range(max_it):
                 aa, bb, cc = D[0]+sig[0,0], D[1]+sig[1,1], D[2]+sig[2,2]
                 C = aa*bb*cc - 1
@@ -499,12 +526,6 @@ class SoftObject:
             for d in ti.static(range(self.dim)):
                 self.rhs[q_idx * self.dim + d] += weight * self.node_init_pos[q_idx][d]
 
-        for i in ti.static(range(self.contact_num)):
-            q_idx = self.contact_particles_list[i]
-            weight = self.positional_weight
-            for d in ti.static(range(self.dim)):
-                self.rhs[q_idx * self.dim + d] += weight * self.node_desired_pos[i][d]
-
 
     @ti.kernel
     def update_pos_new(self, sol:ti.types.ndarray()):
@@ -515,9 +536,17 @@ class SoftObject:
 
     @ti.kernel
     def update_vel_pos(self):
+        ti.loop_config(serialize=True)
+        for idx in range(self.contact_num):
+            idx_value = self.contact_particles_ti[idx]
+            self.node_pos_new[idx_value] = self.node_pos[idx_value] + self.contact_vel[idx] * self.dt
+
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
             self.node_pos[i] = self.node_pos_new[i]
+
+        for idx in ti.static(self.contact_particles_list):
+            self.node_vel[idx] = ti.Vector([0., 0., 0.])
 
 
     @ti.kernel
@@ -634,16 +663,21 @@ class SoftObject:
         # 没有，因为是Bp是确定的
 
 
-    @ti.kernel
-    def construct_dx_const(self):
-        # 解决Movement Constraint中dBp/dq为常数的情况
-        for q_i in range(self.PARTICLE_NUM):
-            for d in ti.static(range(self.dim)):
-                self.dx_const[q_i*self.dim+d] = self.node_mass[q_i] / self.dt**2
+    def construct_L(self):
+        dim = self.dim
+        error = np.zeros((len(self.marker_idx_list), dim), dtype=np.float64)
+        for i, idx in enumerate(self.marker_idx_list):
+            desired_pos = self.marker_pos_desired[i]
+            current_pos = self.node_pos[idx]
+            error_tmp_ti = current_pos - desired_pos
+            error[i] = error_tmp_ti.to_numpy()
+            self.dL_dq[idx * dim + 0] = 2 * error_tmp_ti[0]
+            self.dL_dq[idx * dim + 1] = 2 * error_tmp_ti[1]
+            self.dL_dq[idx * dim + 2] = 2 * error_tmp_ti[2]
+        # for q_idx in self.contact_particles_list:
+        #     self.dL_dq[q_idx*self.dim+0] = 1.
 
-        for q_i in ti.static(self.contact_particles_list):
-            for d in ti.static(range(self.dim)):
-                self.dx_const[q_i*self.dim+d] += self.positional_weight
+        return error, np.linalg.norm(error, axis=1) ** 2
 
 
     def diff_data(self):
@@ -654,9 +688,9 @@ class SoftObject:
         # A = M_np + self.SA_strain.to_numpy() + self.SA_volume.to_numpy() + self.A_poistional.to_numpy() - self.rhs_dA.to_numpy()
         A = self.lhs.to_numpy() - self.rhs_dA.to_numpy()
         B = M_np
-        for q_i in self.contact_particles_list:
-            for d in range(self.dim):
-                B[q_i*self.dim+d, q_i*self.dim+d] += self.positional_weight
+        # for q_i in self.contact_particles_list:
+        #     for d in range(self.dim):
+        #         B[q_i*self.dim+d, q_i*self.dim+d] += self.positional_weight
         dx_dy_np = np.linalg.solve(A, B)
         np.savetxt('A.csv', A, fmt='%.15f', delimiter=',')
         np.savetxt('B.csv', B, fmt='%.15f', delimiter=',')
@@ -682,18 +716,14 @@ class SoftObject:
 
     @ti.kernel
     def cal_ygrad(self):
-        for idx in range(3*self.PARTICLE_NUM):
-            self.dL_dy[idx] = self.z[idx] * self.dx_const[idx]
-
-
-    @ti.kernel
-    def cal_grad(self):
-        for q_idx in range(self.PARTICLE_NUM):
-            self.grad_finite[q_idx] = (self.node_pos[q_idx] - self.node_init_pos[q_idx]) / self.delta
+        for idx in range(self.PARTICLE_NUM):
+            self.dL_dy[idx*self.dim+0] = self.z[idx*self.dim+0] * self.node_mass[idx] / self.dt**2
+            self.dL_dy[idx*self.dim+1] = self.z[idx*self.dim+1] * self.node_mass[idx] / self.dt**2
+            self.dL_dy[idx*self.dim+2] = self.z[idx*self.dim+2] * self.node_mass[idx] / self.dt**2
 
 
     def substep(self, step_num:ti.i32):
-        self.construct_desired_pos()
+        # self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
         for itr in range(self.solve_iteration):
@@ -707,13 +737,66 @@ class SoftObject:
         self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num)
 
 
+    def action_to_node(self):
+        learning_rate = 5.e0
+        dim = self.dim
+        contact_mov = np.zeros((len(self.contact_particles_list), dim), dtype=np.float64)
+        for idx, idx_value in enumerate(self.contact_particles_list):
+            grad_contact = ti.Vector([self.dL_dy[idx_value*dim+0], self.dL_dy[idx_value*dim+1], self.dL_dy[idx_value*dim+2]])
+            contact_mov[idx, :] = -learning_rate * grad_contact * self.dt
+
+        return contact_mov
+
+
+    def compute_action(self):
+        dim = self.dim
+        contact_pos = np.zeros((self.contact_num, dim), dtype=np.float64)
+        dL_dcnt = np.zeros((self.contact_num, dim), dtype=np.float64)
+        for idx, idx_value in enumerate(self.contact_particles_list):
+            contact_pos[idx] = np.array([self.node_pos[idx_value][0], self.node_pos[idx_value][1], self.node_pos[idx_value][2]])
+            dL_dcnt[idx] = np.array([self.dL_dy[idx_value*dim+0], self.dL_dy[idx_value*dim+1], self.dL_dy[idx_value*dim+2]])
+        contact_center = np.mean(contact_pos, axis=0)
+
+        dL_dcnt_rel = dL_dcnt - np.mean(dL_dcnt, axis=0)
+        dL_drob = np.zeros(6, dtype=np.float64)
+        dL_drob[:3] = np.mean(dL_dcnt, axis=0)
+
+        # 是否使用相对于中心点的相对速度，没有区别
+        rot_tmp = np.zeros(3, dtype=np.float64)
+        for i in range(self.contact_num):
+            rot_tmp += np.cross(contact_pos[i] - contact_center, dL_dcnt_rel[i]) / np.dot(contact_pos[i] - contact_center, contact_pos[i] - contact_center) / self.contact_num
+
+        dL_drob[3] = rot_tmp[0]
+        dL_drob[4] = rot_tmp[1]
+        dL_drob[5] = rot_tmp[2]
+
+        return dL_drob
+
+
+    def apply_action(self, action):
+        transl = action[:3]
+        rot = action[3:]
+        contact_pos = np.zeros((self.contact_num, 3), dtype=np.float64)
+        for idx, idx_value in enumerate(self.contact_particles_list):
+            contact_pos[idx] = np.array([self.node_pos[idx_value][0], self.node_pos[idx_value][1], self.node_pos[idx_value][2]])
+        contact_center = np.mean(contact_pos, axis=0)
+        contact_vel = np.zeros((self.contact_num, 3), dtype=np.float64)
+        for idx in range(self.contact_num):
+            contact_vel[idx] += transl / self.dt
+
+        for idx in range(self.contact_num):
+            contact_vel[idx] += np.cross(rot, contact_pos[idx] - contact_center) / self.dt
+
+        self.contact_vel.from_numpy(contact_vel)
+
+
     def extract_bottom_particles(self):
         bottom_flag = ti.field(dtype=ti.i32, shape=self.PARTICLE_NUM)
 
         @ti.kernel
         def cal_bottom_flag(particle_num:float, seed_size:float):
             for q_idx in range(particle_num):
-                if self.node_pos[q_idx].y < 0. + seed_size/3:
+                if self.node_pos[q_idx].z < 0. + seed_size/3:
                     bottom_flag[q_idx] = True
 
         cal_bottom_flag(self.PARTICLE_NUM, self.seed_size)
@@ -725,31 +808,6 @@ class SoftObject:
         bottom_num = len(bottom_particles_list)
 
         return bottom_particles_list, bottom_num
-
-
-    def gui_set(self, pos, target, FOV=60):
-        # init the window, canvas, scene and camerea
-        window = ti.ui.Window("Projective Dynamics", (1080, 720), vsync=True)
-        scene = ti.ui.Scene()
-        camera = ti.ui.Camera()
-
-        # initialize camera position
-        camera.position(pos[0], pos[1], pos[2])
-        camera.lookat(target[0], target[1], target[2])
-        camera.projection_mode(ti.ui.ProjectionMode.Perspective)
-        # 设置相机的向上轴的方向，在相机模型中是-Y轴
-        camera.up(0., 0., -1.)
-        camera.z_near(0.01)
-        camera.fov(FOV)
-
-        # set the camera, you can move around by pressing 'wasdeq'
-        camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
-        scene.set_camera(camera)
-
-        # set the light
-        scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
-        scene.ambient_light((1., 1., 1.))
-        return window, camera, scene
 
 
     def show_preset(self):
@@ -776,7 +834,7 @@ class SoftObject:
             self.node_pos.to_numpy(dtype=np.float32)[self.bottom_particles_list])
         # self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
 
-        scene.particles(self.node_show, radius=0.001, color=(0., 0., 0.))
+        scene.particles(self.node_show, radius=0.005, color=(0., 0., 0.))
         # scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
         #             vertex_count=0)
         canvas.scene(scene)
@@ -791,51 +849,78 @@ class SoftObject:
         """
         Define the camera position & target
         """
-        # self.window, self.camera, self.scene = self.gui_set(pos=[0.1, 0.2, 0.], target=[0.1, 0., 0.])
-        self.window, self.camera, self.scene = self.gui_set(pos=camera_pos, target=camera_target)
+        self.window, self.camera, self.scene = gui_set(pos=camera_pos, target=camera_target)
         self.canvas = self.window.get_canvas()
         self.show_preset()
 
 
 def main():
-    cube_shape = [0.5, 0.05, 0.5]
+    learning_rate = 5.e-1
+    cube_shape = [0.5, 0.5, 0.03]
     mesh_size = 0.05
-    mesh_file = 'Mesh/cube.msh'
-    generate_msh(cube_shape, mesh_size, mesh_file)
+    # X-Y平面放置，Z方向只有一个单元
+    mesh_file = 'Mesh/cube_new.msh'
     class MyObject(SoftObject):
         def __init__(self, shape, seed_size, file):
-            super().__init__(shape, seed_size, file)
+            super().__init__(shape, seed_size, file, contact_list=[10, 11, 12, 13, 32, 33, 34, 35])
 
     soft_obj = MyObject(shape=cube_shape, seed_size=mesh_size, file=mesh_file)
-    soft_obj.preset_gui(camera_pos=[0.1, 0.2, 0.05], camera_target=[0.1, 0., 0.05])
+    soft_obj.preset_gui(camera_pos=[0.25, 0.25, 0.8], camera_target=[0.25, 0.25, 0.])
+
+    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.8f', delimiter=',')
+    print('Contact node idx:', soft_obj.contact_particles_list)
+    print('Marker init pos:', soft_obj.node_pos[soft_obj.marker_idx_list[0]], ';', 'Desired pos:', soft_obj.marker_pos_desired[0])
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    soft_obj.construct_L()
 
-    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
-    # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
+    loss_list = []
+    contact_pos_list = []
+    marker_pos_list = []
+    rob_mov_list = []
 
-    time_list = []
-    for i in range(200):
-        time_start = time.time()
-        soft_obj.substep(i)
+    for itr in range(200):
+        print(f"Step: {itr}-----------------------------------------------------")
+        soft_obj.substep(itr)
+        time.sleep(0.1)
+        print(f"Marker node pos: {soft_obj.node_pos[soft_obj.marker_idx_list[0]]}")
+
+        error, L = soft_obj.construct_L()
         soft_obj.diff_pd(10)
-        # soft_obj.cal_ygrad()
-        # soft_obj.diff_data()
-        time_end = time.time()
-        time_list.append(time_end - time_start)
-        print('Time cost:', time_end - time_start, 's')
-    print('Average Time cost:', np.mean(time_list[1:]), 's')
-    # np.savetxt('rhs_dA.csv', soft_obj.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
-    # for q_idx in soft_obj.contact_particles_list:
-    #     grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
-    #     np.savetxt('grad_diffdata.csv', grad_diffdata_tmp, fmt='%.15f', delimiter=',')
-    #
-    # soft_obj.cal_grad()
-    # np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
+        soft_obj.cal_ygrad()
+        # np.savetxt(f"z.csv", soft_obj.z.to_numpy().reshape(-1, 3), fmt='%.15f', delimiter=',')
+        # np.savetxt(f"grad_y.csv", soft_obj.dL_dy.to_numpy().reshape(-1, 3), fmt='%.15f', delimiter=',')
+        # exit(0)
+        print(f"Error: {error}; Loss: {L}; Marker pos: {soft_obj.node_pos[soft_obj.marker_idx_list[0]]}")
+
+        # action = soft_obj.action_to_node()
+        # compressed_action = action_compress(action, 4.e-4)
+        # soft_obj.contact_vel.from_numpy(compressed_action / soft_obj.dt)
+        # print(f"Contact movement:\n{soft_obj.contact_vel.to_numpy()}")
+
+        drob = soft_obj.compute_action()
+        print(f"Action derivate: {drob}")
+        compressed_action = action_compress(-drob*learning_rate, 8.e-3)
+        soft_obj.apply_action(compressed_action)
+        contact_mov = soft_obj.contact_vel.to_numpy() * soft_obj.dt
+        contact_mov_length = np.linalg.norm(contact_mov, axis=1)
+        print(f"Robot action: {compressed_action}; Action Length: {np.linalg.norm(compressed_action):.6f}")
+        print(f"Contact Movement: \n{np.hstack((contact_mov, contact_mov_length.reshape(-1, 1)))}")
+
+        contact_pos = []
+        for idx in soft_obj.contact_particles_list:
+            contact_pos.append(soft_obj.node_pos[idx])
+
+        loss_list.append(L)
+        contact_pos_list.append([item for sublist in contact_pos for item in sublist])
+        marker_pos_list.append(soft_obj.node_pos[soft_obj.marker_idx_list[0]].to_numpy().tolist())
+
+    np.savetxt('node_pos_final.csv', soft_obj.node_pos.to_numpy(), fmt='%.15f', delimiter=',')
+    np.savetxt('loss.csv', np.array(loss_list), fmt='%.15f', delimiter=',')
+    np.savetxt('contact_pos.csv', np.array(contact_pos_list), fmt='%.15f', delimiter=',')
+    np.savetxt('marker_pos.csv', np.array(marker_pos_list), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':

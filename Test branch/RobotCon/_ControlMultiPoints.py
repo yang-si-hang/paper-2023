@@ -687,18 +687,6 @@ def main():
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
-    # for i in range(4):
-    #     np.savetxt(f'A{i}.csv', soft_obj.A[i].to_numpy(), fmt='%f', delimiter=',')
-    # np.savetxt('node_pos_init.csv', soft_obj.node_init_pos.to_numpy())
-    # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy())
-    # np.savetxt('element.csv', soft_obj.element.to_numpy(), fmt='%d')
-    # np.savetxt('edge.csv', soft_obj.edge.to_numpy(), fmt='%d')
-    # np.savetxt('B0.csv', soft_obj.B[0].to_numpy(), fmt='%f', delimiter=',')
-    # np.savetxt('B1.csv', soft_obj.B[1].to_numpy(), fmt='%f', delimiter=',')
-    # np.savetxt('strain_weight.csv', soft_obj.strain_weight.to_numpy())
-    # np.savetxt('volume_weight.csv', soft_obj.volume_weight.to_numpy())
-    # np.savetxt('volume.csv', soft_obj.element_volume.to_numpy())
-    # np.savetxt('lhs.csv', lhs_np, fmt='%f', delimiter=',')
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
