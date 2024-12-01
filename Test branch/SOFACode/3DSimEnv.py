@@ -16,7 +16,7 @@ os.chdir(script_dir)            # 改变当前工作目录
 points_num:int = 1
 
 class MyObject(SoftObject):
-    def __init__(self, shape:list, seed_size:list, mesh_file:str, contact_list:list, fixed_list:list):
+    def __init__(self, shape:list, seed_size:float, mesh_file:str, contact_list:list, fixed_list:list):
         super().__init__(shape, seed_size, mesh_file, contact_list)
         self.dt = 1. / 100
         self.loss = np.zeros(points_num, dtype=np.float64)
@@ -38,7 +38,7 @@ class MyObject(SoftObject):
 
     def define_desired_pos(self):
         for i in range(points_num):
-            self.dot_pos_desired[i] = self.dot_pos_init[i] + ti.Vector([0., 0., 0.03])
+            self.dot_pos_desired[i] = self.dot_pos_init[i] + ti.Vector([0.01, 0., -0.02])
 
 
     def get_marker_model_pos(self):
@@ -109,7 +109,6 @@ class MyObject(SoftObject):
         self.cal_ygrad()            # 得到dL/dy
 
         return error, loss_tmp
-
 
 
 def createScene(root):
@@ -194,7 +193,7 @@ def save_pos(handle, path):
 def main():
     obj_shape = [0.5, 0.5, 0.05]
     obj_seed_size = 0.05
-    learning_rate = 5.e-1
+    learning_rate = 1.
     contact_list = [10, 11, 12, 13] + [32, 33, 34, 35]
     fixed_list = [206, 207, 208, 209] + [228, 229, 230, 231]
 
@@ -238,7 +237,7 @@ def main():
         print(f"Error: {error_tmp}; Loss: {loss_tmp}")
 
         drob = soft.compute_action()
-        compressed_action = action_compress(-drob*learning_rate, 8.e-3)
+        compressed_action = action_compress(-drob*learning_rate, 5.e-3)
         soft.apply_action(compressed_action)
 
         for i in range(soft.contact_num):

@@ -24,7 +24,7 @@ if not os.path.exists(output_folder):
 
 # pattern中有几个点，重新赋值
 POINTS_NUM: int = 1
-selected_index = [390]
+selected_index = [77]
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip: str = '192.168.253.1'
@@ -170,7 +170,7 @@ class MyObject(SoftObject):
 
     def read_desired_pos(self, user_defined:bool):
         if user_defined:
-            self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.01, 0.01])
+            self.dot_pos_desired[0] = self.dot_pos_init[0] + ti.Vector([0.01, 0.0])
         else:
             pass
 
@@ -290,7 +290,7 @@ async def main():
     right_rob.start_record_data('right_robot_data.csv')
 
     # soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [15, 255])
-    soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [15])
+    soft_obj = MyObject(obj_shape, obj_seed_size, dots_pos_soft_2d, [14, 224])
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
@@ -309,7 +309,7 @@ async def main():
     frame_name_list = []
 
     try:
-        for step in range(150):
+        for step in range(100):
             print(f'Step: {step} ------------------------------------')
             dots_data = await receive_qualysis(connection, selected_index)
             dots_pos = [point for index, point in sorted(zip(dots_data['idx'], dots_data['pos']))]
@@ -338,7 +338,11 @@ async def main():
 
             # 机器人控制
             left_rob.move_add_movel([end_move[0][1], end_move[0][0], 0., 0., 0., 0.], a=0.1, v=0.1)
-            # right_rob.move_add_movel([end_move[1][1], end_move[1][0], 0., 0., 0., 0.], a=0.1, v=0.1)
+            right_rob.move_add_movel([end_move[1][1], end_move[1][0], 0., 0., 0., 0.], a=0.1, v=0.1)
+
+            contact_pos_tmp = []
+            for idx in soft_obj.grasp_particle_list:
+                contact_pos_tmp + soft_obj.node_pos[idx].to_numpy().tolist()
 
             # 写入数据
             dots_soft_list.append(dots_pos_soft.flatten())
@@ -346,7 +350,7 @@ async def main():
             # delta_pos_model_list.append(delta_pos_model.flatten())
             loss_list.append(loss_tmp)
             # rob_movement_list.append(end_move[0]+end_move[1])
-            contact_pos_list.append(soft_obj.node_pos[15].to_numpy().tolist()+soft_obj.node_pos[255].to_numpy().tolist())
+            contact_pos_list.append(contact_pos_tmp)
             strain_sum_list.append(np.sum(soft_obj.elemnt_strain.to_numpy()))
 
             color_image = get_image(camera_id, image, 'RIGHT')
@@ -366,6 +370,10 @@ async def main():
         left_rob.stop_record_data()
         right_rob.stop_record_data()
 
+        # 停止数据流
+        await connection.stream_frames_stop()
+        print("Stop streaming...")
+
         cv2.imwrite('task_complete.png', color_image)
         camera_id.close()
         cv2.destroyAllWindows()
@@ -378,13 +386,11 @@ async def main():
         # np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
         np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
 
-        np.savetxt('final_strain.csv', soft_obj.elemnt_strain.to_numpy(), fmt='%.10f', delimiter=',')
+        np.savetxt('final_strain_list.csv', soft_obj.elemnt_strain.to_numpy(), fmt='%.10f', delimiter=',')
 
         # 将保存的图像转换为视频
         image_to_video(frame_name_list, 'output_video.mp4')
 
-    # 停止数据流
-    await connection.stream_frames_stop()
 
 if __name__ == '__main__':
     asyncio.run(main())

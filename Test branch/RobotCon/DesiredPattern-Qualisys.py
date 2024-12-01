@@ -5,12 +5,13 @@
 
 import os
 import asyncio
-
+from typing import Dict, List
 import cv2
 import pkg_resources
 import qtm_rt
 import numpy as np
 import numpy.typing as npt
+import json
 from sklearn.cluster import KMeans
 from scipy.stats import zscore
 from collections import defaultdict
@@ -63,11 +64,11 @@ async def receive_qualysis(connection)->list:
     return captured_data
 
 
-async def main():
+async def genereate_transform():
     # 用来生成软体坐标系相对于世界坐标系的变换矩阵
-    origin_pos = np.array([0.339, 0.0754, 0.097])
-    x_deviation = np.array([0.2136, 0.076, 0.0974])
-    y_deviation = np.array([0.3398, 0.2108, 0.1006])
+    origin_pos = np.array([109.2, -81.0, 94.7]) * 1.e-3
+    x_deviation = np.array([108.4, 45.8, 95.4]) * 1.e-3
+    y_deviation = np.array([248.0, -80.6, 97.4]) * 1.e-3
 
     camera_id, image = init_camera(1080, 30)
     window_name = 'CAPTURE DESIRED SHAPE'
@@ -137,5 +138,84 @@ async def main():
     cv2.destroyAllWindows()
 
 
+async def receive_qualysis_with_indices(connection, selected_index:List[int])->Dict:
+    # 只接收在索引列表中的标记球数据
+    captured_data = {}
+    # selected_data = {'idx': [], 'pos': []}
+    selected_data = {key: [] for key in selected_index}
+
+    # Define the callback to capture data
+    def on_packet(packet):
+        nonlocal captured_data
+        header, markers = packet.get_3d_markers_no_label()
+        # if header.marker_count != POINTS_NUM:
+        #     return
+
+        markers_pos = []
+        markers_idx = []
+        for idx, marker in enumerate(markers):
+            # 转换到单位米
+            markers_pos.append([marker.x/1000., marker.y/1000., marker.z/1000.])
+            markers_idx.append(marker.id)
+            # print(f"Marker: {marker.id}. Position: ({marker.x/1000.}, {marker.y/1000.}, {marker.z/1000.})")
+        captured_data['pos'] = markers_pos
+        captured_data['idx'] = markers_idx
+
+    await connection.stream_frames(components=["3dnolabels"], on_packet=on_packet)
+
+    for idx, pos in zip(captured_data['idx'], captured_data['pos']):
+        if idx in selected_index:
+            selected_data[idx].append(pos)
+            # selected_data['idx'].append(idx)
+            # selected_data['pos'].append(pos)
+
+    return selected_data
+
+
+async def desired_pattern_with_indices(selected_index:List[int]):
+    camera_id, image = init_camera(720, 30)
+    window_name = 'CAPTURE DESIRED SHAPE'
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1080, 720)
+
+    connection = await qtm_rt.connect(qualysis_ip)
+    if connection is None:
+        print("Failed to connect")
+        return
+    async with qtm_rt.TakeControl(connection, qualysis_password):
+        await connection.new()
+
+    step_num:int = 50
+    dots_dict = {key: [] for key in selected_index}
+    for step in range(step_num):
+        dot_pos_dict = await receive_qualysis_with_indices(connection, selected_index)
+        # `key`一定要在`selected_index`中，否则会报错
+        for key in selected_index:
+            dots_dict[key] += dot_pos_dict[key]
+
+    averages_pos = {key: np.mean(np.array(value, dtype=float), axis=0) for key, value in dots_dict.items()}
+    sorted_averages = dict(sorted(averages_pos.items()))
+    # 将 numpy 类型转换为 Python 类型
+    sorted_averages = {key: value.tolist() if isinstance(value, np.ndarray) else value
+                       for key, value in sorted_averages.items()}
+
+    dot_average = np.array(list(sorted_averages.values()))
+    with open("data/desired_patrrern.json", "w") as json_file:
+        json.dump(sorted_averages, json_file)
+
+    while True:
+        color_image = get_image(camera_id, image)
+        cv2.imshow(window_name, color_image)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv2.imwrite('data/desired_pos.png', color_image)
+    camera_id.close()
+    cv2.destroyAllWindows()
+
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(genereate_transform())
+
+    # marker_idx = [36, 39, 41, 37]
+    # asyncio.run(desired_pattern_with_indices(marker_idx))

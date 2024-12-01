@@ -1,14 +1,14 @@
 """
 使用pygmsh来划分网格,然后写入.msh文件
-Gmsh软件使用指南：
-1. Visibility的设置：`Tools` -> `Options` -> `Mesh` -> `Visibility`
+Gmsh软件使用指南:
+1. Visibility的设置:`Tools` -> `Options` -> `Mesh` -> `Visibility`
 2. 几何元素的颜色设置：`Tools` -> `Options` -> `Mesh` -> `Colors`
 3. 全局颜色设置：`Tools` -> `Options` -> `General` -> `Colors`
 """
-
+import os
 import pygmsh
 import numpy as np
-from typing import Tuple
+from typing import Tuple, List
 import numpy.typing as npt
 import pyvista as pv
 import random
@@ -62,7 +62,7 @@ def generate_random_tetrahedra(v0, v1, v2, v3, v4, v5, v6, v7):
     return random.choice(options)
 
 
-def generate_cube_msh(file_path, cube_shape:list, axis_seed:list):
+def generate_cube_msh(file_path:str, cube_shape:list, axis_seed:list):
     # 1. 生成均匀分布的采样节点
     x_gap, y_gap, z_gap = axis_seed  # 每个方向的间隙
     x_range, y_range, z_range = (0, cube_shape[0]), (0, cube_shape[1]), (0, cube_shape[2])  # 长方体范围
@@ -98,7 +98,7 @@ def generate_cube_msh(file_path, cube_shape:list, axis_seed:list):
                 tetrahedra = generate_random_tetrahedra(v0, v1, v2, v3, v4, v5, v6, v7)
                 cells.extend(tetrahedra)
 
-    # 3. 使用 PyVista 进行可视化
+    # 3. 使用 PyVista 进行可视化，从0开始索引
     ugrid = pv.UnstructuredGrid(np.hstack(cells), np.array([10] * len(cells)), points)
 
     # 可视化四面体网格
@@ -111,10 +111,10 @@ def generate_cube_msh(file_path, cube_shape:list, axis_seed:list):
     # np.savetxt('node.csv', points, delimiter=',', fmt='%f')
     # np.savetxt('element.csv', cells_np[:,1:], delimiter=',', fmt='%d')
 
-    write_msh4(file_path, points, cells_np[:,1:])
+    write_msh2(file_path, points, cells_np[:,1:])
 
 
-def read_elements_from_msh(file_path):
+def read_elements_from_msh2(file_path:str)->Tuple[List[set], List[set]]:
     """
     读取 .msh 文件中的四面体元素。
     """
@@ -187,18 +187,22 @@ def generate_edges_and_surfaces(elements:npt.NDArray)->Tuple[list, list]:
     return list(edges), list(faces)
 
 
-def write_element(file_path, points, cells):
-    """
-    只将节点和四面体元素写入 .msh 文件
+def write_msh2(file_path:str, points:npt.NDArray, cells:npt.NDArray):
+    """_summary_
+    只将节点和四面体元素写入格式版本2的 .msh 文件
+    Args:
+        file_path (str): _description_
+        points (npt.NDArray): [x, y, z], dim: node_num×3
+        cells (npt.NDArray): [n1, n2, n3, n4], dim: ele_num×4
     """
     # 创建msh格式的数据
-    msh_data = "$NOD\n{num_nodes}\n".format(num_nodes=len(points))
+    msh_data = "$NOD\n{num_nodes}\n".format(num_nodes=points.shape[0])
 
     for i, point in enumerate(points):
         # msh_data += "{index} {x:.5f} {y:.5f} {z:.5f}\n".format(index=i+1, x=point[0], y=point[1], z=point[2])
         msh_data += f'{i+1} {point[0]:.5f} {point[1]:.5f} {point[2]:.5f}\n'
 
-    msh_data += "$ENDNOD\n$ELM\n{num_elements}\n".format(num_elements=len(cells))
+    msh_data += "$ENDNOD\n$ELM\n{num_elements}\n".format(num_elements=cells.shape[0])
 
     for i, cell in enumerate(cells):
         msh_data += f'{i+1} 4 1 1 4 {int(cell[0]+1):d} {int(cell[1]+1):d} {int(cell[2]+1):d} {int(cell[3]+1):d}\n'
@@ -246,7 +250,7 @@ def write_new_msh(file_path, nodes, edges, faces, elements):
     print(f"New mesh with lines and surfaces written to {file_path}")
 
 
-def write_msh4(file_path, points, cells):
+def write_msh4(file_path:str, points, cells):
     """
     将节点、单元信息写入格式4.1版本的 .msh 文件
     """
@@ -279,39 +283,20 @@ def write_msh4(file_path, points, cells):
     print(f"Mesh data has been written to {file_path}")
 
 
-def write_new_msh(file_path, nodes, edges, faces, elements):
-    """
-    将节点、线和面信息写入新的 .msh 文件
-    """
-    with open(file_path, 'w') as f:
-        # 写入节点
-        f.write("$NOD\n")
-        f.write(f"{len(nodes)}\n")
-        for node_id, x, y, z in nodes:
-            f.write(f'{node_id} {x:.5f} {y:.5f} {z:.5f}\n')
-        f.write("$ENDNOD\n")
-
-        # 写入线
-        f.write("$ELM\n")
-        # f.write(f"{len(edges) + len(elements)}\n")
-        f.write(f"{len(edges) + len(faces) + len(elements)}\n")
-
-        for element_id, (n1, n2) in enumerate(edges, 1):
-            f.write(f'{element_id} 1 1 1 2 {n1} {n2}\n')  # 1 表示线元素 2 似乎表示线的节点数
-
-        # 写入面
-        start_face_id = len(edges) + 1
-        for element_id, (n1, n2, n3) in enumerate(faces, start_face_id):
-            f.write(f'{element_id} 2 1 1 3 {n1} {n2} {n3}\n')  # 2 表示面元素 3 似乎表示面的节点数
-
-        start_tet_id = len(edges) + len(faces)
-        for element_id, (n1, n2, n3, n4) in elements:
-            f.write(f'{element_id + start_tet_id} 4 1 1 4 {n1} {n2} {n3} {n4}\n')  # 4 表示四面体元素 4 似乎表示四面体的节点数
-
-        f.write("$ENDELM\n")
-
-    print(f"New mesh with lines and surfaces written to {file_path}")
-
-
 if __name__ == '__main__':
-    generate_cube_msh('cube_new2.msh', [0.5, 0.5, 0.05], [0.05, 0.05, 0.05])
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+    # generate_cube_msh('cube_new.msh', [0.5, 0.5, 0.03], [0.5/11, 0.5/11, 0.03])
+    points, cells = read_elements_from_msh2('cube_new.msh')
+    points_np = np.array([point[1:] for point in points])
+    cells_np = np.array([cell[1] for cell in cells])
+
+    cells_np = np.hstack([np.ones((cells_np.shape[0], 1)) * 4, cells_np-1]).astype(int)
+
+    ugrid = pv.UnstructuredGrid(np.hstack(cells_np), np.array([10] * len(cells_np)), points_np)
+
+    # 可视化四面体网格
+    plotter = pv.Plotter()
+    plotter.add_mesh(ugrid, show_edges=True, opacity=0.5)
+    plotter.show_axes()
+    plotter.show()

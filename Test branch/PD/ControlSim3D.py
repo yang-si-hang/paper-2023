@@ -124,7 +124,7 @@ def find_ele_from_nodes(elements:npt.NDArray, target_nodes:set)->list:
         if set(tet).issubset(target_nodes):
             result.append(i)
 
-    # print("只包含目标节点集合中的四面体序号:", result)
+    print("只包含目标节点集合中的四面体序号:", result)
 
     return result
 
@@ -196,7 +196,8 @@ class SoftObject:
         self.positional_weight = 1.e8
         self.contact_mass = 5.
         self.solve_iteration = int(10)
-        self.E, self.nu = 3.e5, 0.3
+        # self.E, self.nu = 3.e5, 0.3
+        self.E, self.nu = 3.e3, 0.3
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -276,7 +277,7 @@ class SoftObject:
         # self.node_desired_pos = ti.Vector.field(self.dim, dtype=ti.f64, shape=self.contact_num)
         self.marker_idx_list = [121]
         self.marker_pos_desired = ti.Vector.field(self.dim, dtype=ti.f64, shape=1)
-        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx_list[0]] + ti.Vector([0., 0., 0.05])
+        self.marker_pos_desired[0] = self.node_init_pos[self.marker_idx_list[0]] + ti.Vector([0., 0., -0.02])
 
         self.fixed_ele_list = find_ele_from_nodes(element_np, set(self.fix_particle_list + self.contact_particles_list))
         self.construct_mass()
@@ -321,9 +322,9 @@ class SoftObject:
             # self.strain_weight[i] = 0.
             # self.volume_weight[i] = 0.
         # 为固定点相关的网格单元赋予较大的权重
-        # for i in ti.static(self.fixed_ele_list):
-        #     self.strain_weight[i] = 1.e5 * self.mu * self.element_volume[i]
-        #     self.volume_weight[i] = 1.e5 * self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
+        for i in ti.static(self.fixed_ele_list):
+            self.strain_weight[i] = 1.e4 * self.mu * self.element_volume[i]
+            self.volume_weight[i] = 1.e4 * self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
 
 
     def fix_particle_No(self):
@@ -673,6 +674,7 @@ class SoftObject:
             self.dL_dq[idx * dim + 0] = 2 * error_tmp_ti[0]
             self.dL_dq[idx * dim + 1] = 2 * error_tmp_ti[1]
             self.dL_dq[idx * dim + 2] = 2 * error_tmp_ti[2]
+            # self.dL_dq[idx * dim + 1] = 1.
         # for q_idx in self.contact_particles_list:
         #     self.dL_dq[q_idx*self.dim+0] = 1.
 
@@ -755,6 +757,7 @@ class SoftObject:
             contact_pos[idx] = np.array([self.node_pos[idx_value][0], self.node_pos[idx_value][1], self.node_pos[idx_value][2]])
             dL_dcnt[idx] = np.array([self.dL_dy[idx_value*dim+0], self.dL_dy[idx_value*dim+1], self.dL_dy[idx_value*dim+2]])
         contact_center = np.mean(contact_pos, axis=0)
+        print(f"dcnt: \n{dL_dcnt}")
 
         dL_dcnt_rel = dL_dcnt - np.mean(dL_dcnt, axis=0)
         dL_drob = np.zeros(6, dtype=np.float64)
@@ -772,7 +775,7 @@ class SoftObject:
         # print(f"dL trans: {dL_drob[0:3]}")
         # print(f"dL rot: \n{dL_dcnt_rel}")
 
-        return dL_drob
+        return dL_drob * 8
 
 
     def apply_action(self, action):
@@ -825,6 +828,10 @@ class SoftObject:
         """
         # self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_NUM)
         self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.BOTTOM_NUM)
+        self.marker_show = ti.Vector.field(3, dtype=ti.f32, shape=len(self.marker_idx_list))
+        self.fix_node_show = ti.Vector.field(3, dtype=ti.f32, shape=len(self.fix_particle_list))
+        if self.contact_num > 0:
+            self.contact_node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.contact_num)
         self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_NUM)
         self.edge_show.from_numpy(self.edge_np)
 
@@ -838,12 +845,17 @@ class SoftObject:
         scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
         scene.ambient_light((0.8, 0.8, 0.8))
         # the conversion of object particles, etc. the ggui of the taichi only support float32
-        # 只取了最下部的粒子进行展示
-        self.node_show.from_numpy(
-            self.node_pos.to_numpy(dtype=np.float32)[self.bottom_particles_list])
+        node_pos_np = self.node_pos.to_numpy(dtype=np.float32)
+        self.node_show.from_numpy(node_pos_np[self.bottom_particles_list])
+        self.marker_show.from_numpy(node_pos_np[self.marker_idx_list])
+        self.fix_node_show.from_numpy(node_pos_np[self.fix_particle_list])
+        self.contact_node_show.from_numpy(node_pos_np[self.contact_particles_list])
         # self.node_show.from_numpy(self.node_pos.to_numpy(dtype=np.float32))
 
         scene.particles(self.node_show, radius=0.005, color=(0., 0., 0.))
+        scene.particles(self.marker_show, radius=0.005, color=(1., 0., 0.))
+        scene.particles(self.fix_node_show, radius=0.005, color=(0., 1., 0.))
+        scene.particles(self.contact_node_show, radius=0.005, color=(0., 0., 1.))
         # scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.),
         #             vertex_count=0)
         canvas.scene(scene)
@@ -864,7 +876,7 @@ class SoftObject:
 
 
 def main():
-    learning_rate = 5.e-1
+    learning_rate = 1.
     cube_shape = [0.5, 0.5, 0.03]
     mesh_size = 0.05
     # X-Y平面放置，Z方向只有一个单元
@@ -904,14 +916,9 @@ def main():
         # exit(0)
         print(f"Error: {error}; Loss: {L}; Marker pos: {soft_obj.node_pos[soft_obj.marker_idx_list[0]]}")
 
-        # action = soft_obj.action_to_node()
-        # compressed_action = action_compress(action, 4.e-4)
-        # soft_obj.contact_vel.from_numpy(compressed_action / soft_obj.dt)
-        # print(f"Contact movement:\n{soft_obj.contact_vel.to_numpy()}")
-
         drob = soft_obj.compute_action()
         print(f"Action derivate: {drob}")
-        compressed_action = action_compress(-drob*learning_rate, 8.e-3)
+        compressed_action = action_compress(-drob*learning_rate, 5.e-3)
         soft_obj.apply_action(compressed_action)
         contact_mov = soft_obj.contact_vel.to_numpy() * soft_obj.dt
         contact_mov_length = np.linalg.norm(contact_mov, axis=1)

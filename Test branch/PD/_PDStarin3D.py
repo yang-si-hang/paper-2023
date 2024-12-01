@@ -12,7 +12,7 @@ import taichi.math as tm
 ti.init(arch=ti.cuda, device_memory_GB=6.0, default_fp=ti.f64, debug=True)
 import numpy as np
 from scipy import sparse
-from GenMsh import generate_msh
+from Utilize.GenMsh import generate_msh
 
 output_folder = 'FigureWrite'
 

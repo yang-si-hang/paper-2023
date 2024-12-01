@@ -29,11 +29,11 @@ class SoftObject:
 
         node_np, edge_np, element_np, tri = self.mesh_object()
         # node_np = np.insert(node_np, 1, 0.*np.ones(node_np.shape[0]), axis=1)
-        np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('node.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element.csv', element_np, fmt='%d', delimiter=',')
         self.edge_np = edge_np
         self.tri = tri
-        exit(0)
+        # exit(0)
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = edge_np.shape[0]
@@ -129,11 +129,13 @@ class SoftObject:
         # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
         LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)          # 1e-8 due to the precision problem
         WN_remain = int(1) if np.mod(W, seed_size) < 1.e-8 else int(0)
-        LN = int(np.ceil(L / seed_size)) + LN_remain
-        WN = int(np.ceil(W / seed_size)) + WN_remain
+        LN = int(L / seed_size) + LN_remain
+        WN = int(W / seed_size) + WN_remain
+        # print(f"LN: {LN}; WN: {WN}")
 
         # Generate the nodes' position
-        xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        # xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(0, W, WN))
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T

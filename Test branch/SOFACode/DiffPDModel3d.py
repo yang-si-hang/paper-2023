@@ -196,7 +196,7 @@ class SoftObject:
         self.positional_weight = 1.e8
         self.contact_mass = 5.
         self.solve_iteration = int(10)
-        self.E, self.nu = 3.e5, 0.3
+        self.E, self.nu = 3.e3, 0.3
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -322,9 +322,9 @@ class SoftObject:
             # self.strain_weight[i] = 0.
             # self.volume_weight[i] = 0.
         # 为固定点相关的网格单元赋予较大的权重
-        # for i in ti.static(self.fixed_ele_list):
-        #     self.strain_weight[i] = 1.e5 * self.mu * self.element_volume[i]
-        #     self.volume_weight[i] = 1.e5 * self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
+        for i in ti.static(self.fixed_ele_list):
+            self.strain_weight[i] = 1.e5 * self.mu * self.element_volume[i]
+            self.volume_weight[i] = 1.e5 * self.element_volume[i] * (self.lam/2 + self.mu/self.dim)
 
 
     def fix_particle_No(self):
@@ -770,7 +770,7 @@ class SoftObject:
         dL_drob[4] = rot_tmp[1]
         dL_drob[5] = rot_tmp[2]
 
-        return dL_drob
+        return dL_drob * self.contact_num
 
 
     def apply_action(self, action):

@@ -92,6 +92,46 @@ def feature_barycentric_coordinates(p, mesh_nodes)->npt.NDArray[np.float64]:
     return np.array([u, v, w])
 
 
+def feature_barycentric_coordinates_tet(p: npt.NDArray[float], mesh_nodes: npt.NDArray[float]) -> npt.NDArray[np.float64]:
+    """
+    Compute the barycentric coordinates of a point p with respect to the tetrahedron p0, p1, p2, p3.
+
+    Parameters:
+    p : ndarray of shape (3,)
+        The point for which the barycentric coordinates are to be calculated.
+    mesh_nodes : ndarray of shape (4, 3)
+        The vertices of the tetrahedron.
+
+    Returns:
+    ndarray of shape (4,)
+        The barycentric coordinates of point p with respect to the tetrahedron.
+    """
+    p0, p1, p2, p3 = mesh_nodes
+    # Vectors relative to p0
+    v0 = p1 - p0
+    v1 = p2 - p0
+    v2 = p3 - p0
+    vp = p - p0
+
+    # Compute the determinant of the matrix formed by v0, v1, and v2
+    d00 = np.dot(v0, np.cross(v1, v2))
+    if d00 == 0:
+        raise ValueError("The provided points do not form a valid tetrahedron.")
+
+    # Compute the determinants for barycentric coordinates
+    d1 = np.dot(vp, np.cross(v1, v2))
+    d2 = np.dot(v0, np.cross(vp, v2))
+    d3 = np.dot(v0, np.cross(v1, vp))
+
+    # Calculate barycentric coordinates
+    u = 1.0 - (d1 + d2 + d3) / d00
+    v = d1 / d00
+    w = d2 / d00
+    t = d3 / d00
+
+    return np.array([u, v, w, t])
+
+
 def find_element(tri:Delaunay, dot_pos):
     """
     Find the element which contains the dot

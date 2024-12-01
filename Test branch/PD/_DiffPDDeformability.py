@@ -19,7 +19,7 @@ class SoftObject:
     def __init__(self, shape, seed_size, contact_list=[]):
         self.shape = shape
         self.seed_size = seed_size
-        self.dt = 1./120
+        self.dt = 1./100
         self.rho = 1.145
         self.E = 5.e5
         self.nu = 0.4
@@ -113,11 +113,15 @@ class SoftObject:
     def mesh_object_2d(self, shape, seed_size):
         L = shape[0]
         W = shape[1]
-        LN = int(2) if np.ceil(L / seed_size) < 2 else int(np.ceil(L / seed_size))
-        WN = int(2) if np.ceil(W / seed_size) < 2 else int(np.ceil(W / seed_size))
+        # If the shape can be divided by seed_size, the remainder is 1, otherwise 0
+        LN_remain = int(1) if np.mod(L, seed_size) < 1.e-8 else int(0)          # 1e-8 due to the precision problem
+        WN_remain = int(1) if np.mod(W, seed_size) < 1.e-8 else int(0)
+        LN = int(L / seed_size) + LN_remain
+        WN = int(W / seed_size) + WN_remain
 
         # Generate the nodes' position
-        xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        # xx, yy = np.meshgrid(np.linspace(0, L, LN), np.linspace(-W / 2, W / 2, WN))
+        xx, yy = np.meshgrid(np.linspace(0., L, LN), np.linspace(0., W, WN))
         xx_pad = xx.flatten('C')
         yy_pad = yy.flatten('C')
         node = np.array([xx_pad, yy_pad]).T
@@ -624,7 +628,8 @@ def main(contact_idx_list):
         def __init__(self, shape, seed_size, contact_list=contact_idx_list):
             super().__init__(shape, seed_size, contact_list)
 
-    soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
+    # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
+    soft_obj = MyObject(shape=[0.14, 0.14], seed_size=0.01)
     # soft_obj.preset()
 
     soft_obj.precomputation()
@@ -654,8 +659,8 @@ def main(contact_idx_list):
 
 
 if __name__ == '__main__':
-    params = [5, 76, 118]
-    # params = [5, 76]
+    # params = [5, 76, 118]
+    params = [8, 14, 134, 224]
     for param in params:
         print(f'Contact idx: {[param]}')
         main([param])
