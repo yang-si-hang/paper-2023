@@ -11,11 +11,42 @@ import numpy as np
 from typing import Tuple, List
 import numpy.typing as npt
 import pyvista as pv
+from scipy.spatial import Delaunay
 import random
 
 
-def mesh_obj_triangles(obj_shape, seed_size):
+def mesh_obj_tri(obj_shape:list, seed_size:float):
+    """
+    将二维对象生成三角形网格
+    :param obj_shape: [length, widt]
+    :param seed_size: 网格尺寸
+    :return: points, edges, cells
+    """
+    length, width = obj_shape
 
+    length_n = int(length / seed_size)
+    width_n = int(width / seed_size)
+
+    length_n = length_n if abs(length - length_n * seed_size) < 1.e-6 else length_n + 1
+    width_n = width_n if abs(width - width_n * seed_size) < 1.e-6 else width_n + 1
+
+    xx, yy = np.meshgrid(np.linspace(0, length, length_n+1), np.linspace(0, width, width_n+1))
+    xx_pad = xx.flatten('C')
+    yy_pad = yy.flatten('C')
+    node = np.array([xx_pad, yy_pad]).T         # dim: N*2
+
+    tri = Delaunay(node)
+    element = tri.simplices
+
+    edge_set = set()
+    for simplices in element:
+        for i in range(3):
+            edge_temp = tuple(sorted(simplices[[i, (i + 1) % 3]]))
+            edge_set.add(edge_temp)
+
+    edge = np.array(list(edge_set))
+
+    return node, edge, element
 
 
 def generate_msh(shape, mesh_size, file_path):
