@@ -14,6 +14,10 @@ import pyvista as pv
 import random
 
 
+def mesh_obj_triangles(obj_shape, seed_size):
+
+
+
 def generate_msh(shape, mesh_size, file_path):
     # 创建立方体的几何形状
     with pygmsh.occ.Geometry() as geom:
