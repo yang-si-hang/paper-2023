@@ -6,6 +6,7 @@ created at 2024-12-08 by hsy
 from typing import List
 import numpy as np
 import numpy.typing as npt
+from collections import defaultdict
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 
@@ -16,6 +17,71 @@ from GGUI import gui_set
 def read_msh(file_path):
     # 考虑从外部导入
     pass
+
+
+def cotangent(u:npt.NDArray, v:npt.NDArray)->float:
+    """计算两个向量之间的余切"""
+    dot = np.dot(u, v)
+    cross = np.linalg.norm(np.cross(u, v))
+    return dot / cross if cross != 0 else 0
+
+
+def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32])->List:
+    """
+    计算每个节点的 one-ring 边的余切权重向量
+
+    参数:
+    nodes: ndarray of shape (N, 3), 每个节点的位置
+    faces: ndarray of shape (K, 3), 每个三角形单元的节点索引
+    
+    返回:
+    C: list of lists, 每个节点的 one-ring 边的余切权重
+    """
+    node_num = nodes.shape[0]
+    C = [[] for _ in range(node_num)]  # 每个节点的余切权重向量
+
+    # 边到三角形的映射
+    edge_to_triangles = defaultdict(list)
+
+    for t_idx, tri in enumerate(faces):
+        edges = [
+            (min(tri[0], tri[1]), max(tri[0], tri[1])),
+            (min(tri[1], tri[2]), max(tri[1], tri[2])),
+            (min(tri[2], tri[0]), max(tri[2], tri[0]))
+        ]
+        for edge in edges:
+            edge_to_triangles[edge].append(t_idx)
+
+    # 遍历每条边，计算余切权重
+    edge_weights = {}
+    for edge, triangles in edge_to_triangles.items():       # edge: (p0, p1), triangles: [tri1, tri2]
+        if len(triangles) == 2:  # 边需要属于两个三角形
+            tri1, tri2 = triangles
+            idx1, idx2 = faces[tri1], faces[tri2]
+            
+            # 找到不属于该边的顶点
+            p0, p1 = edge
+            p2_1 = list(set(idx1) - set(edge))[0]
+            p2_2 = list(set(idx2) - set(edge))[0]
+
+            # 顶点坐标
+            v0, v1 = nodes[p0], nodes[p1]
+            v2_1, v2_2 = nodes[p2_1], nodes[p2_2]
+
+            # 向量计算
+            cot_alpha = cotangent(v2_1 - v0, v2_1 - v1)
+            cot_beta = cotangent(v2_2 - v0, v2_2 - v1)
+
+            # 边的余切权重
+            edge_weights[edge] = cot_alpha + cot_beta
+
+    # 将边权重分配给节点，但是没有和边对应上
+    for edge, weight in edge_weights.items():
+        p0, p1 = edge
+        C[p0].append(weight)
+        C[p1].append(weight)
+
+    return C
 
 
 def compute_onering_edges(node_num:float, elements:npt.NDArray)->List:
@@ -70,6 +136,8 @@ class SoftBend2D:
         self.volume_weight = ???
 
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.PARTICLE_N*3))
+        self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
 
         print(f"Particle numer: {self.PARTICLE_N}; Edge number: {self.EDGE_N}; Element number: {self.ELEMENT_N}")
 
@@ -90,13 +158,23 @@ class SoftBend2D:
         for q_i in range(self.PARTICLE_N):
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
 
+    
+
 
     @ti.kernel
     def precomputation(self):
         dim = self.dim
 
         for q_i in range(self.PARTICLE_N):
-            pass
+            tmp = self.node_mass[q_i] / self.dt**2
+            self.lhs[q_i*dim, q_i*dim] += tmp
+            self.lhs[q_i*dim+1, q_i*dim+1] += tmp
+            self.lhs[q_i*dim+2, q_i*dim+2] += tmp
+
+        for q_i in range(self.PARTICLE_N):
+            
+        
+
 
 
     @ti.kernel
