@@ -3,7 +3,7 @@
 created at 2024-12-08 by hsy
 """
 
-from typing import List
+from typing import List, Dict
 import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
@@ -26,7 +26,7 @@ def cotangent(u:npt.NDArray, v:npt.NDArray)->float:
     return dot / cross if cross != 0 else 0
 
 
-def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32])->List:
+def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32])->npt.NDArray:
     """
     计算每个节点的 one-ring 边的余切权重向量
 
@@ -35,10 +35,10 @@ def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.i
     faces: ndarray of shape (K, 3), 每个三角形单元的节点索引
     
     返回:
-    C: list of lists, 每个节点的 one-ring 边的余切权重
+    cotangent_weights_vec: list of lists, 每个节点的 one-ring 边的余切权重
     """
     node_num = nodes.shape[0]
-    C = [[] for _ in range(node_num)]  # 每个节点的余切权重向量
+    cotangent_weights_vec = [[] for _ in range(node_num)]  # 每个节点的余切权重向量
 
     # 边到三角形的映射
     edge_to_triangles = defaultdict(list)
@@ -75,13 +75,12 @@ def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.i
             # 边的余切权重
             edge_weights[edge] = cot_alpha + cot_beta
 
-    # 将边权重分配给节点，但是没有和边对应上
-    for edge, weight in edge_weights.items():
-        p0, p1 = edge
-        C[p0].append(weight)
-        C[p1].append(weight)
+    edges_np = np.array(list(edge_weights.keys()))  # 提取键，形如 [(1, 2)]
+    weights_np = np.array(list(edge_weights.values()))  # 提取值，形如 [0.0]
 
-    return C
+    edges_cot_weights = np.hstack((edges_np, weights_np[:, np.newaxis]))  # 形如 [[1, 2, 0.0]]
+
+    return edges_cot_weights
 
 
 def compute_onering_edges(node_num:float, elements:npt.NDArray)->List:
@@ -109,6 +108,7 @@ class SoftBend2D:
         self.E, self.nu, self.dt, self.density, self.g = E, nu, dt, density, g
         self.dim = 3
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
+        self.edges_cot_weights = compute_cotangent_weights_per_node(node_np, ele_np)
 
         self.PARTICLE_N = node_np.shape[0]
         self.EDGE_N = edge_np.shape[0]
@@ -158,8 +158,6 @@ class SoftBend2D:
         for q_i in range(self.PARTICLE_N):
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
 
-    
-
 
     @ti.kernel
     def precomputation(self):
@@ -171,7 +169,9 @@ class SoftBend2D:
             self.lhs[q_i*dim+1, q_i*dim+1] += tmp
             self.lhs[q_i*dim+2, q_i*dim+2] += tmp
 
-        for q_i in range(self.PARTICLE_N):
+        for i in range(self.EDGE_N):
+            node, neighbor, cot_w = self.edges_cot_weights[i]
+            node_idx, neighbor_idx = int(node), int(neighbor)
             
         
 
