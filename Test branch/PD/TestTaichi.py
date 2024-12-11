@@ -6,75 +6,6 @@ import taichi as ti
 import taichi.math as tm
 ti.init(arch=ti.cpu, debug=True)
 
-"""
-@ti.func
-def quatfromtwovectors(a, b):
-    # a -> b的旋转四元数
-    v1 = a.normalized()
-    v2 = b.normalized()
-    cos_theta = v1.dot(v2)
-
-    quat = ti.Vector.zero(ti.f64, 4)
-    if cos_theta < -1 + 1e-6:
-        pass
-        # cos_theta = max(cos_theta, -1)
-        # m = ti.Matrix.rows([v1, v2])
-        # u, s, v = ti.svd(m, ti.f64)             # 奇异值分解得到垂直的特征向量v3
-        # axis = v[:, 2]
-        # w2 = (1 + cos_theta) * 0.5              # w2=cos^2(theta/2)
-        # w = np.sqrt(w2)
-        # vec = axis.normalized() * np.sqrt(1 - w2)
-        # quat[0] = w
-        # quat[1:] = vec
-    else:
-        axis = v1.cross(v2)                     # 旋转轴*sin(theta)
-        s = ti.sqrt((1 + cos_theta) * 2)        # s=2*cos(theta/2)
-        invs = 1 / s
-        vec = axis.normalized() * invs
-        w = s * 0.5
-        quat[0] = w
-        quat[1:] = vec
-    
-    return quat
-
-
-@ti.kernel
-def my_kernel():
-    print(quatfromtwovectors(ti.Vector([0, 0, 1]), ti.Vector([0.044096801683,0.000000000000,-0.344229219302])))
-
-
-def quatfromtwovectors_np(a, b):
-    # a -> b的旋转四元数
-    v1 = a / np.linalg.norm(a)
-    v2 = b / np.linalg.norm(b)
-    cos_theta = v1.dot(v2)
-
-    quat = np.zeros(4)
-    if cos_theta < -1 + 1e-6:
-        print('cos_theta:', cos_theta)
-        cos_theta = max(cos_theta, -1)
-        m = np.vstack((v1, v2))
-        u, s, vh = np.linalg.svd(m, ti.f64)             # 奇异值分解得到垂直的特征向量v3
-        axis_tmp = vh[2, :]
-        w2 = (1 + cos_theta) * 0.5              # w2=cos^2(theta/2)
-        w = np.sqrt(w2)
-        vec = axis_tmp * np.sqrt(1 - w2)
-        quat[0] = w
-        quat[1:] = vec
-    else:
-        axis_tmp = np.cross(v1, v2)             # 旋转轴*sin(theta)
-        s = np.sqrt((1 + cos_theta) * 2)        # s=2*cos(theta/2)
-        invs = 1 / s
-        vec = axis_tmp * invs
-        w = s * 0.5
-        quat[0] = w
-        quat[1:] = vec
-    
-    return quat
-
-my_kernel()
-print(quatfromtwovectors_np(np.array([0, 0, 1]), np.array([0.044096801683,0.000000000000,-0.344229219302])))
-"""
 
 @ti.kernel
 def test():
@@ -86,15 +17,20 @@ def test():
 
     sig, V = ti.sym_eig(FTF)
     _, U = ti.sym_eig(FFT)
+    # print("Eigen right?", FTF - V @ ti.Matrix([[sig[0], 0], [0, sig[1]]]) @ V.inverse())
     print("Singular values:", ti.sqrt(sig))
     print(V)
     print(ti.sqrt(_))
     print(U)
-    U_sort = ti.Matrix.zero(ti.f64, 3, 3)
-    U_sort[:, 0] = U[:, 2]
-    U_sort[:, 2] = U[:, 0]
+    # print("Eigen right?", FFT - U @ ti.Matrix([[_[0], 0, 0], [0, _[1], 0], [0, 0,  _[2]]]) @ U.inverse())
+    # U_sort = U
+    # U_sort[:, 0] = U[:, 2]
+    # U_sort[:, 2] = U[:, 0]
+    # print(U_sort)
 
-    print(U_sort @ ti.Matrix([[sig[0], 0], [0, sig[1]], [0, 0]]) @ V)
+    print(F[0:2,0:2] @ V.transpose())
+
+    print(U @ ti.Matrix([[ti.sqrt(sig[0]), 0], [0, ti.sqrt(sig[1])], [0, 0]]) @ V.transpose())
 
 test()
 print("===")
@@ -102,12 +38,12 @@ F_np = np.array([[1, 2], [3, 4], [2, 6]])
 FTF_np = F_np.T @ F_np
 FFT_np = F_np @ F_np.T
 
-s2, v = np.linalg.eig(FTF_np)
-print("Singular values:", np.sqrt(s2))
-print(v)
+# s2, v = np.linalg.eig(FTF_np)
+# print("Singular values:", np.sqrt(s2))
+# print(v)
 
 u, s, v = np.linalg.svd(F_np)
-print(u, s, v)
+print(f"{u},\n{s},\n{v}")
 print(u @ np.array([[s[0], 0], [0, s[1]], [0, 0]]) @ v)
 
 
