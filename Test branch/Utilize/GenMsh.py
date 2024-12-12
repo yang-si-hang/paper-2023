@@ -36,7 +36,7 @@ def mesh_obj_tri(obj_shape:List[float], seed_size:float)->Tuple[npt.NDArray[np.f
     node = np.array([xx_pad, yy_pad], dtype=float).T         # dim: N*2
 
     tri = Delaunay(node)
-    element = tri.simplices
+    element = np.sort(tri.simplices, axis=1)
 
     edge_set = set()
     for simplices in element:
