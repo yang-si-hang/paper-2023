@@ -14,7 +14,7 @@ from collections import defaultdict
 from scipy import sparse
 import taichi as ti
 from taichi.lang import impl
-ti.init(arch=ti.cpu, default_fp=ti.f64, debug=True)
+ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 # 设置工作目录为当前脚本所在目录
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -122,7 +122,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.1)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.05)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
         np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
         np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -160,8 +160,7 @@ class SoftBend2D:
         self.bend_weight = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         # self.volume_weight = ???
-        self.positional_weight = 0.
-        self.F_i_error = ti.Matrix.field(3, 2, dtype=ti.f64, shape=())
+        self.positional_weight = 1.e4
 
         self.Xg_inv = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)         # rest configuration
         self.F = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)              # deformation gradient
@@ -173,7 +172,7 @@ class SoftBend2D:
         self.pre_fact_lhs_solve = None
 
         # self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        self.fix_particle_list = [0]
+        self.fix_particle_list = [0, 1, 2]
         self.FIX_N = len(self.fix_particle_list)
         self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
         self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
@@ -196,8 +195,8 @@ class SoftBend2D:
             self.node_voronoi[idx3] += ele_volume_tmp / 3.
 
             self.ele_volume[f_i] = ele_volume_tmp
-            # self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_i]
-            self.stretch_weight[f_i] = 1.
+            self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_i]
+            # self.stretch_weight[f_i] = 1.
 
         for q_i in range(self.PARTICLE_N):
             # self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
@@ -242,7 +241,7 @@ class SoftBend2D:
             idx1, idx2, idx3 = self.ele[f_i]
             q_idx_vec = ti.Vector([idx1, idx2, idx3])
             F_A = self.F_A[f_i]
-            print("F_A:\n", F_A)
+            # print("F_A:\n", F_A)
             ATA = F_A.transpose() @ F_A
             # print("ATA:\n", ATA)
 
@@ -318,37 +317,24 @@ class SoftBend2D:
     def rhs_shear(self):
         ti.loop_config(serialize=True)
         for f_i in range(self.ELEMENT_N):
+            # print("==============================================================================================")
             idx1, idx2, idx3 = self.ele[f_i]
             a, b, c = self.node_pos_new[idx1], self.node_pos_new[idx2], self.node_pos_new[idx3]
             X_f = ti.Matrix.cols([b - a, c - a])
             F_i = ti.cast(X_f @ self.Xg_inv[f_i], ti.f64)
             self.F[f_i] = F_i
+            # print(f"F_i:{F_i:e}")
 
             U, sig, V = svd_3x2_new(F_i)
-            print("F_i reconstructed:", U @ ti.Matrix([[sig[0], 0], [0, sig[1]], [0, 0]]) @ V.transpose())
-            if (U @ ti.Matrix([[sig[0], 0], [0, sig[1]], [0, 0]]) @ V.transpose() - F_i).norm() > 1.e-6:
-                print("SVD error--------------------------------------")
-                self.F_i_error[None] = F_i
-                print("F_i:\n", F_i)
-                print("U\n", U)
-                print("V\n", V)
-                print("sig\n", sig)
-
-                print("FTF:\n", self.F[f_i].transpose() @ self.F[f_i])
-
-                # return 
-            # sig2, V = ti.sym_eig(F_i.transpose() @ F_i, ti.f64)
-            # 要改3*3的eigen decomposition的顺序
-            # _, U = ti.sym_eig(F_i @ F_i.transpose(), ti.f64)
-            # sig = ti.sqrt(sig2)
-            print("F_i:\n", F_i)
-            print("svd:\n", U, sig, V)
-            self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1], [0, 0]])@ V.transpose()
-            print("F:\n", self.F[f_i])
-            # print("U\n", U)
-            # print("V\n", V)
-            # print("sig\n", sig)
-            # print("Bp_shear:\n", self.Bp_shear[f_i])
+            # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
+            # if (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm() > 1e-8:
+            #     print(f"SVD failed-----------------------------------------------------------------------------------------")
+            #     print(f"F_i: {F_i:e}")
+            #     print(f"U: {U:e}")
+            #     print(f"sig: {sig:e}")
+            #     print(f"V: {V:e}")
+            self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1], [0, 0]], ti.f64) @ V.transpose()
+            # print(f"Bp_shear:{self.Bp_shear[f_i]:e}")
 
         for f_i in range(self.ELEMENT_N):
             idx1, idx2, idx3 = self.ele[f_i]
@@ -360,6 +346,7 @@ class SoftBend2D:
             # Bp_shear_i做transpose，因为AT需要与Bp的x，y，z分别矩阵乘法
             F_ATBp = F_AT @ Bp_shear_i.transpose()
             F_ATBp *= weight
+            # print(f"BpT:\n{Bp_shear_i.transpose()}")
             # print("F_ATBp:\n", F_ATBp)
 
             for q_i, dim_idx in ti.ndrange(3, 3):
@@ -400,13 +387,11 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def update_pos_new(self, sol:ti.types.ndarray()):
-        dim = self.dim
+    def update_pos_new(self, sol_x:ti.types.ndarray(), sol_y:ti.types.ndarray(), sol_z:ti.types.ndarray()):
         for q_i in range(self.PARTICLE_N):
-            idx1, idx2, idx3 = q_i*dim, q_i*dim+1, q_i*dim+2 
-            self.node_pos_new[q_i].x = sol[idx1]
-            self.node_pos_new[q_i].y = sol[idx2]
-            self.node_pos_new[q_i].z = sol[idx3]
+            self.node_pos_new[q_i].x = sol_x[q_i]
+            self.node_pos_new[q_i].y = sol_y[q_i]
+            self.node_pos_new[q_i].z = sol_z[q_i]
 
 
     @ti.kernel
@@ -457,11 +442,21 @@ class SoftBend2D:
         # np.savetxt(f"sn_{step_num:05d}.csv", self.sn.to_numpy(), fmt='%f', delimiter=",")
         self.warm_start()
         for itr in ti.static(range(self.solve_itr)):
+            # print(f"Iteration: {itr}")
             self.local_solve()
             rhs_np = self.rhs.to_numpy()
-            print(f"{itr} rhs:\n", np.array2string(rhs_np, formatter={'float_kind':lambda x: f"{x:.6f}"}))
-            node_pos_new_np = self.pre_fact_lhs_solve(rhs_np)
-            self.update_pos_new(node_pos_new_np)
+            # print(f"Rhs:\n{rhs_np}")
+            # Split rhs_np into x,y,z components
+            rhs_np_x = rhs_np[0::3]
+            rhs_np_y = rhs_np[1::3]
+            rhs_np_z = rhs_np[2::3]
+
+            node_pos_new_np_x = self.pre_fact_lhs_solve(rhs_np_x)
+            node_pos_new_np_y = self.pre_fact_lhs_solve(rhs_np_y)
+            node_pos_new_np_z = self.pre_fact_lhs_solve(rhs_np_z)
+
+            self.update_pos_new(node_pos_new_np_x, node_pos_new_np_y, node_pos_new_np_z)
+            # print(f"Node pos new:\n", self.node_pos_new.to_numpy())
         
         self.update_vel_pos()
 
@@ -470,7 +465,7 @@ class SoftBend2D:
     def init_vel(self):
         for q_i in range(self.PARTICLE_N):
             if self.node_pos_init[q_i].y > self.shape[0] - 1.e-3:
-                self.node_vel[q_i].y = 2.
+                self.node_vel[q_i].y = 1.
             else:
                 self.node_vel[q_i].y = 0.
 
@@ -484,23 +479,22 @@ def main():
     soft.preset_gui([0.05, 0.1, 0.3], [0.05, 0.1, 0.], [0., 1., 0.])
 
     soft.precomputation()
-    print("Inital lhs:\n", soft.lhs.to_numpy())
-    lhs_np = np.kron(soft.lhs.to_numpy(), np.eye(3))
+    # print("Inital lhs:\n", soft.lhs.to_numpy())
+    lhs_np = soft.lhs.to_numpy()
     # print("Pos init:\n", soft.node_pos_init.to_numpy().flatten())
     # print("Rhs:\n", lhs_np @ soft.node_pos_init.to_numpy().flatten())
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    # soft.init_vel()
+    soft.init_vel()
     np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
 
-    for itr in range(1):
+    for itr in range(100):
         soft.substep(itr)
         soft.gui_show(True, False, itr)
-        time.sleep(0.2)
+        time.sleep(0.1)
 
-    np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('F_i_error.csv', soft.F_i_error.to_numpy(), fmt='%e', delimiter=',')
+    # np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
         
 
 if __name__ == "__main__":

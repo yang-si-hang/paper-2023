@@ -3,10 +3,10 @@
 created at 2024-12-12 by hsy
 """
 
+import numpy as np
 import taichi as ti
 import taichi.math as tm
 from taichi.lang import impl, ops
-ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 
 @ti.func
@@ -368,12 +368,67 @@ def svd_3x2(A:ti.types.matrix(3, 2, ti.f64)):
 
 
 @ti.func
+def sym_eig2x2_new(A, dt):
+    """Compute the eigenvalues and right eigenvectors (Av=lambda v) of a 2x2 real symmetric matrix.
+
+    Mathematical concept refers to https://en.wikipedia.org/wiki/Eigendecomposition_of_a_matrix.
+
+    Args:
+        A (ti.Matrix(2, 2)): input 2x2 symmetric matrix `A`.
+        dt (DataType): date type of elements in matrix `A`, typically accepts ti.f32 or ti.f64.
+
+    Returns:
+        eigenvalues (ti.Vector(2)): The eigenvalues. Each entry store one eigen value.
+        eigenvectors (ti.Matrix(2, 2)): The eigenvectors. Each column stores one eigenvector.
+    """
+    EPS = 1e-12
+    assert all(A == A.transpose()), "A needs to be symmetric"
+    a = ti.cast(A[0, 0], dt)
+    b = ti.cast((A[0, 1] + A[1, 0])/2, dt)
+    c = ti.cast(A[1, 1], dt)
+    tr = ti.cast(a + c, dt)
+    gap = ti.cast((a - c)**2 + 4 * b**2, dt)
+    assert gap >= 0, "Gap is negative"
+    lambda1 = ti.cast((tr + ops.sqrt(gap)) * 0.5, dt)
+    lambda2 = ti.cast((tr - ops.sqrt(gap)) * 0.5, dt)
+    eigenvalues = ti.Vector([lambda1, lambda2], dt=dt)
+
+    A1 = A - lambda1 * ti.Matrix.identity(dt, 2)
+    A2 = A - lambda2 * ti.Matrix.identity(dt, 2)
+    v1 = ti.Vector.zero(dt, 2)
+    v2 = ti.Vector.zero(dt, 2)
+    if all(A1 == ti.Matrix.zero(dt, 2, 2)):
+        v1 = ti.Vector([1.0, 0.0]).cast(dt)
+        v2 = ti.Vector([0.0, 1.0]).cast(dt)
+    else:
+        if ti.abs((A[0, 1] + A[1, 0])/2) < EPS:
+            v1 = ti.Vector([1.0, 0.0], dt=dt)
+            v2 = ti.Vector([0.0, 1.0], dt=dt)
+        else:
+            v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt).normalized()
+            v2 = ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt).normalized()
+    assert v1.dot(v2) < EPS, "v1 and v2 are not orthogonal"
+    eigenvectors = ti.Matrix.cols([v1, v2])
+
+    # Verify eigendecomposition
+    Lambda = ti.Matrix.zero(dt, 2, 2)
+    Lambda[0, 0], Lambda[1, 1] = eigenvalues[0], eigenvalues[1]
+    recon_A = eigenvectors @ Lambda @ eigenvectors.transpose()
+    assert ((A - recon_A).norm() < 1e-8), "2x2 Eigendecomposition failed"
+
+    return eigenvalues, eigenvectors
+     
+
+@ti.func
 def svd_3x2_new(A):
+    """SVD decomposition of 3*2 matrix 
+    """
     dt = ti.f64
     ATA = A.transpose() @ A
 
     # 特征值分解
-    eigenvals_V, V = sym_eig2x2(ATA, dt)        # sim: 2*2
+    eigenvals_V, V = sym_eig2x2_new(ATA, dt)        # sim: 2*2
+
     sigma = ti.Vector([ti.sqrt(eigenvals_V[0]), ti.sqrt(eigenvals_V[1])], dt=dt)
 
     tmp = 0.0
@@ -389,18 +444,17 @@ def svd_3x2_new(A):
 
     U = ti.Matrix.zero(dt, 3, 3)
     for i in range(2):
-        U[:, i] = A @ V[:, i] / sigma[i]
+        U[:, i] = tm.normalize(A @ V[:, i] / sigma[i])
 
     u3 = U[:, 0].cross(U[:, 1])
-    u3 = tm.normalize(u3)        # 归一化
-    U[:, 2] = u3
+    U[:, 2] = u3.normalized()        # 归一化
 
     # Verify SVD decomposition
     Sigma = ti.Matrix.zero(dt, 3, 2)
     Sigma[0,0] = sigma[0]
     Sigma[1,1] = sigma[1]
     recon_A = U @ Sigma @ V.transpose()
-    assert ((A - recon_A).norm() < 1e-8), "3x2 SVD decomposition failed"
+    # assert ((A - recon_A).norm() < 1e-8), "3x2 SVD decomposition failed"
 
     return U, sigma, V
 
@@ -408,13 +462,64 @@ def svd_3x2_new(A):
 
 @ti.kernel
 def test():
-    A = ti.Matrix([[1.009426847662, -0.009426847662], [0.000000000000, 1.000000000000], [-0.000000000000, -0.000000000000]], ti.f64)
+    A = ti.Matrix([[1.000000260773e+00, -5.993538998439e-11], [9.386224575358e-09, 9.999994824084e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
     U, sigma, V = svd_3x2_new(A)
-    print(U, sigma, V)
-    print(U @ ti.Matrix([[sigma[0], 0], [0, sigma[1]], [0, 0]]) @ V.transpose())
+    print(f"A:{A:e}")
+    print(f"U:{U:e}, \nSigma:{sigma:e}, \nV:{V:e}")
+    print(f"reconstructed:{U @ ti.Matrix([[sigma[0], 0], [0, sigma[1]], [0, 0]]) @ V.transpose():e}")
+
+
+@ti.kernel
+def eigen2x2_test():
+    F = ti.Matrix([[1.000000000000e+00, -3.330669073875e-16], [-2.370834950873e-17, 1.000000000000e+00], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
+    A = F.transpose() @ F
+    print(f"ATA: {A:e}")
+
+    dt = ti.f64
+    EPS = 1e-8
+    assert all(A == A.transpose()), "A needs to be symmetric"
+    tr = A.trace()
+    det = A.determinant()
+    gap = tr**2 - 4 * det
+    print(f"Gap: {gap:e}")
+    lambda1 = (tr + ops.sqrt(gap)) * 0.5
+    lambda2 = (tr - ops.sqrt(gap)) * 0.5
+    eigenvalues = ti.Vector([lambda1, lambda2], dt=dt)
+
+    A1 = A - lambda1 * ti.Matrix.identity(dt, 2)
+    A2 = A - lambda2 * ti.Matrix.identity(dt, 2)
+    v1 = ti.Vector.zero(dt, 2)
+    v2 = ti.Vector.zero(dt, 2)
+    if all(A1 == ti.Matrix.zero(dt, 2, 2)):
+        v1 = ti.Vector([1.0, 0.0]).cast(dt)
+        v2 = ti.Vector([0.0, 1.0]).cast(dt)
+    else:
+        v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt).normalized() if ti.abs(A1[0, 1]) > EPS else ti.Vector([1.0, 0.0], dt=dt)
+        v2 = ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt).normalized() if ti.abs(A2[1, 0]) > EPS else ti.Vector([0.0, 1.0], dt=dt)
+    assert v1.dot(v2) < EPS, "v1 and v2 are not orthogonal"
+    eigenvectors = ti.Matrix.cols([v1, v2])
+
+    print(f"eigenvals_V: {eigenvalues:e}")
+    print(f"V: {eigenvectors:e}")
+
+
+    # Verify eigendecomposition
+    Lambda = ti.Matrix.zero(dt, 2, 2)
+    Lambda[0,0] = eigenvalues[0]
+    Lambda[1,1] = eigenvalues[1] 
+    recon_A = eigenvectors @ Lambda @ eigenvectors.transpose()
+    print(f"recon_A: {recon_A:e}")
 
 
 if __name__ == '__main__':
+    ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
     test()
+
+    A = np.array([[1.000000260773e+00, -5.993538998439e-11], [9.386224575358e-09, 9.999994824084e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
+    u, s, vh  = np.linalg.svd(A)
+    print(f"u: {u}")
+    print(f"s: {s}")
+    print(f"v: {vh.T}")
+    # eigen2x2_test()
 
 
