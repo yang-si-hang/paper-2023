@@ -381,7 +381,10 @@ def sym_eig2x2_new(A, dt):
         eigenvalues (ti.Vector(2)): The eigenvalues. Each entry store one eigen value.
         eigenvectors (ti.Matrix(2, 2)): The eigenvectors. Each column stores one eigenvector.
     """
-    EPS = 1e-12
+    EPS = 1e-7 if dt == ti.f32 else 1e-15
+    ORTHOGONAL_EPS = 1e-6 if dt == ti.f32 else 1e-13
+    DECOMP_EPS = 1e-5 if dt == ti.f32 else 1e-12
+
     assert all(A == A.transpose()), "A needs to be symmetric"
     a = ti.cast(A[0, 0], dt)
     b = ti.cast((A[0, 1] + A[1, 0])/2, dt)
@@ -407,14 +410,14 @@ def sym_eig2x2_new(A, dt):
         else:
             v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt).normalized()
             v2 = ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt).normalized()
-    assert v1.dot(v2) < EPS, "v1 and v2 are not orthogonal"
+    assert ti.abs(v1.dot(v2)) < ORTHOGONAL_EPS, "v1 and v2 are not orthogonal"
     eigenvectors = ti.Matrix.cols([v1, v2])
 
     # Verify eigendecomposition
     Lambda = ti.Matrix.zero(dt, 2, 2)
     Lambda[0, 0], Lambda[1, 1] = eigenvalues[0], eigenvalues[1]
     recon_A = eigenvectors @ Lambda @ eigenvectors.transpose()
-    assert ((A - recon_A).norm() < 1e-8), "2x2 Eigendecomposition failed"
+    assert ((A - recon_A).norm() < DECOMP_EPS), "2x2 Eigendecomposition failed"
 
     return eigenvalues, eigenvectors
      
@@ -454,7 +457,7 @@ def svd_3x2_new(A):
     Sigma[0,0] = sigma[0]
     Sigma[1,1] = sigma[1]
     recon_A = U @ Sigma @ V.transpose()
-    # assert ((A - recon_A).norm() < 1e-8), "3x2 SVD decomposition failed"
+    assert ((A - recon_A).norm() < 1e-8), "3x2 SVD decomposition failed"
 
     return U, sigma, V
 
@@ -462,11 +465,13 @@ def svd_3x2_new(A):
 
 @ti.kernel
 def test():
-    A = ti.Matrix([[1.000000260773e+00, -5.993538998439e-11], [9.386224575358e-09, 9.999994824084e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
+    A = ti.Matrix([[9.999125144075e-01, 2.037672733377e-04], [2.450955276868e-04, 9.975443242297e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
     U, sigma, V = svd_3x2_new(A)
     print(f"A:{A:e}")
     print(f"U:{U:e}, \nSigma:{sigma:e}, \nV:{V:e}")
+    print(f"V orthogonality: {V[:, 0].dot(V[:, 1]):e}")
     print(f"reconstructed:{U @ ti.Matrix([[sigma[0], 0], [0, sigma[1]], [0, 0]]) @ V.transpose():e}")
+    print(f"Reconstructed error: {(A - U @ ti.Matrix([[sigma[0], 0], [0, sigma[1]], [0, 0]]) @ V.transpose()).norm():e}")
 
 
 @ti.kernel
@@ -515,11 +520,12 @@ if __name__ == '__main__':
     ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
     test()
 
-    A = np.array([[1.000000260773e+00, -5.993538998439e-11], [9.386224575358e-09, 9.999994824084e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
+    A = np.array([[9.999125144075e-01, 2.037672733377e-04], [2.450955276868e-04, 9.975443242297e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
     u, s, vh  = np.linalg.svd(A)
     print(f"u: {u}")
     print(f"s: {s}")
     print(f"v: {vh.T}")
+
     # eigen2x2_test()
 
 

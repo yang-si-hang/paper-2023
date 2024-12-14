@@ -317,16 +317,16 @@ class SoftBend2D:
     def rhs_shear(self):
         ti.loop_config(serialize=True)
         for f_i in range(self.ELEMENT_N):
-            # print("==============================================================================================")
+            print("==============================================================================================")
             idx1, idx2, idx3 = self.ele[f_i]
             a, b, c = self.node_pos_new[idx1], self.node_pos_new[idx2], self.node_pos_new[idx3]
             X_f = ti.Matrix.cols([b - a, c - a])
             F_i = ti.cast(X_f @ self.Xg_inv[f_i], ti.f64)
             self.F[f_i] = F_i
-            # print(f"F_i:{F_i:e}")
+            print(f"F_i:{F_i:e}")
 
             U, sig, V = svd_3x2_new(F_i)
-            # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
+            print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             # if (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm() > 1e-8:
             #     print(f"SVD failed-----------------------------------------------------------------------------------------")
             #     print(f"F_i: {F_i:e}")
