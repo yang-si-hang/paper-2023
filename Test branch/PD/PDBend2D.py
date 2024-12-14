@@ -327,6 +327,7 @@ class SoftBend2D:
 
             U, sig, V = svd_3x2_new(F_i)
             print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
+            reon_error = (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm()
             # if (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm() > 1e-8:
             #     print(f"SVD failed-----------------------------------------------------------------------------------------")
             #     print(f"F_i: {F_i:e}")

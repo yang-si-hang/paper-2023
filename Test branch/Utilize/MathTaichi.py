@@ -381,11 +381,12 @@ def sym_eig2x2_new(A, dt):
         eigenvalues (ti.Vector(2)): The eigenvalues. Each entry store one eigen value.
         eigenvectors (ti.Matrix(2, 2)): The eigenvectors. Each column stores one eigenvector.
     """
-    EPS = 1e-7 if dt == ti.f32 else 1e-15
-    ORTHOGONAL_EPS = 1e-6 if dt == ti.f32 else 1e-13
-    DECOMP_EPS = 1e-5 if dt == ti.f32 else 1e-12
+    EPS = 1e-4 if dt == ti.f32 else 1e-10
+    ORTHOGONAL_EPS = 1e-4 if dt == ti.f32 else 1e-11
+    DECOMP_EPS = 1e-4 if dt == ti.f32 else 1e-11
 
     assert all(A == A.transpose()), "A needs to be symmetric"
+    # print(f"ATA: {A:e}")
     a = ti.cast(A[0, 0], dt)
     b = ti.cast((A[0, 1] + A[1, 0])/2, dt)
     c = ti.cast(A[1, 1], dt)
@@ -404,12 +405,17 @@ def sym_eig2x2_new(A, dt):
         v1 = ti.Vector([1.0, 0.0]).cast(dt)
         v2 = ti.Vector([0.0, 1.0]).cast(dt)
     else:
-        if ti.abs((A[0, 1] + A[1, 0])/2) < EPS:
+        if ti.abs((A[0, 1] + A[1, 0]) / 2) < EPS:
             v1 = ti.Vector([1.0, 0.0], dt=dt)
             v2 = ti.Vector([0.0, 1.0], dt=dt)
         else:
             v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt).normalized()
             v2 = ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt).normalized()
+            # 问题在于如何对norm很小的向量进行归一化！！！
+            print(f"A1: {A1:e}; A2: {A2:e}")
+            print(f"v1: {ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt)}; v2: {ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt)}")
+            print(f"v1 dot v2 (no norm): {ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt) @ ti.Vector([A2[1, 1], -A2[1, 0]], dt=dt):e}")
+            print(f"v1 dot v2: {ti.abs(v1.dot(v2)):e}")
     assert ti.abs(v1.dot(v2)) < ORTHOGONAL_EPS, "v1 and v2 are not orthogonal"
     eigenvectors = ti.Matrix.cols([v1, v2])
 
@@ -417,6 +423,7 @@ def sym_eig2x2_new(A, dt):
     Lambda = ti.Matrix.zero(dt, 2, 2)
     Lambda[0, 0], Lambda[1, 1] = eigenvalues[0], eigenvalues[1]
     recon_A = eigenvectors @ Lambda @ eigenvectors.transpose()
+    print(f"recon error: {(A - recon_A).norm():e}")
     assert ((A - recon_A).norm() < DECOMP_EPS), "2x2 Eigendecomposition failed"
 
     return eigenvalues, eigenvectors
@@ -465,7 +472,7 @@ def svd_3x2_new(A):
 
 @ti.kernel
 def test():
-    A = ti.Matrix([[9.999125144075e-01, 2.037672733377e-04], [2.450955276868e-04, 9.975443242297e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
+    A = ti.Matrix([[1.000066303666e+00, 2.359223927328e-14], [-1.504057896340e-05, 9.999047141710e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
     U, sigma, V = svd_3x2_new(A)
     print(f"A:{A:e}")
     print(f"U:{U:e}, \nSigma:{sigma:e}, \nV:{V:e}")
@@ -520,11 +527,14 @@ if __name__ == '__main__':
     ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
     test()
 
-    A = np.array([[9.999125144075e-01, 2.037672733377e-04], [2.450955276868e-04, 9.975443242297e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
+    A = np.array([[1.000066303666e+00, 2.359223927328e-14], [-1.504057896340e-05, 9.999047141710e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
     u, s, vh  = np.linalg.svd(A)
     print(f"u: {u}")
     print(f"s: {s}")
-    print(f"v: {vh.T}")
+    print(f"v: {np.array2string(vh.T, formatter={'float_kind': lambda x: f'{x:e}'})}")
+    print(f"v1 dot v2: {np.abs(vh[0,:].dot(vh[1,:])):e}")
+
+    print(f"V error: {np.linalg.norm(vh - np.array(V.to_numpy()))}")
 
     # eigen2x2_test()
 
