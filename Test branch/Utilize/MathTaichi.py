@@ -92,14 +92,14 @@ def sym_eig2x2_new(A, dt):
         v1 = ti.Vector([1.0, 0.0]).cast(dt)
         v2 = ti.Vector([0.0, 1.0]).cast(dt)
     else:
-        if ti.abs((A[0, 1] + A[1, 0]) / 2) < EPS:
-            v1 = ti.Vector([1.0, 0.0], dt=dt)
-            v2 = ti.Vector([0.0, 1.0], dt=dt)
+        # if ti.abs((A[0, 1] + A[1, 0]) / 2) < EPS:
+        #     v1 = ti.Vector([1.0, 0.0], dt=dt)
+        #     v2 = ti.Vector([0.0, 1.0], dt=dt)
+        # else:
+        if ti.abs(A1[0, 0]) > ti.abs(A1[1, 1]):
+            v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt)
         else:
-            if ti.abs(A1[0, 0]) > ti.abs(A1[1, 1]):
-                v1 = ti.Vector([A1[0, 1], -A1[0, 0]], dt=dt)
-            else:
-                v1 = ti.Vector([A1[1, 1], -A1[1, 0]], dt=dt)
+            v1 = ti.Vector([A1[1, 1], -A1[1, 0]], dt=dt)
             # if ti.abs(A2[0, 0]) > ti.abs(A2[1, 1]):
             #     v2 = ti.Vector([A2[0, 1], -A2[0, 0]], dt=dt)
             # else:
@@ -131,7 +131,7 @@ def svd_3x2_new(A):
     """SVD decomposition of 3*2 matrix 
     """
     dt = ti.f64
-    ATA = A.transpose() @ A
+    ATA = ti.cast(A.transpose() @ A, dt)
 
     # 特征值分解
     eigenvals_V, V = sym_eig2x2_new(ATA, dt)        # sim: 2*2
@@ -168,7 +168,7 @@ def svd_3x2_new(A):
 
 @ti.kernel
 def test():
-    A = ti.Matrix([[9.999923518010e-01, -1.497674493312e-05], [1.231614545960e-05, 9.999922530225e-01], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
+    A = ti.Matrix([[1.000000200276e+00, 4.465540853760e-07], [-4.464854137520e-07, 1.000007009674e+00], [0.000000000000e+00, 0.000000000000e+00]], ti.f64)
     U, sigma, V = svd_3x2_new(A)
     print(f"A:{A:e}")
     print(f"U:{U:e}, \nSigma:{sigma:e}, \nV:{V:e}")
@@ -180,11 +180,12 @@ def test():
 if __name__ == '__main__':
     test()
 
-    A = np.array([[9.999923518010e-01, -1.497674493312e-05], [1.231614545960e-05, 9.999922530225e-01], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
+    A = np.array([[1.000000200276e+00, 4.465540853760e-07], [-4.464854137520e-07, 1.000007009674e+00], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
     u, s, vh  = np.linalg.svd(A)
     print(f"u: {u}")
     print(f"s: {s}")
     print(f"v: {np.array2string(vh.T, formatter={'float_kind': lambda x: f'{x:e}'})}")
     print(f"v1 dot v2: {np.abs(vh[0,:].dot(vh[1,:])):e}")
+    print(f"Numpy reconstructed error:{np.linalg.norm(u @ np.array([[s[0], 0], [0, s[1]], [0, 0]]) @ vh - A):e}")
 
     # print(f"V error: {np.linalg.norm(vh - np.array(V_ti[None].to_numpy()))}")

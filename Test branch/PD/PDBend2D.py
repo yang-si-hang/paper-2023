@@ -7,7 +7,8 @@ created at 2024-12-08 by hsy
 import os
 import sys
 import time
-from typing import List, Dict, DefaultDict
+from typing import List, Dict, DefaultDict, Tuple
+from numba import njit, prange
 import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
@@ -25,7 +26,7 @@ root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from Utilize.GenMsh import mesh_obj_tri
 from Utilize.GuiTaichi import gui_set
-from Utilize.MathTaichi import svd_3x2, svd_3x2_new
+from Utilize.MathTaichi import svd_3x2_new
 
 
 def read_msh(file_path):
@@ -56,13 +57,18 @@ def compute_edge_to_triangles(faces:npt.NDArray[np.int32])->DefaultDict[tuple, L
     return edge_to_triangles
 
 
-def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32], edge_to_triangles)->npt.NDArray:
-    """
-    计算每个节点的 one-ring 边的余切权重向量
-    参数:
-    nodes: ndarray of shape (N, 3), 每个节点的位置
-    faces: ndarray of shape (F, 3), 每个三角形单元的节点索引
-    返回:
+def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32], edge_to_triangles)->Tuple[DefaultDict, DefaultDict]:
+    """Calculate cotangent weights for each node's one-ring edges.
+    Parameters:
+        nodes (npt.NDArray): Array of shape (N, 3) containing vertex positions.
+        faces (npt.NDArray[np.int32]): Array of shape (F, 3) containing vertex indices for each triangle.
+        edge_to_triangles (dict): Dictionary mapping edge tuples (v1, v2) to their adjacent triangles.
+    Returns:
+        Tuple[DefaultDict, DefaultDict]: A tuple containing:
+            - node_neighbors: Dictionary mapping each vertex to its one-ring neighbor vertices.
+              Example: {1: [2, 3]} means vertex 1 has neighbors 2 and 3.
+            - node_weights: Dictionary mapping each vertex to the cotangent weights of its neighbors.
+              Example: {1: [0.5, 0.5]} means the weights for vertex 1's neighbors are 0.5 each.
     """
     # 遍历每条边，计算余切权重
     edge_weights = {}
@@ -146,6 +152,7 @@ class SoftBend2D:
         self.node_vel = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
         self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.node_voronoi = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
+        self.node_mass_sum = ti.field(dtype=ti.f64, shape=())
         # self.node_onering = 
         self.node_pos_init.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
@@ -160,7 +167,7 @@ class SoftBend2D:
         self.bend_weight = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         # self.volume_weight = ???
-        self.positional_weight = 1.e4
+        self.positional_weight = 0.
 
         self.Xg_inv = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)         # rest configuration
         self.F = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)              # deformation gradient
@@ -179,8 +186,10 @@ class SoftBend2D:
 
         self.construct_mass()
         self.construct_Xg_inv()
+        self.positional_weight = 1e2 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
         
         print(f"Particle numer: {self.PARTICLE_N}; Edge number: {self.EDGE_N}; Element number: {self.ELEMENT_N}")
+        print(f"Positional weight: {self.positional_weight}")
 
 
 
@@ -196,11 +205,12 @@ class SoftBend2D:
 
             self.ele_volume[f_i] = ele_volume_tmp
             self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_i]
-            # self.stretch_weight[f_i] = 1.
+            # self.stretch_weight[f_i] = 0.
 
         for q_i in range(self.PARTICLE_N):
-            # self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
-            self.node_mass[q_i] = 1.
+            self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
+            # self.node_mass[q_i] = 0.
+            self.node_mass_sum[None] += self.node_mass[q_i]
 
 
     @ti.kernel
@@ -281,7 +291,7 @@ class SoftBend2D:
     def precomputation(self):
         self.lhs_mass()
         self.lhs_shear()
-        # self.lhs_bend()
+        self.lhs_bend()
         self.lhs_positional()
 
 
@@ -354,19 +364,9 @@ class SoftBend2D:
                 q_idx = self.ele[f_i][q_i]
                 self.rhs[q_idx*3+dim_idx] += F_ATBp[q_i, dim_idx]
 
-            # idx1_x, idx1_y, idx1_z = idx1*3, idx1*3+1, idx1*3+2
-            # idx2_x, idx2_y, idx2_z = idx2*3, idx2*3+1, idx2*3+2
-            # idx3_x, idx3_y, idx3_z = idx3*3, idx3*3+1, idx3*3+2
 
-            # self.rhs[idx1_x] += F_ATBp[0, 0]
-            # self.rhs[idx1_y] += F_ATBp[0, 1]
-            # self.rhs[idx1_z] += F_ATBp[0, 2]
-            # self.rhs[idx2_x] += F_ATBp[1, 0]
-            # self.rhs[idx2_y] += F_ATBp[1, 1]
-            # self.rhs[idx2_z] += F_ATBp[1, 2]
-            # self.rhs[idx3_x] += F_ATBp[2, 0]
-            # self.rhs[idx3_y] += F_ATBp[2, 1]
-            # self.rhs[idx3_z] += F_ATBp[2, 2]
+    def rhs_bend(self):
+        pass
 
 
     @ti.kernel
@@ -466,7 +466,7 @@ class SoftBend2D:
     def init_vel(self):
         for q_i in range(self.PARTICLE_N):
             if self.node_pos_init[q_i].y > self.shape[0] - 1.e-3:
-                self.node_vel[q_i].y = 1.
+                self.node_vel[q_i].y = 50.
             else:
                 self.node_vel[q_i].y = 0.
 
@@ -476,7 +476,7 @@ def main():
         def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=9.8):
             super().__init__(shape, E, nu, dt, density, g)
     
-    soft = Soft([0.1, 0.1], 1.e5, 0.4, 0.01, 6.e2)
+    soft = Soft([0.1, 0.1], 1.e5, 0.4, 0.01, 10e2)
     soft.preset_gui([0.05, 0.1, 0.3], [0.05, 0.1, 0.], [0., 1., 0.])
 
     soft.precomputation()
@@ -490,7 +490,7 @@ def main():
     np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
 
-    for itr in range(100):
+    for itr in range(1):
         soft.substep(itr)
         soft.gui_show(True, False, itr)
         time.sleep(0.1)
