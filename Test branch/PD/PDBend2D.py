@@ -122,7 +122,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.05)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
         np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
         np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -171,8 +171,8 @@ class SoftBend2D:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.pre_fact_lhs_solve = None
 
-        # self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        self.fix_particle_list = [0, 1, 2]
+        self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # self.fix_particle_list = [0, 1, 2]
         self.FIX_N = len(self.fix_particle_list)
         self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
         self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
@@ -317,16 +317,16 @@ class SoftBend2D:
     def rhs_shear(self):
         ti.loop_config(serialize=True)
         for f_i in range(self.ELEMENT_N):
-            print("==============================================================================================")
+            # print("==============================================================================================")
             idx1, idx2, idx3 = self.ele[f_i]
             a, b, c = self.node_pos_new[idx1], self.node_pos_new[idx2], self.node_pos_new[idx3]
             X_f = ti.Matrix.cols([b - a, c - a])
             F_i = ti.cast(X_f @ self.Xg_inv[f_i], ti.f64)
             self.F[f_i] = F_i
-            print(f"F_i:{F_i:e}")
+            # print(f"F_i:{F_i:e}")
 
             U, sig, V = svd_3x2_new(F_i)
-            print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
+            # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             reon_error = (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm()
             # if (U @ ti.Matrix([[sig[0], 0], [0., sig[1]], [0, 0]], ti.f64) @ V.transpose() - F_i).norm() > 1e-8:
             #     print(f"SVD failed-----------------------------------------------------------------------------------------")
