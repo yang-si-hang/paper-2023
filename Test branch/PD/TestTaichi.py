@@ -20,6 +20,7 @@ class Calc:
     def __init__(self):
         self.x = ti.field(dtype=ti.f32, shape=16)
         self.y = ti.field(dtype=ti.f32, shape=4)
+        self.y_list = ti.static([1, 2, 3, 4])
 
     @ti.kernel
     def run(self):
@@ -37,4 +38,3 @@ class Calc:
 
 a = Calc()
 a.run_all()
-print(a.x.to_numpy())

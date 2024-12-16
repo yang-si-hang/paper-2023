@@ -11,6 +11,15 @@ ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 
 @ti.func
+def cotangent_ti(u, v):
+    """计算两个三维向量的cot值
+    """
+    assert u.get_shape() == v.get_shape(), "The shape of two vectors should be the same"
+    cross = u.cross(v).norm()
+    return u.dot(v) / u.cross(v).norm() if cross > 1.e-8 else 0.0
+
+
+@ti.func
 def sym_eig2x2(A, dt):
     """Compute the eigenvalues and right eigenvectors (Av=lambda v) of a 2x2 real symmetric matrix.
 
@@ -68,7 +77,6 @@ def sym_eig2x2_new(A, dt):
         eigenvalues (ti.Vector(2)): The eigenvalues. Each entry store one eigen value.
         eigenvectors (ti.Matrix(2, 2)): The eigenvectors. Each column stores one eigenvector.
     """
-    EPS = 1e-4 if dt == ti.f32 else 1e-10
     ORTHOGONAL_EPS = 1e-4 if dt == ti.f32 else 1e-11
     DECOMP_EPS = 1e-4 if dt == ti.f32 else 1e-11
 
@@ -163,6 +171,13 @@ def svd_3x2_new(A):
     recon_A = U @ Sigma @ V.transpose()
     assert ((A - recon_A).norm() < 1e-8), "3x2 SVD decomposition failed"
 
+    if U.determinant() < 0:
+        U[:, 2] = -U[:, 2]
+        # sigma[0] = -sigma[0]
+    if V.determinant() < 0:
+        V[:, 1] = -V[:, 1]
+        sigma[1] = -sigma[1]
+
     return U, sigma, V
 
 
@@ -178,14 +193,15 @@ def test():
 
 
 if __name__ == '__main__':
-    test()
+    # test()
 
-    A = np.array([[1.000000200276e+00, 4.465540853760e-07], [-4.464854137520e-07, 1.000007009674e+00], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
-    u, s, vh  = np.linalg.svd(A)
-    print(f"u: {u}")
-    print(f"s: {s}")
-    print(f"v: {np.array2string(vh.T, formatter={'float_kind': lambda x: f'{x:e}'})}")
-    print(f"v1 dot v2: {np.abs(vh[0,:].dot(vh[1,:])):e}")
-    print(f"Numpy reconstructed error:{np.linalg.norm(u @ np.array([[s[0], 0], [0, s[1]], [0, 0]]) @ vh - A):e}")
+    # A = np.array([[1.000000200276e+00, 4.465540853760e-07], [-4.464854137520e-07, 1.000007009674e+00], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
+    # u, s, vh  = np.linalg.svd(A)
+    # print(f"u: {u}")
+    # print(f"s: {s}")
+    # print(f"v: {np.array2string(vh.T, formatter={'float_kind': lambda x: f'{x:e}'})}")
+    # print(f"v1 dot v2: {np.abs(vh[0,:].dot(vh[1,:])):e}")
+    # print(f"Numpy reconstructed error:{np.linalg.norm(u @ np.array([[s[0], 0], [0, s[1]], [0, 0]]) @ vh - A):e}")
 
-    # print(f"V error: {np.linalg.norm(vh - np.array(V_ti[None].to_numpy()))}")
+
+    ti.Mesh

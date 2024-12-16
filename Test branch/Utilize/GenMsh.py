@@ -318,6 +318,20 @@ def write_msh4(file_path:str, points, cells):
     print(f"Mesh data has been written to {file_path}")
 
 
+def write_obj(file_path:str, points:npt.NDArray, cells:npt.NDArray):
+    """将面网格写入为obj格式; 不能用于保存体积网格
+    """
+    with open(file_path, 'w') as f:
+        for point in points:
+            f.write(f'v {point[0]:.10f} {point[1]:.10f} {point[2]:.10f}\n')
+        for cell in cells:
+            # 从1开始索引
+            f.write(f'f {cell[0]+1:d} {cell[1]+1:d} {cell[2]+1:d}\n')
+
+    print(f"Mesh data has been written to {file_path}")
+
+
+
 if __name__ == '__main__':
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
