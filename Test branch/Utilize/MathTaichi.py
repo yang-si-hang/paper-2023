@@ -7,7 +7,6 @@ import numpy as np
 import taichi as ti
 import taichi.math as tm
 from taichi.lang import impl, ops
-ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 
 @ti.func
@@ -80,8 +79,9 @@ def sym_eig2x2_new(A, dt):
     ORTHOGONAL_EPS = 1e-4 if dt == ti.f32 else 1e-11
     DECOMP_EPS = 1e-4 if dt == ti.f32 else 1e-11
 
+    # print(f"A: {A:e}")
+    print(A==A.transpose())
     assert all(A == A.transpose()), "A needs to be symmetric"
-    # print(f"ATA: {A:e}")
     a = ti.cast(A[0, 0], dt)
     b = ti.cast((A[0, 1] + A[1, 0])/2, dt)
     c = ti.cast(A[1, 1], dt)
@@ -139,6 +139,9 @@ def svd_3x2_new(A):
     """SVD decomposition of 3*2 matrix 
     """
     dt = ti.f64
+    for m, n in ti.ndrange(3, 2):
+        assert ti.math.isnan(A[m, n]) == 0, "A contains NaN"
+        assert ti.math.isinf(A[m, n]) == 0, "A contains infinite value"
     ATA = ti.cast(A.transpose() @ A, dt)
 
     # 特征值分解
@@ -193,15 +196,6 @@ def test():
 
 
 if __name__ == '__main__':
-    # test()
+    ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
-    # A = np.array([[1.000000200276e+00, 4.465540853760e-07], [-4.464854137520e-07, 1.000007009674e+00], [0.000000000000e+00, 0.000000000000e+00]], dtype=np.float64)
-    # u, s, vh  = np.linalg.svd(A)
-    # print(f"u: {u}")
-    # print(f"s: {s}")
-    # print(f"v: {np.array2string(vh.T, formatter={'float_kind': lambda x: f'{x:e}'})}")
-    # print(f"v1 dot v2: {np.abs(vh[0,:].dot(vh[1,:])):e}")
-    # print(f"Numpy reconstructed error:{np.linalg.norm(u @ np.array([[s[0], 0], [0, s[1]], [0, 0]]) @ vh - A):e}")
-
-
-    ti.Mesh
+    test()
