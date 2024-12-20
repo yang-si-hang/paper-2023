@@ -41,7 +41,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.05)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
             np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -121,8 +121,10 @@ class SoftBend2D:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.pre_fact_lhs_solve = None
 
-        self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 120]
-        # self.fix_particle_list = [0, 1]
+        self.v_g = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
+
+        # self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 120]
+        self.fix_particle_list = [0, 1]
         self.contact_particle_list = []
         self.FIX_N = len(self.fix_particle_list)
         self.CON_N = len(self.contact_particle_list)
@@ -447,6 +449,7 @@ class SoftBend2D:
 
                     v_g += e.cotagent_w * (q_neighbor.pos - q.pos)
                     cot_w_sum += e.cotagent_w
+                self.v_g[q_id] = v_g / q.voronoi
                 # print(f"Vertex {q.id}; v_g: {v_g}; curvature: {v_g.norm()}")
 
                 if q.H != 0.:
@@ -595,17 +598,21 @@ def main():
     # print("Rhs:\n", lhs_np @ soft.node_pos_init.to_numpy().flatten())
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    # soft.init_vel()
+    soft.init_vel()
 
     # print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
     np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
     np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
 
-    for itr in range(100):
+    for itr in range(20):
         soft.substep(itr)
+
+        v_g_np = soft.v_g.to_numpy()
+        print(f"v_g: \n{np.hstack((v_g_np, np.linalg.norm(v_g_np, axis=1).reshape(-1,1)))}")
+
         soft.gui_show(True, False, itr)
-        time.sleep(0.1)
+        time.sleep(0.3)
 
     # np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
         
