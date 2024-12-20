@@ -80,7 +80,7 @@ def sym_eig2x2_new(A, dt):
     DECOMP_EPS = 1e-4 if dt == ti.f32 else 1e-11
 
     # print(f"A: {A:e}")
-    print(A==A.transpose())
+    # print(A==A.transpose())
     assert all(A == A.transpose()), "A needs to be symmetric"
     a = ti.cast(A[0, 0], dt)
     b = ti.cast((A[0, 1] + A[1, 0])/2, dt)

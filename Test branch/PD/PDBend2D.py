@@ -33,92 +33,6 @@ def read_msh(file_path):
     pass
 
 
-# def cotangent(u:npt.NDArray, v:npt.NDArray)->float:
-#     """计算两个向量之间的余切"""
-#     dot = np.dot(u, v)
-#     cross = np.linalg.norm(np.cross(u, v))
-#     return dot / cross if cross != 0 else 0
-
-
-# def compute_edge_to_triangles(faces:npt.NDArray[np.int32])->DefaultDict[tuple, List[int]]:
-#     """计算边对应的三角形"""
-#     edge_to_triangles = defaultdict(list)
-
-#     for t_idx, tri in enumerate(faces):
-#         edges = [
-#             (min(tri[0], tri[1]), max(tri[0], tri[1])),
-#             (min(tri[1], tri[2]), max(tri[1], tri[2])),
-#             (min(tri[2], tri[0]), max(tri[2], tri[0]))
-#         ]
-#         for edge in edges:
-#             edge_to_triangles[edge].append(t_idx)       # {(1, 2) = [0, 1]}
-    
-#     return edge_to_triangles
-
-
-# def compute_cotangent_weights_per_node(nodes:npt.NDArray, faces:npt.NDArray[np.int32], edge_to_triangles)->Tuple[DefaultDict, DefaultDict]:
-#     """Calculate cotangent weights for each node's one-ring edges.
-#     Parameters:
-#         nodes (npt.NDArray): Array of shape (N, 3) containing vertex positions.
-#         faces (npt.NDArray[np.int32]): Array of shape (F, 3) containing vertex indices for each triangle.
-#         edge_to_triangles (dict): Dictionary mapping edge tuples (v1, v2) to their adjacent triangles.
-#     Returns:
-#         Tuple[DefaultDict, DefaultDict]: A tuple containing:
-#             - node_neighbors: Dictionary mapping each vertex to its one-ring neighbor vertices.
-#               Example: {1: [2, 3]} means vertex 1 has neighbors 2 and 3.
-#             - node_weights: Dictionary mapping each vertex to the cotangent weights of its neighbors.
-#               Example: {1: [0.5, 0.5]} means the weights for vertex 1's neighbors are 0.5 each.
-#     """
-#     # 遍历每条边，计算余切权重
-#     edge_weights = {}
-#     graph = defaultdict(dict)
-#     for edge, triangles in edge_to_triangles.items():       # edge: (p0, p1), triangles: [tri1, tri2]
-#         if len(triangles) == 2:  # 边需要属于两个三角形
-#             tri1, tri2 = triangles
-#             idx1, idx2 = faces[tri1], faces[tri2]
-            
-#             # 找到不属于该边的顶点
-#             p0, p1 = edge
-#             p2_1 = list(set(idx1) - set(edge))[0]
-#             p2_2 = list(set(idx2) - set(edge))[0]
-
-#             # 顶点坐标
-#             v0, v1 = nodes[p0], nodes[p1]
-#             v2_1, v2_2 = nodes[p2_1], nodes[p2_2]
-
-#             # 向量计算
-#             cot_alpha = cotangent(v2_1 - v0, v2_1 - v1)
-#             cot_beta = cotangent(v2_2 - v0, v2_2 - v1)
-
-#             # 边的余切权重
-#             edge_weights[edge] = cot_alpha + cot_beta
-
-#             graph[p0][p1] = cot_alpha
-#             graph[p1][p0] = cot_alpha
-
-#     node_neighbors = {}
-#     node_weights = {}
-
-#     # 填充每个节点的结果
-#     for node, neighbors in graph.items():
-#         node_neighbors[node] = list(neighbors.keys())       # 一环邻居节点, {1: [2, 3]}
-#         node_weights[node] = list(neighbors.values())       # 对应的权重, {1: [0.5, 0.5]}
-
-#     return node_neighbors, node_weights
-
-
-# def compute_onering_edges(node_num:float, elements:npt.NDArray)->List:
-#     one_ring_edges = [set() for _ in range(node_num)]
-
-#     for e_i in elements:
-#         idx1, idx2, idx3 = e_i
-#         one_ring_edges[idx1].update([idx2, idx3])
-#         one_ring_edges[idx2].update([idx1, idx3])
-#         one_ring_edges[idx3].update([idx1, idx2])
-
-#     return one_ring_edges
-
-
 @ti.data_oriented
 class SoftBend2D:
     def __init__(self, shape, E:float, nu:float, dt:float, density:float, g=9.8):
@@ -127,7 +41,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.05)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
             np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -142,19 +56,22 @@ class SoftBend2D:
         self.dim = 3
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
        
-        self.mesh = Patcher.load_mesh(obj_file, relations=["VE", "VV", "VF", "EV", "EF", "FV"])
+        self.mesh = Patcher.load_mesh(obj_file, relations=["VV", "VE", "VF", "EV", "EF", "FV"])
         self.mesh.verts.place({
             "pos": ti.types.vector(3, ti.f64),
             "pos_init": ti.types.vector(3, ti.f64),
             "vel": ti.types.vector(3, ti.f64),
             "v_f": ti.types.vector(3, ti.f64),
-            "mass": ti.f64,
+            "H": ti.f64,                # Mean curvature
+            # "mass": ti.f64,
             "voronoi": ti.f64,
             "neighbor_num": ti.i32,     # 一环邻居数(包括自己)
-            "bend_weight": ti.f64
+            "bend_weight": ti.f64,
+            "border": bool
         }, reorder=False)
         self.mesh.edges.place({
-            "cotagent_w": ti.f64
+            "cotagent_w": ti.f64,
+            "border": bool
         }, reorder=False)
         self.mesh.faces.place({
             "volume": ti.f64,
@@ -191,7 +108,7 @@ class SoftBend2D:
         self.bend_weight = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         # self.volume_weight = ???
-        self.positional_weight = 0.
+        self.positional_weight = 0.         # define later
 
         self.Xg_inv = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)         # rest configuration
         self.F = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)              # deformation gradient
@@ -204,13 +121,16 @@ class SoftBend2D:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.pre_fact_lhs_solve = None
 
-        # self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        self.fix_particle_list = [0, 1]
+        self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 120]
+        # self.fix_particle_list = [0, 1]
+        self.contact_particle_list = []
         self.FIX_N = len(self.fix_particle_list)
+        self.CON_N = len(self.contact_particle_list)
         self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
         self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
 
         self.construct_mass()
+        self.construct_cotangent()
         self.construct_Xg_inv()
         self.positional_weight = 1e2 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
         
@@ -244,9 +164,16 @@ class SoftBend2D:
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
             # self.node_mass[q_i] = 0.
             self.node_mass_sum[None] += self.node_mass[q_i]
+            # self.mesh.verts.mass[q_i] = self.density * self.mesh.verts.voronoi[q_i]
 
-            self.mesh.verts.mass[q_i] = self.density * self.mesh.verts.voronoi[q_i]
+        # 创建接触点
+        for q_i in ti.static(self.contact_particle_list):
+            self.node_mass[q_i] = 1e2 * self.node_mass_sum[None] / self.PARTICLE_N
 
+
+    @ti.kernel
+    def construct_cotangent(self):
+        # 只能弯曲, 不能拉伸, cotangent weights不变
         ti.mesh_local(self.mesh.verts.pos_init, self.mesh.edges.cotagent_w)
         for e in self.mesh.edges:
             if e.faces.size > 1:
@@ -268,11 +195,16 @@ class SoftBend2D:
                 e.cotagent_w = cot_alpha + cot_beta
             else:
                 e.cotagent_w = 0.
+                e.border = True
 
         ti.mesh_local(self.mesh.verts.neighbor_num, self.mesh.verts.bend_weight, self.mesh.verts.voronoi)
         for q in self.mesh.verts:
             q.neighbor_num = q.edges.size + 1
             q.bend_weight = 0. * q.voronoi
+            for e in q.edges:
+                if e.border == True:
+                    q.border = True
+
             # print(f"Vertex {q.id}: {q.neighbor_num} neighbors")
             # for q_v in q.verts:
             #     print(f"Neighbor: {q_v.id}")
@@ -344,7 +276,7 @@ class SoftBend2D:
             cot_w_sum = 0.
             # print(f"Vertex {q_id}: {neighbor_num} neighbors")
 
-            if q.faces.size > 1:
+            if q.border == False:
                 for e in q.edges:
                     cot_w_sum += e.cotagent_w
                 
@@ -386,6 +318,13 @@ class SoftBend2D:
                 self.lhs[q_id, q_id] += cot_w_sum**2 * bend_weight
                 # self.lhs_bend_ti[q_id, q_id] += cot_w_sum**2 * voronoi
                 # print(f"LHS bend: {q_id}--{q_id}: {cot_w_sum**2}")
+
+                if q.v_f.norm() > 1.e-8:
+                    q.H = q.v_f.norm()
+                else:
+                    # 直接指定v_f的方向
+                    q.v_f = ti.Vector([0., 0., 1.], ti.f64)
+                    q.H = 0.
             
     
     @ti.kernel
@@ -441,7 +380,7 @@ class SoftBend2D:
             X_f = ti.Matrix.cols([b - a, c - a])
             F_i = ti.cast(X_f @ self.Xg_inv[f_i], ti.f64)
             self.F[f_i] = F_i
-            print(f"F_i:{F_i:e}")
+            # print(f"F_i:{F_i:e}")
 
             U, sig, V = svd_3x2_new(F_i)
             # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
@@ -468,6 +407,7 @@ class SoftBend2D:
 
     @ti.kernel
     def rhs_bend(self):
+        """
         ti.mesh_local(self.mesh.verts.pos, self.mesh.edges.cotagent_w)
         for e in self.mesh.edges:
             if e.faces.size > 1:
@@ -487,16 +427,17 @@ class SoftBend2D:
                 e.cotagent_w = cot_alpha + cot_beta
             else:
                 e.cotagent_w = 0.
+        """
 
         ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.verts.v_f, self.mesh.verts.pos, self.mesh.edges.cotagent_w)
         for q in self.mesh.verts:
-            print(f"Vertex {q.id}: {q.edges.size} neighbors")
             q_id = q.id
             bend_weight = q.bend_weight
             cot_w_sum = 0.
             self.Bp_bend[q_id] = ti.Vector.zero(ti.f64, 3)
 
-            if q.faces.size > 1:
+            if q.border == False:
+                # print(f"Vertex {q.id}: {q.edges.size} neighbors")
                 v_g = ti.Vector.zero(ti.f64, 3)
                 for e in q.edges:
                     idx = 0
@@ -506,10 +447,15 @@ class SoftBend2D:
 
                     v_g += e.cotagent_w * (q_neighbor.pos - q.pos)
                     cot_w_sum += e.cotagent_w
+                # print(f"Vertex {q.id}; v_g: {v_g}; curvature: {v_g.norm()}")
 
+                if q.H != 0.:
+                    self.Bp_bend[q_id] = q.v_f * v_g.norm() / q.v_f.norm()
+                else:
+                    self.Bp_bend[q_id] = q.v_f * v_g.norm()
                 self.Bp_bend[q_id] = q.v_f * v_g.norm() / q.v_f.norm()
                 Bp_bend_i = self.Bp_bend[q_id]
-                print(f"Bp_bend_i: {Bp_bend_i}")
+                # print(f"Bp_bend_i: {Bp_bend_i}")
 
                 for e in q.edges:
                     idx = 0
@@ -519,11 +465,11 @@ class SoftBend2D:
 
                     for row_idx in range(3):
                         self.rhs[q_neighbor.id*3+row_idx] += e.cotagent_w * Bp_bend_i[row_idx] * bend_weight
-                        print(f"RHS bend: {q_neighbor.id*3+row_idx}: {e.cotagent_w * Bp_bend_i[row_idx] * bend_weight}")
+                        # print(f"RHS bend: {q_neighbor.id*3+row_idx}: {e.cotagent_w * Bp_bend_i[row_idx] * bend_weight}")
                 
                 for row_idx in range(3):
                     self.rhs[q_id*3+row_idx] += -cot_w_sum * Bp_bend_i[row_idx] * bend_weight
-                    print(f"RHS bend: {q_id*3+row_idx}: {-cot_w_sum * Bp_bend_i[row_idx] * bend_weight}")
+                    # print(f"RHS bend: {q_id*3+row_idx}: {-cot_w_sum * Bp_bend_i[row_idx] * bend_weight}")
 
 
     @ti.kernel
@@ -579,6 +525,8 @@ class SoftBend2D:
             self.node_color[q_i] = ti.Vector([0., 0., 0.])
         for q_i in self.fix_particle_list:
             self.node_color[q_i] = ti.Vector([1., 0., 0.])
+        for q_i in self.contact_particle_list:
+            self.node_color[q_i] = ti.Vector([0., 0., 1.])
 
 
     def gui_show(self, SHOW_FLAG:bool=True, WRITE_FLAG:bool=False, itr_num:int=0):
@@ -604,10 +552,10 @@ class SoftBend2D:
         # np.savetxt(f"sn_{step_num:05d}.csv", self.sn.to_numpy(), fmt='%f', delimiter=",")
         self.warm_start()
         for itr in ti.static(range(self.solve_itr)):
-            print(f"Iteration: {itr} ======================================")
+            # print(f"Iteration: {itr} ======================================")
             self.local_solve()
             rhs_np = self.rhs.to_numpy()
-            print(f"Rhs:\n{rhs_np}")
+            # print(f"Rhs:\n{rhs_np}")
             # Split rhs_np into x,y,z components
             rhs_np_x = rhs_np[0::3]
             rhs_np_y = rhs_np[1::3]
@@ -649,12 +597,12 @@ def main():
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     # soft.init_vel()
 
-    print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
+    # print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
     np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
     np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
 
-    for itr in range(1):
+    for itr in range(100):
         soft.substep(itr)
         soft.gui_show(True, False, itr)
         time.sleep(0.1)
