@@ -41,7 +41,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.05)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
             np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -123,8 +123,8 @@ class SoftBend2D:
 
         self.v_g = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
 
-        # self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 120]
-        self.fix_particle_list = [0, 1]
+        self.fix_particle_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 120]
+        # self.fix_particle_list = [0, 1, 3]
         self.contact_particle_list = []
         self.FIX_N = len(self.fix_particle_list)
         self.CON_N = len(self.contact_particle_list)
@@ -199,26 +199,13 @@ class SoftBend2D:
                 e.cotagent_w = 0.
                 e.border = True
 
-        ti.mesh_local(self.mesh.verts.neighbor_num, self.mesh.verts.bend_weight, self.mesh.verts.voronoi)
+        ti.mesh_local(self.mesh.verts.neighbor_num, self.mesh.verts.bend_weight)
         for q in self.mesh.verts:
             q.neighbor_num = q.edges.size + 1
-            q.bend_weight = 0. * q.voronoi
+            q.bend_weight = 0.
             for e in q.edges:
                 if e.border == True:
                     q.border = True
-
-            # print(f"Vertex {q.id}: {q.neighbor_num} neighbors")
-            # for q_v in q.verts:
-            #     print(f"Neighbor: {q_v.id}")
-            # for e in q.edges:
-            #     m = 0
-            #     v1, v2 = e.verts[0], e.verts[1]
-            #     if v1.id == q.id:
-            #         m = 1
-            #     else:
-            #         m = 0
-            #     q_neighbor = e.verts[m]
-            #     print(f"Neighbor: {q_neighbor.id}; Edge: {e.id}; cotangent weight: {e.cotagent_w}")
 
 
     @ti.kernel
@@ -352,15 +339,15 @@ class SoftBend2D:
             idx1, idx2, idx3 = dim*q_i, dim*q_i+1, dim*q_i+2
             self.sn[idx1] = self.node_pos[q_i].x + self.node_vel[q_i].x * dt
             self.sn[idx2] = self.node_pos[q_i].y + self.node_vel[q_i].y * dt
-            self.sn[idx3] = self.node_pos[q_i].z + self.node_vel[q_i].z * dt
+            self.sn[idx3] = self.node_pos[q_i].z + self.node_vel[q_i].z * dt + self.g * dt**2       # Gravity
 
 
     @ti.kernel
     def warm_start(self):
         for q_i in range(self.PARTICLE_N):
-            self.node_pos_new[q_i].x = self.node_pos[q_i].x
-            self.node_pos_new[q_i].y = self.node_pos[q_i].y
-            self.node_pos_new[q_i].z = self.node_pos[q_i].z
+            self.node_pos_new[q_i].x = self.sn[q_i*3]
+            self.node_pos_new[q_i].y = self.sn[q_i*3+1]
+            self.node_pos_new[q_i].z = self.sn[q_i*3+2]
 
 
     @ti.kernel
@@ -391,14 +378,13 @@ class SoftBend2D:
 
         for f_i in range(self.ELEMENT_N):
             idx1, idx2, idx3 = self.ele[f_i]
-            weight = self.stretch_weight[f_i]
             Bp_shear_i = self.Bp_shear[f_i]
             F_AT = self.F_A[f_i].transpose()
             # print("F_AT:\n", F_AT)
 
             # Bp_shear_i做transpose，因为AT需要与Bp的x，y，z分别矩阵乘法
             F_ATBp = F_AT @ Bp_shear_i.transpose()
-            F_ATBp *= weight
+            F_ATBp *= self.stretch_weight[f_i]
             # print(f"BpT:\n{Bp_shear_i.transpose()}")
             # print("F_ATBp:\n", F_ATBp)
 
@@ -409,28 +395,6 @@ class SoftBend2D:
 
     @ti.kernel
     def rhs_bend(self):
-        """
-        ti.mesh_local(self.mesh.verts.pos, self.mesh.edges.cotagent_w)
-        for e in self.mesh.edges:
-            if e.faces.size > 1:
-                v1, v2 = e.verts[0], e.verts[1]
-                tri1, tri2 = e.faces[0], e.faces[1]
-
-                m, n = 0, 0
-                for i in range(3):
-                    if tri1.verts[i].id != v1.id and tri1.verts[i].id != v2.id:
-                        m = i
-                    if tri2.verts[i].id != v1.id and tri2.verts[i].id != v2.id:
-                        n = i
-                v2_1, v2_2 = tri1.verts[m], tri2.verts[n]
-                cot_alpha = cotangent_ti(v2_1.pos - v1.pos, v2_1.pos - v2.pos)
-                cot_beta = cotangent_ti(v2_2.pos - v1.pos, v2_2.pos - v2.pos)
-
-                e.cotagent_w = cot_alpha + cot_beta
-            else:
-                e.cotagent_w = 0.
-        """
-
         ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.verts.v_f, self.mesh.verts.pos, self.mesh.edges.cotagent_w)
         for q in self.mesh.verts:
             q_id = q.id
@@ -449,7 +413,7 @@ class SoftBend2D:
 
                     v_g += e.cotagent_w * (q_neighbor.pos - q.pos)
                     cot_w_sum += e.cotagent_w
-                self.v_g[q_id] = v_g / q.voronoi
+                self.v_g[q_id] = v_g
                 # print(f"Vertex {q.id}; v_g: {v_g}; curvature: {v_g.norm()}")
 
                 if q.H != 0.:
@@ -585,10 +549,10 @@ class SoftBend2D:
 
 def main():
     class Soft(SoftBend2D):
-        def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=9.8):
+        def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=-10):
             super().__init__(shape, E, nu, dt, density, g)
     
-    soft = Soft([0.1, 0.1], 1.e5, 0.4, 0.01, 10e2)
+    soft = Soft([0.1, 0.1], 1.e7, 0.4, 0.01, 10e2)
     soft.preset_gui([0.05, 0.1, 0.3], [0.05, 0.1, 0.], [0., 1., 0.])
 
     soft.precomputation()
@@ -598,23 +562,24 @@ def main():
     # print("Rhs:\n", lhs_np @ soft.node_pos_init.to_numpy().flatten())
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    soft.init_vel()
+    # soft.init_vel()
 
     # print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
-    np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
+    # np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
-    np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
+    # np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
 
-    for itr in range(20):
+    for itr in range(100):
         soft.substep(itr)
 
         v_g_np = soft.v_g.to_numpy()
-        print(f"v_g: \n{np.hstack((v_g_np, np.linalg.norm(v_g_np, axis=1).reshape(-1,1)))}")
+        # print(f"v_g: \n{np.hstack((v_g_np, np.linalg.norm(v_g_np, axis=1).reshape(-1,1)))}")
 
         soft.gui_show(True, False, itr)
         time.sleep(0.3)
+        print(f"Node 110: {soft.node_pos[110]}")
 
-    # np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
+    np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
         
 
 if __name__ == "__main__":
