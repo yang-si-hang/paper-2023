@@ -46,3 +46,49 @@ class Calc:
 
 a = Calc()
 a.run_all()
+
+import meshzoo
+
+points, cells = meshzoo.rectangle_tri(
+    np.linspace(0.0, 1.0, 3),
+    np.linspace(0.0, 1.0, 3),
+    variant="zigzag",  # or "up", "down", "center"
+)
+# print(f"Points: \n{points}")
+# print(f"Cells: \n{cells}")
+
+points, cells = meshzoo.rectangle_quad(
+    np.linspace(0.0, 1.0, 5),
+    np.linspace(0.0, 1.0, 5),
+    cell_type="quad8",  # or "quad8", "quad9"
+)
+
+print(f"Points: \n{points}")
+print(f"Cells: \n{cells}")
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(8, 8))
+# Plot points
+plt.scatter(points[:, 0], points[:, 1], color='blue', label='Nodes')
+
+# Plot cell connections - for quad9, we only connect the corner nodes (0,1,2,3)
+for cell in cells:
+    # Corner nodes are 0,1,2,3 for quad9
+    corner_indices = cell[:4]
+    # Connect corner points
+    for i in range(4):
+        j = (i + 1) % 4  # Connect to next corner point
+        plt.plot([points[corner_indices[i]][0], points[corner_indices[j]][0]], 
+                 [points[corner_indices[i]][1], points[corner_indices[j]][1]], 
+                 'r-', alpha=0.5)
+
+    # Plot mid-side and center nodes with different color
+    mid_nodes = cell[4:]  # Nodes 4-8 are mid-side and center nodes
+    plt.scatter(points[mid_nodes][:, 0], points[mid_nodes][:, 1], 
+               color='green', marker='s', label='Mid nodes' if cell is cells[0] else "")
+
+plt.grid(True)
+plt.legend()
+plt.axis('equal')
+plt.show()

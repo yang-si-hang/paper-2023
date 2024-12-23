@@ -137,15 +137,15 @@ class SoftBend2D:
         self.contact_particle_ti = ti.field(dtype=ti.i32, shape=self.CON_N)
         self.contact_particle_ti.from_numpy(np.array(self.contact_particle_list).astype(np.int32))
         self.contact_vel = ti.Vector.field(3, dtype=ti.f64, shape=self.CON_N)
+        self.contact_vel.fill(0.)
 
         self.construct_mass()
         self.construct_cotangent()
         self.construct_Xg_inv()
-        self.positional_weight = 1e3 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
+        self.positional_weight = 1.e3 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
         
         print(f"Particle numer: {self.PARTICLE_N}; Edge number: {self.EDGE_N}; Element number: {self.ELEMENT_N}")
         print(f"Positional weight: {self.positional_weight}")
-
 
 
     @ti.kernel
@@ -177,7 +177,7 @@ class SoftBend2D:
 
         # 创建接触点
         for q_i in ti.static(self.contact_particle_list):
-            self.node_mass[q_i] = 1e2 * self.node_mass_sum[None] / self.PARTICLE_N
+            self.node_mass[q_i] = 1e3 * self.node_mass_sum[None] / self.PARTICLE_N
 
 
     @ti.kernel
@@ -351,11 +351,12 @@ class SoftBend2D:
             self.sn[idx2] = self.node_pos[q_i].y + self.node_vel[q_i].y * dt
             self.sn[idx3] = self.node_pos[q_i].z + self.node_vel[q_i].z * dt + self.g * dt**2       # Gravity
 
+        # Contact particles update
         for idx in range(self.CON_N):
-            q_idx = self.contact_particle_ti[idx]
-            self.sn[q_idx*3] += self.contact_vel[idx].x * dt
-            self.sn[q_idx*3+1] += self.contact_vel[idx].y * dt
-            self.sn[q_idx*3+2] += self.contact_vel[idx].z * dt
+            q_i = self.contact_particle_ti[idx]
+            self.sn[q_i*3] = self.node_pos[q_i].x + self.contact_vel[idx].x * dt
+            self.sn[q_i*3 + 1] = self.node_pos[q_i].y + self.contact_vel[idx].y * dt
+            self.sn[q_i*3 + 2] = self.node_pos[q_i].z + self.contact_vel[idx].z * dt
 
 
     @ti.kernel
@@ -507,6 +508,11 @@ class SoftBend2D:
             self.mesh.verts.pos[i] = self.node_pos[i]
             self.mesh.verts.vel[i] = self.node_vel[i]
 
+        for idx in range(self.CON_N):
+            q_idx = self.contact_particle_ti[idx]
+            self.node_vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
+            self.mesh.verts.vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
+
     
     def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
         """Taichi GUI pre-setting
@@ -605,14 +611,15 @@ def main():
     # soft.init_vel()
     # contact_vel_np = np.array([[0., -0.05, 0.01]] * len(soft.contact_particle_list))
     # soft.contact_vel.from_numpy(contact_vel_np)
-    soft.contact_vel.fill(0.)
+    # soft.contact_vel.fill(0.)
 
     # print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
     # np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
-    np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
+    # np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
+    # exit(0)
 
-    for itr in range(200):
+    for itr in range(1):
         print(f"Iteration: {itr} ======================================")
         soft.substep(itr)
         print(f"Stretch stress: \n{soft.bp_sig.to_numpy()}")
@@ -627,6 +634,9 @@ def main():
 
     np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
         
+    """
+    Contact particles的RHS不符合预期,考虑stretch constraint
+    """
 
 if __name__ == "__main__":
     main()
