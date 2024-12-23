@@ -136,7 +136,15 @@ def sym_eig2x2_new(A, dt):
 
 @ti.func
 def svd_3x2_new(A):
-    """SVD decomposition of 3*2 matrix 
+    """SVD decomposition of 3*2 matrix A.
+    
+    Args:
+        A (ti.types.matrix(3, 2)): 
+
+    Returns:
+        U (ti.types.matrix(3, 3)):
+        sigma (ti.types.vector(2)):
+        V (ti.types.matrix(2, 2)):
     """
     dt = ti.f64
     for m, n in ti.ndrange(3, 2):
