@@ -42,7 +42,7 @@ class SoftBend2D:
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
-            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.02)
+            node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.025)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
             np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
@@ -63,7 +63,7 @@ class SoftBend2D:
             "pos": ti.types.vector(3, ti.f64),
             "pos_init": ti.types.vector(3, ti.f64),
             "vel": ti.types.vector(3, ti.f64),
-            "v_f": ti.types.vector(3, ti.f64),
+            "v_g": ti.types.vector(3, ti.f64),
             "H": ti.f64,                # Mean curvature
             "voronoi": ti.f64,
             "neighbor_num": ti.i32,     # 一环邻居数(包括自己)
@@ -103,7 +103,7 @@ class SoftBend2D:
         self.ele_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.ele.from_numpy(ele_np.astype(np.int32))
 
-        self.bend_weight = 0.
+        self.bend_weight = 1.e8
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.stretch_lim_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.positional_weight = 0.         # define later
@@ -113,28 +113,31 @@ class SoftBend2D:
         self.F_A = ti.Matrix.field(2, 3, dtype=ti.f64, shape=self.ELEMENT_N)            # deformation gradient linearisation coefficient matrix
         self.Bp_shear = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)       # stretch part
         self.Bp_shear_lim = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)   # strain-limit part
+        self.stretch_energy = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.Bp_bend = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
+        self.bend_energy = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.bp_sig = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_N)
         self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N, self.PARTICLE_N))
         self.lhs_bend_ti = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N, self.PARTICLE_N))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.rhs_stretch = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.rhs_bend = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.pre_fact_lhs_solve = None
 
-        self.v_g = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
+        self.v_f = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_N)
 
-        self.fix_particle_list = list(range(6)) + list(range(30, 36))
+        self.fix_particle_list = list(range(5))
         # self.contact_particle_list = list(range(420, 441))
-        self.contact_particle_list = []
+        self.contact_particle_list = list(range(20, 25))
         self.FIX_N = len(self.fix_particle_list)
         self.CON_N = len(self.contact_particle_list)
         self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
         self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
-        # self.contact_particle_ti = ti.field(dtype=ti.i32, shape=self.CON_N)
-        # self.contact_particle_ti.from_numpy(np.array(self.contact_particle_list).astype(np.int32))
-        # self.contact_vel = ti.Vector.field(3, dtype=ti.f64, shape=self.CON_N)
-        # self.contact_vel.fill(0.)
+        self.contact_particle_ti = ti.field(dtype=ti.i32, shape=self.CON_N)
+        self.contact_particle_ti.from_numpy(np.array(self.contact_particle_list).astype(np.int32))
+        self.contact_vel = ti.Vector.field(3, dtype=ti.f64, shape=self.CON_N)
+        self.contact_vel.fill(0.)
 
         self.construct_mass()
         self.construct_cotangent()
@@ -161,7 +164,7 @@ class SoftBend2D:
 
             self.ele_volume[f_i] = ele_volume_tmp
             self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_i]
-            self.stretch_lim_weight[f_i] = 1.e3 * self.stretch_weight[f_i]
+            self.stretch_lim_weight[f_i] = 0.e3 * self.stretch_weight[f_i]
 
             self.mesh.faces.volume[f_i] = ele_volume_tmp
             self.mesh.faces.stretch_weight[f_i] = 2 * self.mu * self.mesh.faces.volume[f_i]
@@ -170,11 +173,6 @@ class SoftBend2D:
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
             # self.node_mass[q_i] = 0.
             self.node_mass_sum[None] += self.node_mass[q_i]
-            # self.mesh.verts.mass[q_i] = self.density * self.mesh.verts.voronoi[q_i]
-
-        # 创建接触点
-        for q_i in ti.static(self.contact_particle_list):
-            self.node_mass[q_i] = 1e3 * self.node_mass_sum[None] / self.PARTICLE_N
 
 
     @ti.kernel
@@ -209,7 +207,7 @@ class SoftBend2D:
             q.bend_weight = self.bend_weight
             for e in q.edges:
                 if e.border == True:
-                    q.border = True
+                    q.border = True         # 边界点,没有曲率
 
 
     @ti.kernel
@@ -226,13 +224,13 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def lhs_mass(self):
+    def construct_lhs_mass(self):
         for q_i in range(self.PARTICLE_N):
             self.lhs[q_i, q_i] += self.node_mass[q_i] / self.dt**2
 
     
     @ti.kernel
-    def lhs_shear(self):
+    def construct_lhs_stretch(self):
         # https://medium.com/@victorlouisdg/jax-cloth-tutorial-part-1-e7a0e285864f
         for f_i in range(self.ELEMENT_N):
             Xg_inv = self.Xg_inv[f_i]
@@ -264,8 +262,8 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def lhs_bend(self):
-        ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.edges.cotagent_w)
+    def construct_lhs_bend(self):
+        ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.verts.v_g, self.mesh.edges.cotagent_w)
         for q in self.mesh.verts:
             q_id = q.id
             bend_weight = q.bend_weight
@@ -302,7 +300,7 @@ class SoftBend2D:
                         idx = 1
 
                     q_neighbor = e.verts[idx]
-                    q.v_f += e.cotagent_w * (q_neighbor.pos - q.pos)
+                    q.v_g += e.cotagent_w * (q_neighbor.pos - q.pos)
 
                     self.lhs[q_id, q_neighbor.id] += -cot_w_sum * e.cotagent_w * bend_weight
                     self.lhs[q_neighbor.id, q_id] += -cot_w_sum * e.cotagent_w * bend_weight
@@ -315,27 +313,32 @@ class SoftBend2D:
                 self.lhs_bend_ti[q_id, q_id] += cot_w_sum**2 * bend_weight
                 # print(f"LHS bend: {q_id}--{q_id}: {cot_w_sum**2}")
 
-                if q.v_f.norm() > 1.e-8:
-                    q.H = q.v_f.norm()
-                else:
-                    # 直接指定v_f的方向
-                    q.v_f = ti.Vector([0., 0., 1.], ti.f64)
-                    q.H = 0.
+                q.H = q.v_g.norm()
+                # if q.v_g.norm() > 1.e-8:
+                #     q.H = q.v_g.norm()
+                # else:
+                #     # 直接指定v_g的方向
+                #     q.v_g = ti.Vector([0., 0., 1.], ti.f64)
+                #     q.H = 0.
             
     
     @ti.kernel
-    def lhs_positional(self):
+    def construct_lhs_positional(self):
         """Poistional contraints"""
-        for q_i in range(self.FIX_N):
-            idx = self.fix_particle_ti[q_i]
-            self.lhs[idx, idx] += self.positional_weight
+        for i in range(self.FIX_N):
+            q_i = self.fix_particle_ti[i]
+            self.lhs[q_i, q_i] += self.positional_weight
+
+        for i in range(self.CON_N):
+            q_i = self.contact_particle_ti[i]
+            self.lhs[q_i, q_i] += self.positional_weight
 
 
     def precomputation(self):
-        self.lhs_mass()
-        self.lhs_shear()
-        self.lhs_bend()
-        self.lhs_positional()
+        self.construct_lhs_mass()
+        self.construct_lhs_stretch()
+        self.construct_lhs_bend()
+        self.construct_lhs_positional()
 
 
     @ti.kernel
@@ -349,11 +352,11 @@ class SoftBend2D:
             self.sn[idx3] = self.node_pos[q_i].z + self.node_vel[q_i].z * dt + self.g * dt**2       # Gravity
 
         # Contact particles update
-        # for idx in range(self.CON_N):
-        #     q_i = self.contact_particle_ti[idx]
-        #     self.sn[q_i*3] = self.node_pos[q_i].x + self.contact_vel[idx].x * dt
-        #     self.sn[q_i*3 + 1] = self.node_pos[q_i].y + self.contact_vel[idx].y * dt
-        #     self.sn[q_i*3 + 2] = self.node_pos[q_i].z + self.contact_vel[idx].z * dt# + self.g * dt**2
+        for idx in range(self.CON_N):
+            q_i = self.contact_particle_ti[idx]
+            self.sn[q_i*3] = self.node_pos[q_i].x + self.contact_vel[idx].x * dt
+            self.sn[q_i*3 + 1] = self.node_pos[q_i].y + self.contact_vel[idx].y * dt
+            self.sn[q_i*3 + 2] = self.node_pos[q_i].z + self.contact_vel[idx].z * dt + self.g * dt**2
 
 
     @ti.kernel
@@ -365,7 +368,7 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def rhs_mass(self):
+    def construct_rhs_mass(self):
         for q_i in range(self.PARTICLE_N):
             idx1, idx2, idx3 = q_i*3, q_i*3+1, q_i*3+2
             self.rhs[idx1] += self.node_mass[q_i] * self.sn[idx1] / self.dt**2
@@ -374,8 +377,7 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def rhs_shear(self):
-    #     ti.loop_config(serialize=True)
+    def construct_rhs_stretch(self):
         for f_i in range(self.ELEMENT_N):
             # print("==============================================================================================")
             idx1, idx2, idx3 = self.ele[f_i]
@@ -389,6 +391,7 @@ class SoftBend2D:
             self.bp_sig[f_i] = sig
             # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1], [0, 0]], ti.f64) @ V.transpose()
+            self.stretch_energy[f_i] = 0.5 * self.stretch_weight[f_i] * ((sig[0]-1.)**2 + (sig[1]-1.)**2)
             # print(f"Bp_shear:{self.Bp_shear[f_i]:e}")
 
             s_lim = ti.Vector.zero(ti.f64, 2)
@@ -412,7 +415,9 @@ class SoftBend2D:
             F_ATBp = F_AT @ Bp_shear_i.transpose()
             F_ATBp *= self.stretch_weight[f_i]
             F_ATBp_lim = F_AT @ Bp_shear_lim_i.transpose() * self.stretch_lim_weight[f_i]
-            print(f"Face {f_i}: F_ATBp: {F_ATBp}; F_ATBp_lim: {F_ATBp_lim}")
+            # print(f"Face {f_i}: F_ATBp_lim: {F_ATBp_lim}")
+            # print(f"Bp_shear_lim_i: {Bp_shear_lim_i}")
+            # print(f"F_AT: {F_AT}")
 
             for q_i, dim_idx in ti.ndrange(3, 3):
                 q_idx = self.ele[f_i][q_i]
@@ -422,8 +427,8 @@ class SoftBend2D:
 
 
     @ti.kernel
-    def rhs_bend(self):
-        ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.verts.v_f, self.mesh.verts.pos, self.mesh.edges.cotagent_w)
+    def construct_rhs_bend(self):
+        ti.mesh_local(self.mesh.verts.bend_weight, self.mesh.verts.v_g, self.mesh.verts.pos, self.mesh.edges.cotagent_w)
         for q in self.mesh.verts:
             q_id = q.id
             bend_weight = q.bend_weight
@@ -432,24 +437,25 @@ class SoftBend2D:
 
             if q.border == False:
                 # print(f"Vertex {q.id}: {q.edges.size} neighbors")
-                v_g = ti.Vector.zero(ti.f64, 3)
+                v_f = ti.Vector.zero(ti.f64, 3)
                 for e in q.edges:
                     idx = 0
                     if e.verts[1].id != q_id:
                         idx = 1
                     q_neighbor = e.verts[idx]
 
-                    v_g += e.cotagent_w * (q_neighbor.pos - q.pos)
+                    v_f += e.cotagent_w * (q_neighbor.pos - q.pos)
                     cot_w_sum += e.cotagent_w
-                self.v_g[q_id] = v_g
-                # print(f"Vertex {q.id}; v_g: {v_g}; curvature: {v_g.norm()}")
+                self.v_f[q_id] = v_f
+                # print(f"v_f: {v_f}")
 
-                if q.H != 0.:
-                    self.Bp_bend[q_id] = q.v_f * v_g.norm() / q.v_f.norm()
+                if v_f.norm() == 0.:
+                    self.Bp_bend[q_id] = q.v_g
                 else:
-                    self.Bp_bend[q_id] = q.v_f * v_g.norm()
-                self.Bp_bend[q_id] = q.v_f * v_g.norm() / q.v_f.norm()
+                    self.Bp_bend[q_id] = q.v_g.norm() * v_f / v_f.norm()
                 Bp_bend_i = self.Bp_bend[q_id]
+
+                self.bend_energy[q_id] = 0.5 * bend_weight * (v_f - Bp_bend_i).norm()**2
                 # print(f"Bp_bend_i: {Bp_bend_i}")
 
                 for e in q.edges:
@@ -460,15 +466,17 @@ class SoftBend2D:
 
                     for dim_idx in range(3):
                         self.rhs[q_neighbor.id*3+dim_idx] += e.cotagent_w * Bp_bend_i[dim_idx] * bend_weight
-                        # print(f"RHS bend: {q_neighbor.id*3+row_idx}: {e.cotagent_w * Bp_bend_i[row_idx] * bend_weight}")
+                        self.rhs_bend[q_neighbor.id*3+dim_idx] += e.cotagent_w * Bp_bend_i[dim_idx] * bend_weight
+                    # print(f"RHS bend: {q_neighbor.id*3}--{q_neighbor.id*3+2}: {e.cotagent_w * Bp_bend_i[0] * bend_weight}; {e.cotagent_w * Bp_bend_i[1] * bend_weight}; {e.cotagent_w * Bp_bend_i[2] * bend_weight}")
                 
                 for dim_idx in range(3):
                     self.rhs[q_id*3+dim_idx] += -cot_w_sum * Bp_bend_i[dim_idx] * bend_weight
-                    # print(f"RHS bend: {q_id*3+row_idx}: {-cot_w_sum * Bp_bend_i[row_idx] * bend_weight}")
+                    self.rhs_bend[q_id*3+dim_idx] += -cot_w_sum * Bp_bend_i[dim_idx] * bend_weight
+                    # print(f"RHS bend: {q_id*3+dim_idx}: {-cot_w_sum * Bp_bend_i[dim_idx] * bend_weight}")
 
 
     @ti.kernel
-    def rhs_poistional(self):
+    def construct_rhs_poistional(self):
         for q_i in range(self.FIX_N):
             weight = self.positional_weight
             q_idx = self.fix_particle_ti[q_i]
@@ -477,14 +485,21 @@ class SoftBend2D:
             self.rhs[q_i_y] += weight * self.node_pos_init[q_idx].y
             self.rhs[q_i_z] += weight * self.node_pos_init[q_idx].z
 
+        for i in range(self.CON_N):
+            q_i = self.contact_particle_ti[i]
+            self.rhs[q_i*3] += self.positional_weight * (self.node_pos_init[q_i].x + self.contact_vel[i].x * self.dt)
+            self.rhs[q_i*3+1] += self.positional_weight * (self.node_pos_init[q_i].y + self.contact_vel[i].y * self.dt)
+            self.rhs[q_i*3+2] += self.positional_weight * (self.node_pos_init[q_i].z + self.contact_vel[i].z * self.dt)
+
 
     def local_solve(self):
         self.rhs.fill(0.)
         self.rhs_stretch.fill(0.)
-        self.rhs_mass()
-        self.rhs_shear()
-        self.rhs_bend()
-        self.rhs_poistional()
+        self.rhs_bend.fill(0.)
+        self.construct_rhs_mass()
+        self.construct_rhs_stretch()
+        self.construct_rhs_bend()
+        self.construct_rhs_poistional()
 
 
     @ti.kernel
@@ -497,9 +512,9 @@ class SoftBend2D:
 
     @ti.kernel
     def update_vel_pos(self):
-        # for idx in range(self.CON_N):
-        #     q_idx = self.contact_particle_ti[idx]
-        #     self.node_pos_new[q_idx] = self.node_pos[q_idx] + self.contact_vel[idx] * self.dt
+        for idx in range(self.CON_N):
+            q_idx = self.contact_particle_ti[idx]
+            self.node_pos_new[q_idx] = self.node_pos[q_idx] + self.contact_vel[idx] * self.dt
 
         for i in range(self.PARTICLE_N):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
@@ -508,10 +523,10 @@ class SoftBend2D:
             self.mesh.verts.pos[i] = self.node_pos[i]
             self.mesh.verts.vel[i] = self.node_vel[i]
 
-        # for idx in range(self.CON_N):
-        #     q_idx = self.contact_particle_ti[idx]
-        #     self.node_vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
-        #     self.mesh.verts.vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
+        for idx in range(self.CON_N):
+            q_idx = self.contact_particle_ti[idx]
+            self.node_vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
+            self.mesh.verts.vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
 
     
     def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
@@ -561,13 +576,12 @@ class SoftBend2D:
 
     def substep(self, step_num:int):
         self.construct_sn()
-        # np.savetxt(f"sn_{step_num:05d}.csv", self.sn.to_numpy(), fmt='%f', delimiter=",")
         self.warm_start()
         for itr in ti.static(range(self.solve_itr)):
-            print(f"Iteration: {itr} ======================================")
+            # print(f"Iteration: {itr} ------------------------------------")
             self.local_solve()
             rhs_np = self.rhs.to_numpy()
-            print(f"Rhs:\n{self.rhs_stretch.to_numpy().reshape(-1, 3)}")
+            # print(f"Rhs:\n{self.rhs_stretch.to_numpy().reshape(-1, 3)}")
             # Split rhs_np into x,y,z components
             rhs_np_x = rhs_np[0::3]
             rhs_np_y = rhs_np[1::3]
@@ -578,7 +592,7 @@ class SoftBend2D:
             node_pos_new_np_z = self.pre_fact_lhs_solve(rhs_np_z)
 
             self.update_pos_new(node_pos_new_np_x, node_pos_new_np_y, node_pos_new_np_z)
-            print(f"Node pos new:\n", self.node_pos_new.to_numpy())
+            # print(f"Node pos new:\n", self.node_pos_new.to_numpy().reshape(-1, 3))
         
         self.update_vel_pos()
 
@@ -594,12 +608,15 @@ class SoftBend2D:
 
 def main():
     class Soft(SoftBend2D):
-        def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=-9.8):
+        def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=-0.8):
             super().__init__(shape, E, nu, dt, density, g)
     
     soft = Soft([0.1, 0.1], 1.e3, 0.4, 0.01, 10e2)
     # soft.preset_gui([0.05, 0.1, 0.3], [0.05, 0.1, 0.], [0., 1., 0.])
     soft.preset_gui([-0.2, 0.05, 0.15], [0.05, 0.1, 0.], [0., 0., 1.])
+
+    q_border = soft.mesh.verts.border.to_numpy()
+    q_curvature_indices = np.where(q_border == 0)[0].tolist()
 
     soft.precomputation()
     # print("Inital lhs:\n", soft.lhs.to_numpy())
@@ -616,28 +633,26 @@ def main():
     # print(f"vfs: {soft.mesh.verts.v_f.to_numpy()}")
     # np.savetxt("mass.csv", soft.node_mass.to_numpy(), fmt='%f', delimiter=",")
     np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
-    # np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
+    np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
     # exit(0)
 
-    for itr in range(1):
+    for itr in range(100):
         print(f"Time Step: {itr} ======================================")
         soft.substep(itr)
         # print(f"Stretch stress: \n{soft.bp_sig.to_numpy()}")
-        
-        # v_g_np = soft.v_g.to_numpy()
-        # print(f"v_g: \n{np.hstack((v_g_np, np.linalg.norm(v_g_np, axis=1).reshape(-1,1)))}")
+        # print(f"RHS bend: \n{soft.rhs_bend.to_numpy().reshape(-1, 3)}")
+        print(f"Vertex normal: \n{np.hstack((soft.v_f.to_numpy()[q_curvature_indices], np.linalg.norm(soft.v_f.to_numpy()[q_curvature_indices], axis=1).reshape(-1,1)))}")
+        print(f"Stretch energy: {np.sum(soft.stretch_energy.to_numpy()):e}")
+        print(f"Bend energy: {np.sum(soft.bend_energy.to_numpy()):e}")
 
         soft.gui_show(True, False, itr)
-        time.sleep(0.1)
-        print(f"Node 0: {soft.node_pos[0]}")
-        print(f"Node 35: {soft.node_pos[35]}")
+        # time.sleep(0.1)
+        # print(f"Node 0: {soft.node_pos[0]}")
+        print(f"Node 12: {soft.node_pos[12]}")
 
     np.savetxt('rhs.csv', soft.rhs.to_numpy(), fmt='%f', delimiter=',')
-    np.savetxt('rhs_stretch.csv', soft.rhs_stretch.to_numpy(), fmt='%f', delimiter=',')
-        
-    """
-    Contact particles的RHS不符合预期,考虑stretch constraint
-    """
+    # np.savetxt('rhs_stretch.csv', soft.rhs_stretch.to_numpy(), fmt='%f', delimiter=',')
+
 
 if __name__ == "__main__":
     main()
