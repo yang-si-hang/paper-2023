@@ -13,7 +13,7 @@ os.chdir(script_dir)  # 修改当前工作目录
 # 添加根目录到 sys.path（跨目录导入模块）
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from Utilize.MathTaichi import svd_3x2_new
+from Utilize.MathTaichi import svd_3x2_new, kronecker_product
 
 
 @ti.kernel
@@ -40,13 +40,22 @@ def compute_F_grad(q:ti.types.matrix(3, 2, ti.f64), q_new:ti.types.matrix(3, 3, 
             Omega_uv[2, 0] = U[m,2]*V[n,0] / sig[0]
             Omega_uv[2, 1] = U[m,2]*V[n,1] / sig[1]
             dBp_df = U @ Omega_uv @ V.transpose()
-            dBp_df_n[:, n] = ti.Vector([dBp_df[0, 0], dBp_df[1, 0], dBp_df[2, 0], dBp_df[0, 1], dBp_df[1, 1], dBp_df[2, 1]])        # 列优先
+            dBp_df_n[:, n] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1], dBp_df[2, 0], dBp_df[2, 1]])
+        
         dBp_df_m = dBp_df_n @ f_Ai
-        dBp_dq[:, 0+m] = dBp_df_m[:, 0]
-        dBp_dq[:, 3+m] = dBp_df_m[:, 1]
-        dBp_dq[:, 6+m] = dBp_df_m[:, 2]
+        dBp_dq[:, 3*m+0] = dBp_df_m[:, 0]
+        dBp_dq[:, 3*m+1] = dBp_df_m[:, 1]
+        dBp_dq[:, 3*m+2] = dBp_df_m[:, 2]
 
     print(dBp_dq)
+
+    f_Ai_kron = ti.Matrix.zero(ti.f64, 9, 6)
+    for i, j in ti.ndrange(3, 3):
+        for k, l in ti.ndrange(3, 2):
+            f_Ai_kron[i*3 + k, j*2 + l] = 1. * f_Ai[k, l] 
+            
+    AT_dBp_dq = f_Ai_kron @ dBp_dq
+    print(AT_dBp_dq)
 
 
 def compute_F_difference(q0, q_deform):
@@ -70,7 +79,7 @@ def compute_F_difference(q0, q_deform):
             u, s, vh = np.linalg.svd(F)
             Bp_add = u @ np.array([[1., 0.], [0., 1.], [0., 0.]]) @ vh
 
-            dBp[:, 3*i+j] = (Bp_add - Bp).reshape(-1, order="F") / 1e-6
+            dBp[:, 3*i+j] = (Bp_add - Bp).reshape(-1) / 1.e-6
 
     print(dBp)
 

@@ -464,7 +464,7 @@ class SoftBend2D:
 
     def hessian_stretch(self):
         for i in range(self.ELEMENT_N):
-            f_Ai = self.F_A[i]
+            F_Ai = self.F_A[i]
             U, sig, V = svd_3x2_new(self.F[i])  # 替换为直接读取的方式,不要重复计算
 
             dBp_dq = ti.Matrix.zero(ti.f64, 6, 9)
@@ -478,15 +478,15 @@ class SoftBend2D:
                     Omega_uv[2, 1] = U[m,2]*V[n,1] / sig[1]
                     dBp_df = U @ Omega_uv @ V.transpose()
                     dBp_df_n[:, n] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1], dBp_df[2, 0], dBp_df[2, 1]])
-                dBp_df_m = f_Ai.transpose() @ dBp_df_n
+                dBp_df_m = dBp_df_n @ F_Ai
                 # 按照X，Y，Z分别拼接
                 dBp_dq[:, 3*m+0] = dBp_df_m[:, 0]
                 dBp_dq[:, 3*m+1] = dBp_df_m[:, 1]
                 dBp_dq[:, 3*m+2] = dBp_df_m[:, 2]
 
-            AT_dBp_dq = ti.Matrix.zero(ti.f64, 9, 9)
-            for m, n in ti.ndrange(3, 3):
-                AT_dBp_dq[m*3:m*3+3, n*3:n*3+3] = f_Ai.transpose() @ dBp_dq[m*2:m*2+2, n*3:n*3+3]
+        self.dBp_stretch.fill(0.)
+        for i in range(self.ELEMENT_N):
+
 
 
     def hessian_bend(self):
