@@ -19,34 +19,6 @@ def cotangent_ti(u, v):
 
 
 @ti.func
-def kronecker_product(A, B):
-    """Compute the Kronecker product of two matrices.
-
-    The Kronecker product is the tensor product of two matrices,
-    defined as the product of each element of the first matrix with the entire second matrix.
-
-    Parameters:
-        A (ti.Matrix): The first input matrix.
-        B (ti.Matrix): The second input matrix.
-
-    Returns:
-        ti.Matrix: The resulting Kronecker product matrix, with size (A.n * B.n, A.m * B.m).
-    """
-    m, n = A.n, A.m  # Rows and columns of A
-    p, q = B.n, B.m  # Rows and columns of B
-    mp, nq = m * p, n * q
-    result = ti.Matrix.zero(ti.f32, mp, nq)
-
-    for i in range(m):
-        for j in range(n):
-            for k in range(p):
-                for l in range(q):
-                    result[i * p + k, j * q + l] = A[i, j] * B[k, l]
-
-    return result
-
-
-@ti.func
 def sym_eig2x2(A, dt):
     """Compute the eigenvalues and right eigenvectors (Av=lambda v) of a 2x2 real symmetric matrix.
 

@@ -107,9 +107,12 @@ class SoftBend2D:
         self.Xg_inv = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)         # rest configuration
         self.F = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)              # deformation gradient
         self.F_A = ti.Matrix.field(2, 3, dtype=ti.f64, shape=self.ELEMENT_N)            # deformation gradient linearisation coefficient matrix
+        self.ele_u = ti.Matrix.field(3, 3, dtype=ti.f64, shape=self.ELEMENT_N)
+        self.ele_v = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)
+        self.stretch_stress = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_N)    # stretch stress       
         self.Bp_shear = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)       # stretch part
         self.Bp_shear_lim = ti.Matrix.field(3, 2, dtype=ti.f64, shape=self.ELEMENT_N)   # strain-limit part
-        self.stretch_stress = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_N)
+
         self.stretch_energy = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.stretch_lim_energy = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
 
@@ -124,7 +127,16 @@ class SoftBend2D:
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.rhs_stretch = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.rhs_bend = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
-        self.dBp_bend = ???
+
+        self.dBp_stretch = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.ELEMENT_N*3))
+        self.dBp_bend = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.EDGE_N*3))
+        self.g_hessian = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.PARTICLE_N*3))
+        self.dA = None      # dim: 3N*3N, 用于初始化
+        self.dL_dq = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.z = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.nablaE_dw_stretch = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.nablaE_dw_bend = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+
         self.pre_fact_lhs_solve = None
 
         self.fix_particle_list = list(range(11))
@@ -336,7 +348,7 @@ class SoftBend2D:
             # print(f"F_i:{F_i:e}")
 
             U, sig, V = svd_3x2_new(F_i)
-            self.stretch_stress[f_i] = sig
+            self.ele_u[f_i], self.ele_v[f_i], self.stretch_stress[f_i] = U, V, sig
             # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1], [0, 0]], ti.f64) @ V.transpose()
             self.stretch_energy[f_i] = 0.5 * self.stretch_weight[f_i] * ((sig[0]-1.)**2 + (sig[1]-1.)**2)
@@ -462,14 +474,15 @@ class SoftBend2D:
             self.node_vel[q_idx] = ti.Vector([0., 0., 0.], dt=ti.f64)
 
 
+    @ti.kernel
     def hessian_stretch(self):
+        self.dBp_stretch.fill(0.)
         for i in range(self.ELEMENT_N):
             F_Ai = self.F_A[i]
-            U, sig, V = svd_3x2_new(self.F[i])  # 替换为直接读取的方式,不要重复计算
+            U, sig, V = self.ele_u[i], self.stretch_stress[i], self.ele_v[i]
 
-            dBp_dq = ti.Matrix.zero(ti.f64, 6, 9)
+            dBp_dF = ti.Matrix.zero(ti.f64, 6, 6)
             for m in range(3):
-                dBp_df_n = ti.Matrix.zero(ti.f64, 6, 2)     # 按维度拼接
                 for n in range(2):
                     Omega_uv = ti.Matrix.zero(ti.f64, 3, 2)
                     Omega_uv[0, 1] = (U[m,0]*V[n,1] - U[m,1]*V[n,0]) / (sig[0] + sig[1])
@@ -477,20 +490,83 @@ class SoftBend2D:
                     Omega_uv[2, 0] = U[m,2]*V[n,0] / sig[0]
                     Omega_uv[2, 1] = U[m,2]*V[n,1] / sig[1]
                     dBp_df = U @ Omega_uv @ V.transpose()
-                    dBp_df_n[:, n] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1], dBp_df[2, 0], dBp_df[2, 1]])
-                dBp_df_m = dBp_df_n @ F_Ai
-                # 按照X，Y，Z分别拼接
-                dBp_dq[:, 3*m+0] = dBp_df_m[:, 0]
-                dBp_dq[:, 3*m+1] = dBp_df_m[:, 1]
-                dBp_dq[:, 3*m+2] = dBp_df_m[:, 2]
+                    dBp_dF[2*m+n, :] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1], dBp_df[2, 0], dBp_df[2, 1]])
 
-        self.dBp_stretch.fill(0.)
-        for i in range(self.ELEMENT_N):
+            idx1, idx2, idx3 = self.ele[i]
+            for m, n in ti.ndrange(3, 3):       # 3*3表示维数, 
+                dBp_dF_i = ti.Matrix.zero(ti.f64, 2, 2)
+                for k, l in ti.ndrange(2, 2):
+                    dBp_dF_i[k, l] = dBp_dF[2*m+k, 2*n+l]
+                AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ dBp_x / dF_x @ A
+
+                row_idx_vec = ti.Vector([idx1*3+m, idx2*3+m, idx3*3+m])
+                col_idx_vec = ti.Vector([idx1*3+n, idx2*3+n, idx3*3+n])
+                for k, l in ti.ndrange(3, 3):       # AT_dBp_dq_i's dim
+                    row_idx = row_idx_vec[k]
+                    col_idx = col_idx_vec[l]
+                    self.dBp_stretch[row_idx, col_idx] += AT_dBp_dq_i[k, l]
 
 
-
+    @ti.kernel
     def hessian_bend(self):
         self.dBp_bend.fill(0.)
+
+
+    def construct_g_hessian(self):
+        self.hessian_stretch()
+        self.hessian_bend()
+        self.dA = self.dBp_stretch.to_numpy() + self.dBp_bend.to_numpy()
+
+    
+    def compute_z(self, itr_num:ti.i32):
+        dL_dq_np = self.dL_dq.to_numpy()
+        z_np = self.z.to_numpy()
+        for itr in range(itr_num):
+            rhs_dA = self.dA @ z_np + dL_dq_np
+            z_new_np = self.pre_fact_lhs_solve(rhs_dA)
+            z_np = z_new_np
+        self.z.from_numpy(z_np)
+
+
+    def construct_L(self):
+        pass
+
+
+    @ti.kernel
+    def construct_energy_grad_params(self):
+        """ \partial ΔE / \partial w; w有两个参数: stretch weight & bend weight
+        """
+        for f_i in range(self.ELEMENT_N):
+            F_Ai = self.F_A[f_i]
+
+            idx1, idx2, idx3 = self.ele[f_i]
+            idx_vec = ti.Vector([idx1*3+i, idx2*3+i, idx3*3+i])
+            nabla_Ei_s = F_Ai.transpose() @ (self.F[f_i] - self.Bp_shear[f_i]).transpose()      # dim: 3*3
+            for i, j in ti.ndrange(3, 3):       # X，Y，Z维度按列排序；节点序号按行排序
+                q_idx = idx_vec[i]*3+j
+                self.nablaE_dw_stretch[q_idx] += nabla_Ei_s[i, j]
+
+        ti.mesh_local(self.mesh.edges.v_g, self.mesh.edges.bend_weight)
+        for e in self.mesh.edges:
+            if e.faces.size > 1:
+                v1, v2 = e.verts[0], e.verts[1]
+                tri1, tri2 = e.faces[0], e.faces[1]
+
+                m, n = 0, 0
+                for i in range(3):
+                    if tri1.verts[i].id != v1.id and tri1.verts[i].id != v2.id:
+                        m = i
+                    if tri2.verts[i].id != v1.id and tri2.verts[i].id != v2.id:
+                        n = i
+                v3_1, v3_2 = tri1.verts[m], tri2.verts[n]
+
+                nabla_Ei_b = self.cot_weight[e.id].transpose() @ (self.v_f[e.id] - self.Bp_bend[e.id]).transpose()
+                q_idx_vec = ti.Vector([v1.id*3, v2.id*3, v3_1.id*3, v3_2.id*3])
+
+
+
+
+
 
 
     def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
