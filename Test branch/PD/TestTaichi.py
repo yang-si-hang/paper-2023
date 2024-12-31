@@ -19,14 +19,14 @@ from Utilize.MathTaichi import svd_3x2_new
 
 @ti.kernel
 def test():
-    c = ti.Matrix.zero(ti.f64, 6, 6)
-    a = ti.Matrix.one(ti.f64, 3, 3)
-    b = ti.Matrix([[1.0, 2.0], [3.0, 4.0]], dt=ti.f64)
-    for i, j in ti.ndrange(3, 3):
-        for k, l in ti.ndrange(2, 2):
-            c[2*i+k, 2*j+l] = a[i,j] * b[k, l]
-    
-    print(c)
+    a = ti.Vector([1, 2, 3])
+    b = ti.Vector([4, 5])
+    print(a.outer_product(b))
+    print(b.outer_product(a))
+
+
+test()
+exit(0)
 
 
 @ti.kernel

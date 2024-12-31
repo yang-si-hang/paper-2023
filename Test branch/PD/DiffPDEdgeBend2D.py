@@ -132,7 +132,7 @@ class SoftBend2D:
         self.dBp_bend = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.EDGE_N*3))
         self.g_hessian = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N*3, self.PARTICLE_N*3))
         self.dA = None      # dim: 3N*3N, 用于初始化
-        self.dL_dq = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
+        self.dL_dq_param = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.z = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.nablaE_dw_stretch = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
         self.nablaE_dw_bend = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*3)
@@ -519,16 +519,19 @@ class SoftBend2D:
 
     
     def compute_z(self, itr_num:ti.i32):
-        dL_dq_np = self.dL_dq.to_numpy()
+        dL_dq_param_np = self.dL_dq_param.to_numpy()        # 此处的z是关于param的导数
         z_np = self.z.to_numpy()
         for itr in range(itr_num):
-            rhs_dA = self.dA @ z_np + dL_dq_np
+            rhs_dA = self.dA @ z_np + dL_dq_param_np
             z_new_np = self.pre_fact_lhs_solve(rhs_dA)
             z_np = z_new_np
         self.z.from_numpy(z_np)
 
 
     def construct_L(self):
+        """ construct series type of Loss
+        """
+        # self.dL_dq_param
         pass
 
 
@@ -536,17 +539,17 @@ class SoftBend2D:
     def construct_energy_grad_params(self):
         """ \partial ΔE / \partial w; w有两个参数: stretch weight & bend weight
         """
+        self.nablaE_dw_stretch.fill(0.)
         for f_i in range(self.ELEMENT_N):
-            F_Ai = self.F_A[f_i]
-
             idx1, idx2, idx3 = self.ele[f_i]
-            idx_vec = ti.Vector([idx1*3+i, idx2*3+i, idx3*3+i])
-            nabla_Ei_s = F_Ai.transpose() @ (self.F[f_i] - self.Bp_shear[f_i]).transpose()      # dim: 3*3
+            idx_vec = ti.Vector([idx1, idx2, idx3])
+            nabla_Ei_s = self.ele_volume[f_i] * self.F_A[f_i].transpose() @ (self.F[f_i] - self.Bp_shear[f_i]).transpose()      # dim: 3*3
             for i, j in ti.ndrange(3, 3):       # X，Y，Z维度按列排序；节点序号按行排序
-                q_idx = idx_vec[i]*3+j
+                q_idx = idx_vec[i]*3 + j
                 self.nablaE_dw_stretch[q_idx] += nabla_Ei_s[i, j]
 
-        ti.mesh_local(self.mesh.edges.v_g, self.mesh.edges.bend_weight)
+        self.nablaE_dw_bend.fill(0.)
+        ti.mesh_local(self.mesh.edges.voronoi)
         for e in self.mesh.edges:
             if e.faces.size > 1:
                 v1, v2 = e.verts[0], e.verts[1]
@@ -560,13 +563,24 @@ class SoftBend2D:
                         n = i
                 v3_1, v3_2 = tri1.verts[m], tri2.verts[n]
 
-                nabla_Ei_b = self.cot_weight[e.id].transpose() @ (self.v_f[e.id] - self.Bp_bend[e.id]).transpose()
-                q_idx_vec = ti.Vector([v1.id*3, v2.id*3, v3_1.id*3, v3_2.id*3])
+                nabla_Ei_b = e.voronoi * self.cot_weight[e.id].outer_product(self.v_f[e.id] - self.Bp_bend[e.id])   # dim: 4*3
+                q_idx_vec = ti.Vector([v1.id, v2.id, v3_1.id, v3_2.id])
+                for i, j in ti.ndrange(4, 3):
+                    q_idx = q_idx_vec[i]*3 + j
+                    self.nablaE_dw_bend[q_idx] += nabla_Ei_b[i, j]
 
+    
+    def compute_dL_dparam(self):
+        """ \partial L / \partial w
+        """
+        self.construct_L()
+        self.construct_g_hessian()
+        self.compute_z(10)
+        self.construct_energy_grad_params()
 
-
-
-
+        z_np = self.z.to_numpy()
+        self.dparam_stretch = z_np.dot(self.nablaE_dw_stretch.to_numpy())
+        self.dparam_bend = z_np.dot(self.nablaE_dw_bend.to_numpy())
 
 
     def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
