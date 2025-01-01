@@ -21,12 +21,14 @@ from Utilize.MathTaichi import svd_3x2_new
 def test():
     a = ti.Vector([1, 2, 3])
     b = ti.Vector([4, 5])
+    c = ti.Matrix([[1, 2], [3, 4], [5, 6]])
     print(a.outer_product(b))
     print(b.outer_product(a))
+    print(c.norm())
 
 
 test()
-exit(0)
+exit()
 
 
 @ti.kernel
