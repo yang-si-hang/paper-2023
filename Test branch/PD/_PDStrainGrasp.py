@@ -4,7 +4,8 @@ Rewrite the exerted force in the Implicit Euler integration.
 - The PD simulation is motivated by grasping node with a constant velocity.
 """
 
-
+import os
+import sys
 import taichi as ti
 ti.init(arch=ti.gpu, default_fp=ti.f64, debug=True)
 import numpy as np
@@ -12,24 +13,34 @@ from scipy import sparse
 from scipy.spatial import Delaunay
 
 
+# 设置工作目录为当前脚本所在目录
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(script_dir)  # 修改当前工作目录
+
+# 添加根目录到 sys.path（跨目录导入模块）
+root_path = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(root_path)
+
+
 @ti.data_oriented
 class SoftObject:
     def __init__(self, shape, seed_size):
         self.shape = shape
         self.seed_size = seed_size
-        self.dt = 1. / 480
+        self.dt = 1. / 100
         self.rho = 1.e1
-        self.E, self.nu = 5.e2, 0.1
+        self.E, self.nu = 5.e3, 0.4
         self.area_sum = ti.field(dtype=ti.f64, shape=())
         self.positional_weight = 1.e4
         self.grasp_mass = 1.e4
         self.solve_iteration = 10
-        self.GRASP_VEL = ti.Vector([0.1, 0.])
         self.dim = len(shape)
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
         node_np, edge_np, element_np = self.mesh_object()
         self.edge_np = edge_np
+        np.savetxt("node_pos_init.csv", node_np, fmt="%e", delimiter=",")
+        np.savetxt("ele_np.csv", element_np, fmt="%d", delimiter=",")
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = edge_np.shape[0]
@@ -68,6 +79,9 @@ class SoftObject:
 
         self.fix_particle_list = self.fix_particle_No()
         self.grasp_particle_list, self.grasp_ele_list = self.grasp_particle_No()
+
+        self.grasp_vel = ti.Vector.field(2, dtype=ti.f64, shape=len(self.grasp_particle_list))
+        self.grasp_vel[0] = ti.Vector([0.01, -0.0])
 
         self.construct_B()
         self.construct_volume_weight()
@@ -334,8 +348,8 @@ class SoftObject:
             self.sn[idx2] = pos[1] + dt * vel[1]
         
         for i in ti.static(self.grasp_particle_list):
-            self.sn[i*dim] += self.GRASP_VEL[0] * dt
-            self.sn[i*dim+1] += self.GRASP_VEL[1] * dt
+            self.sn[i*dim] += self.grasp_vel[0].x * dt
+            self.sn[i*dim+1] += self.grasp_vel[0].y * dt
     
     
     @ti.kernel
@@ -439,7 +453,7 @@ class SoftObject:
     @ti.kernel
     def update_vel_pos(self):
         for i in ti.static(self.grasp_particle_list):
-            self.node_pos_new[i] = self.node_pos[i] + self.GRASP_VEL * self.dt
+            self.node_pos_new[i] = self.node_pos[i] + self.grasp_vel[0] * self.dt
 
         for i in range(self.PARTICLE_NUM):
             self.node_vel[i] = (self.node_pos_new[i] - self.node_pos[i]) / self.dt
@@ -544,7 +558,7 @@ def main():
             super().__init__(shape, seed_size)
 
     # soft_obj = MyObject(shape=[0.1, 0.1], seed_size=0.1/11)
-    soft_obj = MyObject(shape=[0.4, 0.2], seed_size=0.02)
+    soft_obj = MyObject(shape=[0.2, 0.2], seed_size=0.02)
     soft_obj.preset_gui([0.2+0.2, 0.6, 0.], [0.2+0.2, 0., 0.])
 
     soft_obj.precomputation()
@@ -554,9 +568,19 @@ def main():
     # soft_obj.init_vel()
 
     for i in range(500):
+        print(f"Step {i} ------------------------------------")
         soft_obj.substep(i)
+        print(f"Grasp Pos: {soft_obj.node_pos[soft_obj.grasp_particle_list[0]]}")
         # for g_idx in ti.static(soft_obj.grasp_particle_list):
         #     print('Grasp pos:',soft_obj.node_pos[g_idx].x, soft_obj.node_pos[g_idx].y)
+
+    soft_obj.grasp_vel[0] = ti.Vector([0., 0.])
+    for i in range(100):
+        print(f"Step {i} ------------------------------------")
+        soft_obj.substep(i)
+        print(f"Grasp Pos: {soft_obj.node_pos[soft_obj.grasp_particle_list[0]]}")
+
+    np.savetxt("node_pos_final.csv", soft_obj.node_pos.to_numpy(), fmt="%e", delimiter=",")
 
 
 if __name__ == '__main__':
