@@ -50,16 +50,12 @@ def main():
             frame_count += 1
 
     while True:
-        print("start====================")
+        # print("start====================")
         start_time = cv2.getTickCount()
         frames: FrameSet = pipeline.wait_for_frames(100)
         if frames is None:
             print(f"frames is None")
-            time_get = cv2.getTickCount()
             continue
-        else:
-            time_get = cv2.getTickCount()
-            print(f"vision data get time: {(cv2.getTickCount() - start_time) / cv2.getTickFrequency()}s")
         
         # 获取颜色和深度帧
         color_frame = frames.get_color_frame()
@@ -71,8 +67,6 @@ def main():
         color_image = frame_to_bgr_image(color_frame)
         depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(depth_frame.get_height(), depth_frame.get_width())
         depth_data = depth_data.astype(np.float32) * depth_frame.get_depth_scale()
-        time_vision = cv2.getTickCount()
-        print(f"vision data process time: {(cv2.getTickCount() - time_get) / cv2.getTickFrequency()}s")
         
         # HSV的红色掩码
         hsv_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
@@ -87,6 +81,8 @@ def main():
         # 提取点云
         indices = np.where(red_mask > 0)
         z_values = depth_data[indices]
+        colors = color_image[indices]
+        colors = colors[:, ::-1]  # BGR -> RGB
 
         fx, fy = 600, 600
         cx, cy = depth_frame.get_width() / 2, depth_frame.get_height() / 2
@@ -97,16 +93,20 @@ def main():
         z_points = z_values
 
         point_cloud = np.stack((x_points, y_points, z_points), axis=-1)
-        # point_cloud = [( (x - cx) * z / fx, (y - cy) * z / fy, z ) for y, x, z in zip(indices[0], indices[1], z_values)]
-        time_pcd = cv2.getTickCount()
-        print(f"point cloud get time: {(cv2.getTickCount() - time_vision) / cv2.getTickFrequency()}s")
         
-        # 保存点云
+        # 使用open3d显示点云
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(point_cloud)
+        pcd.colors = o3d.utility.Vector3dVector(colors / 255.0)     # 颜色值需要归一化
+        # o3d.visualization.draw_geometries([pcd], window_name="Point Cloud Visualization")
         # o3d.io.write_point_cloud("red_soft.ply", pcd)
-        time_save = cv2.getTickCount()
-        print(f"point cloud save time: {(cv2.getTickCount() - time_save) / cv2.getTickFrequency()}s")
+
+        downsampled_point_cloud = pcd.voxel_down_sample(10)
+
+        # 统计滤波去噪
+        cl, ind = downsampled_point_cloud.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+        filtered_point_cloud = downsampled_point_cloud.select_by_index(ind)
+        # o3d.visualization.draw_geometries([filtered_point_cloud], window_name="Filtered Point Cloud")
 
         display_image = cv2.bitwise_and(color_image, color_image, mask=red_mask)
         end_time = cv2.getTickCount()
@@ -115,11 +115,12 @@ def main():
         # 显示结果
         cv2.imshow("Red Masked Object", display_image)
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            o3d.io.write_point_cloud("red_soft.ply", pcd)
+            o3d.io.write_point_cloud("red_soft_filtered.ply", filtered_point_cloud)
+            o3d.io.write_point_cloud("red_soft_downsampled.ply", downsampled_point_cloud)
             break
-        time_show = cv2.getTickCount()
-        print(f"vision data show time: {(cv2.getTickCount() - time_show) / cv2.getTickFrequency()}s")
 
-        print(f"total time: {(cv2.getTickCount() - start_time) / cv2.getTickFrequency()}s")
+        # print(f"total time: {(cv2.getTickCount() - start_time) / cv2.getTickFrequency()}s")
     pipeline.stop()
 
 if __name__ == "__main__":
