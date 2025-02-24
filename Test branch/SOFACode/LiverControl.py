@@ -20,8 +20,13 @@ os.chdir(script_dir)                                            # 改变当前�
 POINTS_NUM = 1
 
 def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
-    """
-    Compress action vector in a safe range
+    """Compress action vector in a safe range
+    Args:
+        vec (npt.NDArray): the action vector
+        max_length (float, optional): the maximum length of the action vector. Defaults to 3.e-4.
+    
+    Returns:
+        vec (npt.NDArray): the compressed action vector
     """
     length = np.linalg.norm(vec)
 
@@ -66,7 +71,8 @@ def createScene(root):
     obj.addObject('TetrahedronSetGeometryAlgorithms', name='geomalgo')#, tempate='Vec3')
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')#, massDensity='0.1')
 
-    obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='3 39 64')
+    # obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='3 39 64')
+    obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='39 61 63 64')
     obj_fixed.drawSize = 0.005
 
     obj.addObject('TetrahedronFEMForceField', name='FEM', youngModulus='5.e4', poissonRatio='0.45', method='large')
@@ -74,7 +80,8 @@ def createScene(root):
     # obj.addObject('LinearSolverConstraintCorrection', solverName='@linearsolver')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
-    obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[85])
+    # obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[85])
+    obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[86])
 
     visu = obj.addChild('visual')
     visu.addObject('MeshOBJLoader', name='loader', filename='Mesh/liver-smooth.obj', scale='0.05', flipNormals='0')
@@ -85,12 +92,12 @@ def createScene(root):
 
 
 def add_move(handle, dt, movement):
-    """
-    Use `LinearMovemetConstraint` to add a simulation step-wise movement
-    :param handle: The node of the object
-    :param dt:
-    :param movement: The additional movement
-    :return:
+    """Use `LinearMovemetConstraint` to add a simulation step-wise movement
+
+    Args:
+        handle (_type_): The node of the object
+        dt (_type_): _description_
+        movement (_type_): The additional movement
     """
     times_array = handle.findData('keyTimes').value
     movements_array = handle.findData('movements').value
@@ -128,12 +135,14 @@ class MyObject(SoftObject):
         self.dL_dy_m = ti.Vector.field(3, dtype=ti.f64, shape=self.PARTICLE_NUM)
         self.read_desired_pos()
 
+        print(f"Marker index: {self.dots_idx}")
+
 
     def read_desired_pos(self):
         for i, idx in enumerate(self.dots_idx):
             self.dot_pos_init[i] = self.node_init_pos[idx]
             self.dot_pos[i] = self.node_init_pos[idx]
-            self.dot_pos_desired[i] = self.node_init_pos[idx] + ti.Vector([0.02, 0.01, 0.01])
+            self.dot_pos_desired[i] = self.node_init_pos[idx] + ti.Vector([0.02, 0.0, 0.0])
         print(f"Initial position: {self.dot_pos_init.to_numpy()}")
         print(f"Desired position: {self.dot_pos_desired.to_numpy()}")
 
@@ -144,9 +153,13 @@ class MyObject(SoftObject):
 
 
     def construct_L_sofa(self, dot_sofa:npt.NDArray):
-        """
-        :param dot_sofa: 从SOFA中读取的节点位置
-        :return:
+        """_summary_
+
+        Args:
+            dot_sofa (npt.NDArray): 从SOFA中读取的节点位置
+
+        Returns:
+            _type_: _description_
         """
         dim = self.dim
         error = np.zeros((POINTS_NUM, dim), dtype=np.float64)
@@ -158,8 +171,9 @@ class MyObject(SoftObject):
             error[i] = error_ti.to_numpy()
             for d in range(dim):
                 self.dL_dq[idx*dim+d] += 2 * error_ti[d]
-
+            
         return error, np.linalg.norm(error, axis=1)**2
+
 
     def diff_pd(self, itr_num:int):
         self.partial_p()
@@ -183,6 +197,7 @@ class MyObject(SoftObject):
 
 
     def substep(self, step_num:int):
+        self.construct_desired_pos()
         self.construct_sn()
         self.warm_start()
         for itr in ti.static(range(self.solve_iteration)):
@@ -194,6 +209,7 @@ class MyObject(SoftObject):
 
         self.update_vel_pos()
         self.update_dot_pos()
+        # self.gui_show(self.window, self.canvas, self.scene, SHOW_FLAG=True, WRITE_FLAG=False, itr_num=step_num)
 
 
     def actuate_action(self, contact_speed):
@@ -206,17 +222,19 @@ class MyObject(SoftObject):
         self.diff_pd(10)
         self.compute_grad_y()
 
-        return loss_tmp
+        return error
 
 
 def main():
-    contact_idx = [85]
-    marker_idx = [138]
-    fix_idx = [3, 39, 64]
+    contact_idx = [86]
+    marker_idx = [0]
+    fix_idx = [39, 61, 63, 64]
     obj_shape = [0.1, 0.02, 0.1]          # 作为一个占位符，此处无用
     learning_rate = 8.e1
 
     soft_obj = MyObject(obj_shape, 0.01, 'Mesh/liver.msh', marker_idx, contact_idx)
+    # soft_obj.preset_gui(camera_pos=[0.1, 0.2, 0.05], camera_target=[-0.1, 0., 0.05])
+
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csr_matrix(lhs_np)
@@ -241,6 +259,7 @@ def main():
     contact_pos_np = np.zeros((len(contact_idx), 3))
     dots_pos_sofa = dots_pos_sofa_init
     dots_pos_model = soft_obj.dot_pos.to_numpy()
+    # print(f"dot pos: {dots_pos_model}")
     dots_sofa_list = []
     delta_pos_list = []
     delta_pos_model_list = []
@@ -249,11 +268,11 @@ def main():
     contact_pos_list = []
     sofa_contact_pos_list = []
 
-    for step in range(200):
+    for step in range(100):
         # print(f'Time：{root.time.value:.3f}---------------------------------------')
         print(f"Step: {step}---------------------------------------")
         dots_pos_sofa_new = get_marker_pos(dofs, marker_idx)
-        print(f'Detected points position: \n{dots_pos_sofa_new}')
+        print(f'Detected marker position: {dots_pos_sofa_new}')
 
         delta_pos = dots_pos_sofa_new - dots_pos_sofa
         dots_pos_sofa = dots_pos_sofa_new
@@ -262,13 +281,16 @@ def main():
         dots_pos_model_new = soft_obj.dot_pos.to_numpy()
         delta_pos_model = dots_pos_model_new - dots_pos_model
         dots_pos_model = copy.deepcopy(dots_pos_model_new)
-        loss_tmp = soft_obj.compute_gradient(dots_pos_sofa_new)
+        error_tmp = soft_obj.compute_gradient(dots_pos_sofa_new)
+        loss_tmp = np.linalg.norm(error_tmp) ** 2
+        print(f"Model marker position: {dots_pos_model}")
 
         end_speed_np = -learning_rate * soft_obj.dL_dy_m[soft_obj.contact_particles_list[0]].to_numpy()
         end_movement_np = action_compress(end_speed_np * soft_obj.dt, 2.e-3)
+        # end_movement_np = np.array([0., 0., 0.])
 
         soft_obj.actuate_action(end_movement_np / soft_obj.dt)
-        print(f'Loss items: {loss_tmp}; Loss sum: {np.sum(loss_tmp)}')
+        print(f'Error items: {error_tmp}; Loss sum: {loss_tmp}')
         print(f'The tool movement: {end_movement_np.tolist()}; movement length: {np.linalg.norm(end_movement_np)}')
 
         add_move(linear_mov, dt, end_movement_np)
@@ -284,7 +306,7 @@ def main():
         delta_pos_model_list.append(delta_pos_model.flatten())
         loss_list.append(loss_tmp)
         rob_movement_list.append(end_movement_np.tolist())
-        contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
+        contact_pos_list.append(soft_obj.node_pos[contact_idx[0]].to_numpy())       # 对于只有一个接触点的情况
         sofa_contact_pos_list.append(contact_pos_np.flatten())
 
     np.savetxt('dots_sofa_list.csv', np.array(dots_sofa_list), fmt='%.10f', delimiter=',')

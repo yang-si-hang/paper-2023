@@ -110,6 +110,7 @@ def get_marker_pos(handle, marker_idx):
         marker_pos[i] = pos_tmp
     return marker_pos
 
+
 def save_pos(handle, path):
     node_pos = handle.findData('position').value
     np.savetxt(f'{path}', node_pos, '%.6f', delimiter=',')
@@ -297,6 +298,8 @@ def main():
             contact_pos_np[i, :] = copy.deepcopy(dofs.findData('position').value[q_idx])
             print(f'Contact position {q_idx}: {contact_pos_np[i, :]}')
 
+        save_pos(dofs, script_dir + f'/data/node_end_pos{step:03d}.csv')
+
         # 写入数据
         dots_sofa_list.append(dots_pos_sofa.flatten())
         # delta_pos_list.append(delta_pos.flatten())
@@ -306,14 +309,14 @@ def main():
         contact_pos_list.append(soft_obj.node_pos[15].to_numpy())
         sofa_contact_pos_list.append(contact_pos_np.flatten())
 
-    np.savetxt('dots_sofa_list.csv', np.array(dots_sofa_list), fmt='%.10f', delimiter=',')
-    # np.savetxt('delta_pos_list.csv', np.array(delta_pos_list), fmt='%.10f', delimiter=',')
-    # np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
-    np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10f', delimiter=',')
-    np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
-    np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
-    np.savetxt('sofa_contact_pos_list.csv', np.array(sofa_contact_pos_list), fmt='%.10f', delimiter=',')
-    save_pos(dofs, script_dir + '/node_end_pos.csv')
+    # np.savetxt('dots_sofa_list.csv', np.array(dots_sofa_list), fmt='%.10f', delimiter=',')
+    # # np.savetxt('delta_pos_list.csv', np.array(delta_pos_list), fmt='%.10f', delimiter=',')
+    # # np.savetxt('delta_pos_model_list.csv', np.array(delta_pos_model_list), fmt='%.10f', delimiter=',')
+    # np.savetxt('loss_list.csv', np.array(loss_list), fmt='%.10f', delimiter=',')
+    # np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
+    # np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
+    # np.savetxt('sofa_contact_pos_list.csv', np.array(sofa_contact_pos_list), fmt='%.10f', delimiter=',')
+    # save_pos(dofs, script_dir + '/node_end_pos.csv')
 
     # Sofa.Gui.GUIManager.MainLoop(root)
     # Sofa.Gui.GUIManager.closeGUI()

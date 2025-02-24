@@ -1,8 +1,8 @@
 """
-DiffPD的3D版本,用于3D的控制
-created at 2024-09-15 by hsy
+DiffPD的3的矩阵简化版本,用于3D的控制
+created at 202502-24 by hsy
 """
-import os
+
 import time
 import taichi as ti
 ti.init(arch=ti.gpu, device_memory_GB=6.0, default_fp=ti.f64, debug=True)
@@ -11,10 +11,6 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 # from GenMsh import generate_msh
-
-# 设置工作目录为当前脚本所在目录
-script_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(script_dir)  # 修改当前工作目录
 
 
 def cal_tet_volume(vertices):
@@ -134,7 +130,7 @@ def qr_solve9(A, b):
 
 @ti.data_oriented
 class SoftObject:
-    def __init__(self, shape, seed_size, mesh_file, contact_list):
+    def __init__(self, shape, seed_size, mesh_file, fixed_list:list, contact_list:list, params:tuple=(5.e4, 0.45)):
         self.shape = shape
         self.seed_size = seed_size
         self.dt = 1./100
@@ -142,7 +138,7 @@ class SoftObject:
         self.volume_sum = ti.field(ti.f64, shape=())
         self.positional_weight = 1.e8
         self.solve_iteration = int(10)
-        self.E, self.nu = 5.e4, 0.45
+        self.E, self.nu = params
         self.dim = len(shape)
         self.mu , self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
 
@@ -211,7 +207,7 @@ class SoftObject:
         self.dL_dq.fill(0.)
         self.z.fill(0.)
 
-        self.fix_particle_list = [39, 61, 63, 64]
+        self.fix_particle_list = fixed_list #[39, 61, 63, 64]
         self.contact_particles_list = contact_list
         
         # self.fix_particle_list = self.fix_particle_No()
@@ -400,6 +396,22 @@ class SoftObject:
     def construct_L(self):
         for q_idx in self.contact_particles_list:
             self.dL_dq[q_idx*self.dim+0] = 1.
+
+
+    def construct_L_marker(self):
+        # 暂时只考虑一个marker点
+        N = 1
+        error = np.zeros((N, self.dim), dtype=np.float64)
+        self.dL_dq.fill(0.)
+        for i, idx in enumerate(self.marker_list):
+            desired_pos = self.marker_pos_desired[i]
+            current_pos = self.node_pos[idx]
+            error_ti = current_pos - desired_pos
+            error[i] = error_ti.to_numpy()
+            for d in range(self.dim):
+                self.dL_dq[idx*self.dim+d] += 2 * error_ti[d]
+
+        return error
 
 
     @ti.kernel
@@ -694,6 +706,15 @@ class SoftObject:
             self.grad_finite[q_idx] = (self.node_pos[q_idx] - self.node_init_pos[q_idx]) / self.delta
 
 
+    def cal_gradient(self):
+        error = self.construct_L_marker()
+        self.loss = np.linalg.norm(error) ** 2
+        self.diff_pd(10)
+        self.cal_ygrad()
+
+        return error
+
+
     def substep(self, step_num:ti.i32):
         self.construct_desired_pos()
         self.construct_sn()
@@ -800,21 +821,49 @@ def main():
     cube_shape = [0.1, 0.02, 0.1]
     mesh_file = 'Mesh/liver.msh'
     class MyObject(SoftObject):
-        def __init__(self, shape, seed_size, file, contact_list):
-            super().__init__(shape, seed_size, file, contact_list)
+        def __init__(self, shape, seed_size, file):
+            super().__init__(shape, seed_size, file)
 
-    soft_obj = MyObject(shape=cube_shape, seed_size=0.01, file=mesh_file, contact_list=[86])
+    soft_obj = MyObject(shape=cube_shape, seed_size=0.01, file=mesh_file)
     soft_obj.preset_gui(camera_pos=[0.1, 0.2, 0.05], camera_target=[0.1, 0., 0.05])
+    soft_obj.marker_list = marker_list
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
-    s_lhs_np = sparse.csr_matrix(lhs_np)
+    s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
     soft_obj.construct_L()
 
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
-    np.savetxt('lhs_true.csv', lhs_np, fmt='%.6f', delimiter=',')
-    exit(0)
+    # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
+    # exit(0)
+
+    for step in range(100):
+        # print(f'Time：{root.time.value:.3f}---------------------------------------')
+        print(f"Step: {step}---------------------------------------")
+        # dots_pos_sofa_new = get_marker_pos(dofs, marker_idx)
+        print(f'Detected marker position: {soft_obj.node_pos[marker_list[0]]}')
+
+        soft_obj.substep(1)
+        dots_pos_model_new = soft_obj.dot_pos.to_numpy()
+        delta_pos_model = dots_pos_model_new - dots_pos_model
+        dots_pos_model = copy.deepcopy(dots_pos_model_new)
+        error_tmp = soft_obj.compute_gradient(dots_pos_sofa_new)
+        loss_tmp = np.linalg.norm(error_tmp) ** 2
+
+        end_speed_np = -learning_rate * soft_obj.dL_dy_m[soft_obj.contact_particles_list[0]].to_numpy()
+        end_movement_np = action_compress(end_speed_np * soft_obj.dt, 2.e-3)
+
+        soft_obj.actuate_action(end_movement_np / soft_obj.dt)
+        print(f'Error items: {error_tmp}; Loss sum: {loss_tmp}')
+        print(f'The tool movement: {end_movement_np.tolist()}; movement length: {np.linalg.norm(end_movement_np)}')
+
+        add_move(linear_mov, dt, end_movement_np)
+        Sofa.Simulation.animate(root, dt)
+
+        for i, q_idx in enumerate(contact_idx):
+            contact_pos_np[i, :] = copy.deepcopy(dofs.findData('position').value[q_idx])
+            print(f'Contact position {q_idx}: {contact_pos_np[i, :]}')
 
     time_list = []
 
@@ -822,7 +871,6 @@ def main():
         time_start = time.time()
         soft_obj.substep(i)
         soft_obj.diff_pd(10)
-        print(f"Node 0 position: {soft_obj.node_pos[0]}")
         # soft_obj.cal_ygrad()
         # soft_obj.diff_data()
         time_end = time.time()

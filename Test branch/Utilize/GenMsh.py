@@ -149,9 +149,16 @@ def generate_cube_msh(file_path:str, cube_shape:list, axis_seed:list):
     write_msh2(file_path, points, cells_np[:,1:])
 
 
-def read_elements_from_msh2(file_path:str)->Tuple[List[set], List[set]]:
-    """
-    读取 .msh 文件中的四面体元素。
+def read_elements_from_msh2(file_path:str)->Tuple[List[tuple], List[tuple]]:
+    """读取 .msh 文件中的四面体元素
+
+    Args:
+        file_path (str): .msh 文件路径
+
+    Returns:
+        Tuple[List[tuple], List[tuple]]: 
+            nodes: [(node_id, x, y, z), ...]
+            elements: [(element_id, [n1, n2, n3, n4]), ...]
     """
     nodes = []
     elements = []
