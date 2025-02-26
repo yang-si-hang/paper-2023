@@ -1,21 +1,25 @@
 """
-使用liver.msh作为几何网格文件,控制其中某个节点的运动,以到达期望位置，并记录该节点的位置
+使用liver.msh作为几何网格文件,控制其中某个节点的运动,以到达期望位置,并记录该节点的位置
 created at 2024-09-15 by hsy
 """
-
 import Sofa
 import SofaRuntime
 import Sofa.Gui
 import Sofa.SofaGL
-import os
+import os, sys
 import numpy as np
 import numpy.typing as npt
 import copy
+import meshio
 from DiffPDModelLiver import *
-
 
 script_dir = os.path.dirname(os.path.abspath(__file__))         # 获取脚本文件所在的绝对路径
 os.chdir(script_dir)                                            # 改变当前工作目录到脚本文件所在目录
+
+root_path = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(root_path)
+from Utilize.GenMsh import read_elements_from_msh2
+
 
 POINTS_NUM = 1
 
@@ -72,7 +76,7 @@ def createScene(root):
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')#, massDensity='0.1')
 
     # obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='3 39 64')
-    obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='39 61 63 64')
+    obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='15 83 80 16 78 17 77 11 79 10 18 7 19 23 20 24 125 59 68 63 57 60 64 66 65 67 124 9 12 8')
     obj_fixed.drawSize = 0.005
 
     obj.addObject('TetrahedronFEMForceField', name='FEM', youngModulus='5.e4', poissonRatio='0.45', method='large')
@@ -81,7 +85,7 @@ def createScene(root):
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
     # obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[85])
-    obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[86])
+    obj_linear_move = obj.addObject('LinearMovementConstraint', name='cnt', template="Vec3", indices=[101])
 
     visu = obj.addChild('visual')
     visu.addObject('MeshOBJLoader', name='loader', filename='Mesh/liver-smooth.obj', scale='0.05', flipNormals='0')
@@ -89,6 +93,10 @@ def createScene(root):
     visu.addObject('BarycentricMapping', name='visual_mapping', input='@../dofs', output='@visual_model')
 
     surf = obj.addChild('surface')
+
+    # 输出Sofa设置信息
+    Sofa.msg_info("Scene", f"Contact indices: {obj_linear_move.indices.value}")
+    Sofa.msg_info("Scene", f"Fixed indices: {obj_fixed.indices.value}")
 
 
 def add_move(handle, dt, movement):
@@ -117,9 +125,26 @@ def get_marker_pos(handle, marker_idx):
         marker_pos[i] = pos_tmp
     return marker_pos
 
+
 def save_pos(handle, path):
     node_pos = handle.findData('position').value
     np.savetxt(f'{path}', node_pos, '%.6f', delimiter=',')
+
+
+def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
+    """Save the node position to a .vtu file
+
+    Args:
+        mesh_file (str): The initial mesh file name
+        pos (npt.NDArray): The node position
+        write_name (istrnt): The write file name
+    """
+    _, eles = read_elements_from_msh2(mesh_file)
+    cells = np.array([node_ids for (_, node_ids) in eles]) - 1
+
+    cells_write = [("tetra", cells)]
+    mesh = meshio.Mesh(points=pos, cells=cells_write)
+    mesh.write(f"data/{write_name}")
 
 
 class MyObject(SoftObject):
@@ -142,7 +167,7 @@ class MyObject(SoftObject):
         for i, idx in enumerate(self.dots_idx):
             self.dot_pos_init[i] = self.node_init_pos[idx]
             self.dot_pos[i] = self.node_init_pos[idx]
-            self.dot_pos_desired[i] = self.node_init_pos[idx] + ti.Vector([0.02, 0.0, 0.0])
+            self.dot_pos_desired[i] = self.node_init_pos[idx] + ti.Vector([-0.04, 0.06, 0.01])
         print(f"Initial position: {self.dot_pos_init.to_numpy()}")
         print(f"Desired position: {self.dot_pos_desired.to_numpy()}")
 
@@ -159,7 +184,9 @@ class MyObject(SoftObject):
             dot_sofa (npt.NDArray): 从SOFA中读取的节点位置
 
         Returns:
-            _type_: _description_
+            Tuple:
+                - error (npt.NDArray): 误差
+                - loss (npt.NDArray): 损失
         """
         dim = self.dim
         error = np.zeros((POINTS_NUM, dim), dtype=np.float64)
@@ -226,9 +253,12 @@ class MyObject(SoftObject):
 
 
 def main():
-    contact_idx = [86]
+    # 测试过的接触点数据: 101, 102
+    contact_idx = [101]
     marker_idx = [0]
     fix_idx = [39, 61, 63, 64]
+    fixed_list = [15, 83, 80, 16, 78, 17, 77, 11 ,79, 10, 18, 7, 19, 23, 20, 24, 
+                  125, 59, 68, 63, 57, 60, 64, 66, 65, 67, 124, 9, 12, 8]
     obj_shape = [0.1, 0.02, 0.1]          # 作为一个占位符，此处无用
     learning_rate = 8.e1
 
@@ -268,11 +298,13 @@ def main():
     contact_pos_list = []
     sofa_contact_pos_list = []
 
-    for step in range(100):
-        # print(f'Time：{root.time.value:.3f}---------------------------------------')
+    for step in range(150):
         print(f"Step: {step}---------------------------------------")
         dots_pos_sofa_new = get_marker_pos(dofs, marker_idx)
         print(f'Detected marker position: {dots_pos_sofa_new}')
+
+        sofa_pos_tmp = dofs.findData('position').value
+        save_vtu('Mesh/liver.msh', sofa_pos_tmp, f'sofa_pos_{step:04d}.vtu')
 
         delta_pos = dots_pos_sofa_new - dots_pos_sofa
         dots_pos_sofa = dots_pos_sofa_new
@@ -285,8 +317,11 @@ def main():
         loss_tmp = np.linalg.norm(error_tmp) ** 2
         print(f"Model marker position: {dots_pos_model}")
 
+        node_pos_tmp = soft_obj.node_pos.to_numpy()
+        # save_vtu('Mesh/liver.msh', node_pos_tmp, f'model_pos_{step}.vtu')
+
         end_speed_np = -learning_rate * soft_obj.dL_dy_m[soft_obj.contact_particles_list[0]].to_numpy()
-        end_movement_np = action_compress(end_speed_np * soft_obj.dt, 2.e-3)
+        end_movement_np = action_compress(end_speed_np * soft_obj.dt, 1.5e-3)
         # end_movement_np = np.array([0., 0., 0.])
 
         soft_obj.actuate_action(end_movement_np / soft_obj.dt)
@@ -316,7 +351,7 @@ def main():
     np.savetxt('rob_movement_list.csv', np.array(rob_movement_list), fmt='%.10f', delimiter=',')
     np.savetxt('contact_pos_list.csv', np.array(contact_pos_list), fmt='%.10f', delimiter=',')
     np.savetxt('sofa_contact_pos_list.csv', np.array(sofa_contact_pos_list), fmt='%.10f', delimiter=',')
-    save_pos(dofs, script_dir + '/node_end_pos.csv')
+    # save_pos(dofs, script_dir + '/node_end_pos.csv')
 
     # Sofa.Gui.GUIManager.MainLoop(root)
     # Sofa.Gui.GUIManager.closeGUI()

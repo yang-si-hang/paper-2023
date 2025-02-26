@@ -156,9 +156,9 @@ def read_elements_from_msh2(file_path:str)->Tuple[List[tuple], List[tuple]]:
         file_path (str): .msh 文件路径
 
     Returns:
-        Tuple[List[tuple], List[tuple]]: 
-            nodes: [(node_id, x, y, z), ...]
-            elements: [(element_id, [n1, n2, n3, n4]), ...]
+        Tuple[List[tuple], List[tuple]]:
+            - nodes (List[tuple]): 每个元组格式为 (node_id, x, y, z)
+            - elements (List[tuple]): 每个元组格式为 (element_id, [n1, n2, n3, n4])
     """
     nodes = []
     elements = []

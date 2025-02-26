@@ -211,7 +211,8 @@ class SoftObject:
         self.dL_dq.fill(0.)
         self.z.fill(0.)
 
-        self.fix_particle_list = [39, 61, 63, 64]
+        self.fix_particle_list = [15, 83, 80, 16, 78, 17, 77, 11 ,79, 10, 18, 7, 19, 23, 20, 24, 
+                                    125, 59, 68, 63, 57, 60, 64, 66, 65, 67, 124, 9, 12, 8]
         self.contact_particles_list = contact_list
         
         # self.fix_particle_list = self.fix_particle_No()
@@ -231,8 +232,7 @@ class SoftObject:
         self.construct_dx_const()
 
         # Print the information
-        print('Particle number:', self.PARTICLE_NUM)
-        print('Element number:', self.ELEMENT_NUM)
+        print('Particle number:', self.PARTICLE_NUM, '; Element number:', self.ELEMENT_NUM)
         print('Contact particles indices:', self.contact_particles_list)
         print('Fixed particles indices:', self.fix_particle_list)
 

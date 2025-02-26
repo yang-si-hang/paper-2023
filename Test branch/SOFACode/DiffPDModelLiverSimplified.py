@@ -2,15 +2,42 @@
 DiffPD的3的矩阵简化版本,用于3D的控制
 created at 202502-24 by hsy
 """
-
+import os, sys
 import time
 import taichi as ti
 ti.init(arch=ti.gpu, device_memory_GB=6.0, default_fp=ti.f64, debug=True)
 import taichi.math as tm
 import numpy as np
+import numpy.typing as npt
+import meshio
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
-# from GenMsh import generate_msh
+
+# 设置工作目录为当前脚本所在目录
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(script_dir)  # 修改当前工作目录
+
+root_path = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(root_path)
+from Utilize.GenMsh import read_elements_from_msh2
+
+
+def action_compress(vec:npt.NDArray, max_length:float=3.e-4)->npt.NDArray:
+    """Compress action vector in a safe range
+    Args:
+        vec (npt.NDArray): the action vector
+        max_length (float, optional): the maximum length of the action vector. Defaults to 3.e-4.
+    
+    Returns:
+        vec (npt.NDArray): the compressed action vector
+    """
+    length = np.linalg.norm(vec)
+
+    if length > max_length:
+        factor = max_length / length
+        return vec * factor
+    else:
+        return vec
 
 
 def cal_tet_volume(vertices):
@@ -97,6 +124,22 @@ def get_tetrahedron_edges(tet_indices):
     return np.array(list(unique_edges))
 
 
+def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
+    """Save the node position to a .vtu file
+
+    Args:
+        mesh_file (str): The initial mesh file name
+        pos (npt.NDArray): The node position
+        write_name (istrnt): The write file name
+    """
+    _, eles = read_elements_from_msh2(mesh_file)
+    cells = np.array([node_ids for (_, node_ids) in eles]) - 1
+
+    cells_write = [("tetra", cells)]
+    mesh = meshio.Mesh(points=pos, cells=cells_write)
+    mesh.write(f"data/{write_name}")
+
+
 @ti.func
 def qr_solve9(A, b):
     # 用QR分解求解9*9的线性方程组
@@ -144,9 +187,9 @@ class SoftObject:
 
         node_np, element_np, volume_np = load_msh(mesh_file)
         self.edge_np = get_tetrahedron_edges(element_np)
-        np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
-        np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
-        np.savetxt('volume_np.csv', volume_np, fmt='%.8f', delimiter=',')
+        # np.savetxt('node_np.csv', node_np, fmt='%f', delimiter=',')
+        # np.savetxt('element_np.csv', element_np, fmt='%d', delimiter=',')
+        # np.savetxt('volume_np.csv', volume_np, fmt='%.8f', delimiter=',')
 
         self.PARTICLE_NUM = node_np.shape[0]
         self.EDGE_NUM = self.edge_np.shape[0]
@@ -221,14 +264,16 @@ class SoftObject:
         # contact_vel_np[:, 1] = 1.e-6 / self.dt
         self.contact_vel.from_numpy(contact_vel_np)
 
+        # 适用于单个marker点
+        self.marker_pos_desired = ti.Vector.field(self.dim, dtype=ti.f64, shape=1)
+
         self.construct_mass()
         self.construct_B()
         self.construct_weight()
         self.construct_dx_const()
 
         # Print the information
-        print('Particle number:', self.PARTICLE_NUM)
-        print('Element number:', self.ELEMENT_NUM)
+        print('Particle number:', self.PARTICLE_NUM, '; Element number:', self.ELEMENT_NUM)
         print('Contact particles indices:', self.contact_particles_list)
         print('Fixed particles indices:', self.fix_particle_list)
 
@@ -713,6 +758,10 @@ class SoftObject:
         self.cal_ygrad()
 
         return error
+    
+
+    def actuate_action(self, contact_speed):
+        self.contact_vel[0] = contact_speed
 
 
     def substep(self, step_num:ti.i32):
@@ -817,73 +866,61 @@ class SoftObject:
 
 
 def main():
+    # marker_list = [95]
     marker_list = [0]
+    # fixed_list = [39, 61, 63, 64]
+    fixed_list = [15, 83, 80, 16, 78, 17, 77, 11 ,79, 10, 18, 7, 19, 23, 20, 24, 
+                  125, 59, 68, 63, 57, 60, 64, 66, 65, 67, 124, 9, 12, 8]#, 31]
+    contact_list = [101]
     cube_shape = [0.1, 0.02, 0.1]
-    mesh_file = 'Mesh/liver.msh'
-    class MyObject(SoftObject):
-        def __init__(self, shape, seed_size, file):
-            super().__init__(shape, seed_size, file)
 
-    soft_obj = MyObject(shape=cube_shape, seed_size=0.01, file=mesh_file)
+    mesh_file = 'Mesh/liver.msh'
+    learning_rate = 8.e1
+
+    class MyObject(SoftObject):
+        def __init__(self, shape, seed_size, file, fix, contact):
+            super().__init__(shape, seed_size, file, fix, contact)
+
+    soft_obj = MyObject(shape=cube_shape, seed_size=0.01, file=mesh_file, fix=fixed_list, contact=contact_list)
     soft_obj.preset_gui(camera_pos=[0.1, 0.2, 0.05], camera_target=[0.1, 0., 0.05])
+
     soft_obj.marker_list = marker_list
+    marker_init_pos = soft_obj.node_init_pos.to_numpy()[marker_list, :]
+    marker_desired_pos = marker_init_pos + np.array([-0.04, 0.06, 0.01])
+    soft_obj.marker_pos_desired.from_numpy(marker_desired_pos)
 
     soft_obj.precomputation()
     lhs_np = soft_obj.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft_obj.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-    soft_obj.construct_L()
 
     # np.savetxt('node_mass.csv', soft_obj.node_mass.to_numpy(), fmt='%.15f', delimiter=',')
     # np.savetxt('lhs.csv', lhs_np, fmt='%.15f', delimiter=',')
     # exit(0)
 
-    for step in range(100):
+    for step in range(150):
         # print(f'Time：{root.time.value:.3f}---------------------------------------')
         print(f"Step: {step}---------------------------------------")
         # dots_pos_sofa_new = get_marker_pos(dofs, marker_idx)
         print(f'Detected marker position: {soft_obj.node_pos[marker_list[0]]}')
 
         soft_obj.substep(1)
-        dots_pos_model_new = soft_obj.dot_pos.to_numpy()
-        delta_pos_model = dots_pos_model_new - dots_pos_model
-        dots_pos_model = copy.deepcopy(dots_pos_model_new)
-        error_tmp = soft_obj.compute_gradient(dots_pos_sofa_new)
+        # dots_pos_model_new = soft_obj.dot_pos.to_numpy()
+        # delta_pos_model = dots_pos_model_new - dots_pos_model
+        # dots_pos_model = copy.deepcopy(dots_pos_model_new)
+        error_tmp = soft_obj.cal_gradient()
         loss_tmp = np.linalg.norm(error_tmp) ** 2
 
-        end_speed_np = -learning_rate * soft_obj.dL_dy_m[soft_obj.contact_particles_list[0]].to_numpy()
-        end_movement_np = action_compress(end_speed_np * soft_obj.dt, 2.e-3)
+        save_vtu("Mesh/liver.msh", soft_obj.node_pos.to_numpy(), f'modelsim_pos_{step}.vtu')
+
+        dL_dy_np = soft_obj.dL_dy.to_numpy().reshape(-1, 3)
+        print(f"Gradient of contact: {dL_dy_np[contact_list[0]]}")
+        end_speed_np = -learning_rate * dL_dy_np[contact_list[0]]
+        end_movement_np = action_compress(end_speed_np * soft_obj.dt, 1.5e-3)
 
         soft_obj.actuate_action(end_movement_np / soft_obj.dt)
         print(f'Error items: {error_tmp}; Loss sum: {loss_tmp}')
         print(f'The tool movement: {end_movement_np.tolist()}; movement length: {np.linalg.norm(end_movement_np)}')
-
-        add_move(linear_mov, dt, end_movement_np)
-        Sofa.Simulation.animate(root, dt)
-
-        for i, q_idx in enumerate(contact_idx):
-            contact_pos_np[i, :] = copy.deepcopy(dofs.findData('position').value[q_idx])
-            print(f'Contact position {q_idx}: {contact_pos_np[i, :]}')
-
-    time_list = []
-
-    for i in range(50):
-        time_start = time.time()
-        soft_obj.substep(i)
-        soft_obj.diff_pd(10)
-        # soft_obj.cal_ygrad()
-        # soft_obj.diff_data()
-        time_end = time.time()
-        time_list.append(time_end-time_start)
-        print('Time cost:', time_end-time_start, 's')
-    print('Average Time cost:', np.mean(time_list[1:]), 's')
-    # np.savetxt('rhs_dA.csv', soft_obj.rhs_dA.to_numpy(), fmt='%.15f', delimiter=',')
-    # for q_idx in soft_obj.contact_particles_list:
-    #     grad_diffdata_tmp = soft_obj.grad_diffdata.to_numpy()
-    #     np.savetxt('grad_diffdata.csv', grad_diffdata_tmp, fmt='%.15f', delimiter=',')
-    #
-    # soft_obj.cal_grad()
-    # np.savetxt('grad_finite.csv', soft_obj.grad_finite.to_numpy(), fmt='%.15f', delimiter=',')
 
 
 if __name__ == '__main__':
