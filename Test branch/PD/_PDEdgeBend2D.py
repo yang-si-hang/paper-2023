@@ -18,9 +18,8 @@ import taichi as ti
 import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
-# 设置工作目录为当前脚本所在目录
-script_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(script_dir)  # 修改当前工作目录
+script_dir = os.path.dirname(os.path.abspath(__file__))     # 设置工作目录为当前脚本所在目录             # 获取脚本文件所在的绝对路径
+os.chdir(script_dir)
 
 # 添加根目录到 sys.path（跨目录导入模块）
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
