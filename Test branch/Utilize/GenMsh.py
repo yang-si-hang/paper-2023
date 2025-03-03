@@ -16,11 +16,12 @@ import random
 
 
 def mesh_obj_tri(obj_shape:List[float], seed_size:float)->Tuple[npt.NDArray[np.float64], npt.NDArray[np.int32], npt.NDArray[np.int32]]:
-    """
-    将二维对象生成三角形网格
-    :param obj_shape: [length, widt]
-    :param seed_size: 网格尺寸
-    :return: points, edges, cells
+    """将二维对象生成三角形网格
+    Args:
+        obj_shape (List[float]): [length, width]
+        seed_size (float): 网格尺寸
+    Returns:
+        Tuple[npt.NDArray[np.float64], npt.NDArray[np.int32], npt.NDArray[np.int32]]: 节点、边、单元
     """
     length, width = obj_shape
 
@@ -230,8 +231,7 @@ def generate_edges_and_surfaces(elements:npt.NDArray)->Tuple[list, list]:
 
 
 def write_msh2(file_path:str, points:npt.NDArray, cells:npt.NDArray):
-    """_summary_
-    只将节点和四面体元素写入格式版本2的 .msh 文件
+    """只将节点和四面体元素写入格式版本2的 .msh 文件
     Args:
         file_path (str): _description_
         points (npt.NDArray): [x, y, z], dim: node_num×3
@@ -293,8 +293,7 @@ def write_new_msh(file_path, nodes, edges, faces, elements):
 
 
 def write_msh4(file_path:str, points, cells):
-    """
-    将节点、单元信息写入格式4.1版本的 .msh 文件
+    """将节点、单元信息写入格式4.1版本的 .msh 文件
     """
     num_points = len(points)
     num_cells = len(cells)

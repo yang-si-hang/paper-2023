@@ -1,4 +1,4 @@
-""" 用于SOFA仿真环境控制的DiffPD 2D模型, 同时也是2D场景
+""" 用于SOFA仿真环境(2D场景)控制的DiffPD 2D模型
 created at 2025-03-02 by hsy
 """
 
@@ -22,23 +22,23 @@ root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from Utilize.GenMsh import mesh_obj_tri, write_obj
 from Utilize.GuiTaichi import gui_set
-from Utilize.MathTaichi import cotangent_ti
 
 
 def read_msh(file:str): # 预留接口
     pass
 
+
 @ti.data_oriented
 class SoftObject2D:
     def __init__(self, shape, fix:List[int], contact:List[int], 
-                 E:float, nu:float, dt:float, density:float, g=-9.8, **kwargs):
+                 E:float, nu:float, dt:float, density:float, **kwargs):
         self.shape = shape
         # 是否传入的是 .msh 文件(已划分网格)
         if isinstance(self.shape, str):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
             node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)
-            # node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
+            node_np_3d = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
             np.savetxt("node_np.csv", node_np, fmt='%f', delimiter=",")
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
             np.savetxt("ele_np.csv", ele_np, fmt='%d', delimiter=",")
@@ -47,8 +47,7 @@ class SoftObject2D:
         write_obj(obj_file, node_np, ele_np)
 
         self.solve_itr:int = 10
-        self.strain_lim_rate:float = 0.1            # Strain limit rate
-        self.E, self.nu, self.dt, self.density, self.g = E, nu, dt, density, g
+        self.E, self.nu, self.dt, self.density = E, nu, dt, density
         self.dim = 2
         self.mu, self.lam = self.E / (2 * (1 + self.nu)), self.E * self.nu / ((1 + self.nu) * (1 - 2 * self.nu))
        
@@ -103,7 +102,6 @@ class SoftObject2D:
         self.contact_vel.fill(0.)
 
         self.construct_mass()
-        self.construct_cotangent()
         self.construct_Xg_inv()
         self.positional_weight = 1.e3 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
         
@@ -118,7 +116,7 @@ class SoftObject2D:
             qa, qb, qc = self.node_pos_init[ia], self.node_pos_init[ib], self.node_pos_init[ic]
             ele_volume_tmp = 0.5 * ((qb - qa).cross(qc - qa)).norm()
             self.ele_volume[f_i] = ele_volume_tmp
-            self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_id]
+            self.stretch_weight[f_i] = 2 * self.mu * self.ele_volume[f_i]
 
         for q_i in range(self.PARTICLE_N):
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
@@ -321,13 +319,79 @@ class SoftObject2D:
         self.update_vel_pos()
 
 
+    def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
+        """Taichi GUI pre-setting
+        Args:
+            pos (List[float]): Camera position
+            target (List[float]): Camera visual target
+            up_orient (List[float]): Camera orientation
+        """
+        self.window, self.camera, self.scene = gui_set(pos, target, up_orient)
+        self.canvas = self.window.get_canvas()
+        self.show_preset()
+
+    
+    def show_preset(self):
+        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_N)
+        self.node_color = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_N)
+        self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_N)
+        self.edge_show.from_numpy(self.edge.to_numpy().astype(np.int32))
+        
+        for q_i in range(self.PARTICLE_N):
+            self.node_color[q_i] = ti.Vector([0., 0., 0.])
+        for q_i in self.fix_particle_list:
+            self.node_color[q_i] = ti.Vector([1., 0., 0.])
+        for q_i in self.contact_particle_list:
+            self.node_color[q_i] = ti.Vector([0., 0., 1.])
+
+
+    def gui_show(self, SHOW_FLAG:bool=True, WRITE_FLAG:bool=False, itr_num:int=0):
+        if SHOW_FLAG is False:
+            return
+        self.scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
+        self.scene.ambient_light((.8, .8, .8))
+
+        self.node_show.from_numpy(self.node_pos.to_numpy().astype(np.float32))
+        self.scene.particles(self.node_show, radius=0.001, per_vertex_color=self.node_color)
+        self.scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
+
+        self.canvas.scene(self.scene)
+        self.canvas.set_background_color((1., 1., 1.))
+
+        if WRITE_FLAG is True:
+            self.window.save_image(f"FigureWrite/{itr_num:05d}.png")
+        self.window.show()
+
+
+    @ti.kernel
+    def init_vel(self):
+        for q_i in range(self.PARTICLE_N):
+            if self.node_pos_init[q_i].y > self.shape[0] - 1.e-3:
+                self.node_vel[q_i].y = 50.
+            else:
+                self.node_vel[q_i].y = 0.
+
+
 def main():
     class Soft(SoftObject2D):
         def __init__(self, shape, fix:List[int], contact:List[int], 
                      E:float, nu:float, dt:float, density:float, g=0, **kwargs):
             super().__init__(shape, fix, contact, E, nu, dt, density, g, **kwargs)
 
-    soft = Soft()
+    params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
+    soft = Soft([0.1, 0.1], range(11), range(110, 121), **params)
+    soft.preset_gui([-0.2, 0.05, 0.15], [0.05, 0.1, 0.], [0., 0., 1.])
+
+    soft.precomputation()
+    lhs_np = soft.lhs.to_numpy()
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+    for itr in range(100):
+        print(f"Time Step: {itr} ======================================")
+        soft.substep(itr)
+
+        soft.gui_show(True, False, itr)
 
 
 if __name__ == "__main__":
