@@ -1,4 +1,4 @@
-""" 用于为Contact Selection的2D模拟, 场景是切割前的预拉伸
+""" 用于为Contact Selection的2D模拟, 场景是切割前的预拉伸, 使用两个接触点
 created at 2025-03-02 by hsy
 """
 import Sofa
@@ -94,7 +94,12 @@ def get_marker_pos(handle, marker_idx):
     return marker_pos
 
 
-class MyObject(SoftObject):
+class MyObject(SoftObject2D):
+    def __init__(self, shape, fix, contact, E, nu, dt, density, **kwargs):
+        super().__init__(shape, fix, contact, E, nu, dt, density, **kwargs)
+
+    
+    
 
 
 
