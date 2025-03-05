@@ -150,6 +150,76 @@ def generate_cube_msh(file_path:str, cube_shape:list, axis_seed:list):
     write_msh2(file_path, points, cells_np[:,1:])
 
 
+import numpy as np
+
+def read_mshv2_triangle(filename:str):
+    """读取 Gmsh v2 格式的 .msh 文件，并返回:
+    - nodes: 大小为 (N, 3) 的 NumPy 数组，存储节点坐标
+    - triangles: 大小为 (T, 3) 的 NumPy 数组，存储三角形单元的节点索引(0-based)
+    """
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+
+    # 去掉每行末尾的换行符，方便处理
+    lines = [line.strip() for line in lines]
+
+    # 1. 找到 "$Nodes" 段落并读取节点
+    try:
+        idx_nodes_start = lines.index('$Nodes')
+    except ValueError:
+        raise ValueError("未在文件中找到 $Nodes 段落，请检查文件格式。")
+
+    # 读取节点数 N
+    N = int(lines[idx_nodes_start + 1])
+    # 读取 N 行节点数据
+    node_data_lines = lines[idx_nodes_start + 2 : idx_nodes_start + 2 + N]
+
+    # 将节点数据存储到一个列表中
+    nodes = []
+    for line in node_data_lines:
+        parts = line.split()
+        # parts[0] 是节点编号(1-based)，此处可忽略
+        x = float(parts[1])
+        y = float(parts[2])
+        z = float(parts[3])
+        nodes.append([x, y, z])
+    nodes = np.array(nodes, dtype=float)
+
+    # 2. 找到 "$Elements" 段落并读取单元
+    try:
+        idx_elements_start = lines.index('$Elements')
+    except ValueError:
+        raise ValueError("未在文件中找到 $Elements 段落，请检查文件格式。")
+
+    # 读取单元数 M
+    M = int(lines[idx_elements_start + 1])
+    # 读取 M 行单元数据
+    elem_data_lines = lines[idx_elements_start + 2 : idx_elements_start + 2 + M]
+
+    # 用于存储三角形单元
+    triangles = []
+
+    for line in elem_data_lines:
+        parts = line.split()
+        # parts[0] 是单元编号
+        elm_type = int(parts[1])      # 单元类型
+        num_tags = int(parts[2])      # 标签数量
+
+        # Gmsh v2 格式中，三角形的 elementType == 2
+        if elm_type == 2:
+            # 节点编号开始位置 = 3 + num_tags
+            node_indices_start = 3 + num_tags
+            # 对于三角形，后面有 3 个节点编号
+            n1 = int(parts[node_indices_start])   - 1  # 转换为0-based索引
+            n2 = int(parts[node_indices_start+1]) - 1
+            n3 = int(parts[node_indices_start+2]) - 1
+            triangles.append([n1, n2, n3])
+
+    triangles = np.array(triangles, dtype=int)
+
+    return nodes, triangles
+
+
 def read_elements_from_msh2(file_path:str)->Tuple[List[tuple], List[tuple]]:
     """读取 .msh 文件中的四面体元素
 
@@ -207,7 +277,7 @@ def read_elements_from_msh2(file_path:str)->Tuple[List[tuple], List[tuple]]:
 def generate_edges_and_surfaces(elements:npt.NDArray)->Tuple[list, list]:
     """
     从四面体元素中生成线和面
-    :param: elements: [n1, n2, n3, n4], dim: ele_num×4
+    :param: elements: [n1, n2, n3, n4], dim: ele_numx4
     :return: edges: [(n1, n2), ...], faces: [(n1, n2, n3), ...]
     """
     edges = set()

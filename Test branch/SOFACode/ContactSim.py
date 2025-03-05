@@ -1,21 +1,31 @@
 """ 用于为Contact Selection的2D模拟, 场景是切割前的预拉伸, 使用两个接触点
+Sofa 环境似乎不能承受大拉伸, 难以变形到期望距离
 created at 2025-03-02 by hsy
 """
+from ast import Raise
 import Sofa
 import SofaRuntime
 import Sofa.Gui
 import Sofa.SofaGL
-import os
+import os, sys
 import numpy as np
 import numpy.typing as npt
+from scipy import sparse
 import copy
-from SOFACode.DiffPD2D import SoftObject2D
+import meshio
+import taichi as ti
+ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 script_dir = os.path.dirname(os.path.abspath(__file__))         # 获取脚本文件所在的绝对路径
 os.chdir(script_dir)                                            # 改变当前工作目录到脚本文件所在目录
 
+root_path = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(root_path)
+from SOFACode.DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
+from Utilize.GenMsh import read_mshv2_triangle
 
-def createScene(root):
+
+def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
                                                  'Sofa.Component.Collision',
                                                  'Sofa.Component.Constraint.Projective',
@@ -40,52 +50,61 @@ def createScene(root):
 
     obj = root.addChild('object')
     # Rayleigh阻尼影响了软体振动
-    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.5', rayleighMass='0.5')
+    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
 
-    # 需要替换网格文件!
-    obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
+    # obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
+    obj.addObject('MeshGmshLoader', name='loader', filename='Mesh/shape.msh', scale='1', flipNormals='0')
     obj.addObject('MechanicalObject', src='@loader', name='dofs', template='Vec3', translation2=[0., 0., 0.], scale3d=[1.]*3)
     obj.addObject('TriangleSetTopologyContainer', src='@loader', name='container')
     obj.addObject('TriangleSetTopologyModifier', name='modifier')
     obj.addObject('TriangleSetGeometryAlgorithms', name='geomalgo')#, tempate='Vec3')
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')#, massDensity='0.1')
 
-    X_EPS = 1.e-3
-    obj.addObject('BoxROI', name='box', box=[-X_EPS, -0.06, -0.1, X_EPS, 0.06, 0.1])
-    obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
+    X_EPS = 5.e-3
+    obj.addObject('BoxROI', name='box', box=f"-0.1 {-X_EPS} -0.1 0.11 {X_EPS} 0.1")
+    obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
 
-    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e2', poissonRatio='0.4', method='large')
+    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e6', poissonRatio='0.4', method='large')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
     # Need change the indices to be equal with manipualtion index ######################################################
-    obj.addObject('LinearMovementConstraint', name='cnt1', template="Vec3", indices=[10])
-    obj.addObject('LinearMovementConstraint', name='cnt2', template="Vec3", indices=[11])
+    # obj.addObject('LinearMovementConstraint', name='cnt1', template="Vec3", indices=[10])
+    # obj.addObject('LinearMovementConstraint', name='cnt2', template="Vec3", indices=[11])
 
-    # obj_visu = obj.addChild('VisualModel')
-    # obj_visu.addObject('OglModel', name='visual')
-    # obj_visu.addObject('IdentityMapping', input='@..', output='@visual')
+    obj_move_list = []
+    for q_i in contact:
+        obj_move_list.append(obj.addObject('LinearMovementConstraint', name='cnt'+str(q_i), template="Vec3", indices=[q_i]))
+
+    # 输出Sofa设置信息
+    # Sofa.msg_info("Scene", f"Contact indices: {obj_linear_move.indices.value}")
+    # Sofa.msg_info("User", f"Fixed indices: {obj_fixed.indices.value}")
+
+    return obj, obj_move_list
 
 
-def add_move(handle, dt, movement):
+def add_move(handle_list:list, dt:float, movement:npt.NDArray):
     """ Use `LinearMovemetConstraint` to add a simulation step-wise movement
     Args:
         handle: The node of the object
         dt: The time step
         movement: The additional movement
     """
-    times_array = handle.findData('keyTimes').value
-    movements_array = handle.findData('movements').value
+    if movement.shape[1] == 2:
+        movement = np.concatenate((movement, np.zeros((movement.shape[0], 1))), axis=1)
+    for i, handle in enumerate(handle_list):
+        times_array = handle.findData('keyTimes').value
+        movements_array = handle.findData('movements').value
 
-    last_time = times_array[-1]
-    last_movement = movements_array[-1, :]
+        last_time = times_array[-1]
+        last_movement = movements_array[-1, :]
 
-    handle.findData('keyTimes').value = np.append(times_array, last_time + dt)
-    handle.findData('movements').value = np.append(movements_array, [movement + last_movement], axis=0)
+        handle.findData('keyTimes').value = np.append(times_array, last_time + dt)
+        handle.findData('movements').value = np.append(movements_array, [movement[i,:] + last_movement], axis=0)
 
 
-def get_marker_pos(handle, marker_idx):
+def get_marker_pos(handle, marker_idx:list)->npt.NDArray:
     marker_pos = np.zeros((len(marker_idx), 3))
     # node_pos = handle.findData('position').value
     for i, idx in enumerate(marker_idx):
@@ -94,25 +113,151 @@ def get_marker_pos(handle, marker_idx):
     return marker_pos
 
 
+def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
+    """Save the node position to a .vtu file
+
+    Args:
+        mesh_file (str): The initial mesh file name
+        pos (npt.NDArray): The node position
+        write_name (istrnt): The write file name
+    """
+    _, triangles = read_mshv2_triangle(mesh_file)
+
+    cells_write = [("triangle", triangles)]
+    mesh = meshio.Mesh(points=pos, cells=cells_write)
+    mesh.write(f"data/{write_name}")
+
+
 class MyObject(SoftObject2D):
-    def __init__(self, shape, fix, contact, E, nu, dt, density, **kwargs):
+    def __init__(self, shape, fix, contact, dots_list, E, nu, dt, density, **kwargs):
         super().__init__(shape, fix, contact, E, nu, dt, density, **kwargs)
+        self.loss = 0.
+        self.dots_idx = dots_list
+        dots_num = len(dots_list)
+        self.dot_pos = ti.Vector.field(2, dtype=ti.f64, shape=dots_num)
+        self.dot_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=dots_num)
+
+        print(f"Marker index: {self.dots_idx}")
+
+        self.line_params = self.construct_line()
 
     
+    def construct_line(self):
+        for i, idx in enumerate(self.dots_idx):
+            self.dot_pos_init[i] = self.node_pos_init[idx]
+
+        pos1, pos2 = self.dot_pos_init[0].to_numpy(), self.dot_pos_init[1].to_numpy()
+        line_params = line_from_points_2d(pos1, pos2)
+
+        return line_params
     
 
+    def update_dot_pos(self):
+        for i, idx in enumerate(self.dots_idx):
+            self.dot_pos[i] = self.node_pos[idx]
 
+        
+    def construct_L_sofa(self, dot_sofa:npt.NDArray):
+        """将两个标记点拉伸到指定间距
+        """
+        if len(self.dots_idx) != 2:
+            raise ValueError("The number of marker is not 2")
+        else:
+            idx1, idx2 = self.dots_idx
+        pos1, pos2 = dot_sofa[:,:2]         # sofa中是三维坐标
+        dis_tmp = np.linalg.norm(pos1 - pos2)
+        dis_desired = 0.018
+
+        a, b, c = self.line_params
+        line_normal = np.array([a, b], dtype=np.float64)
+
+        # 两个点到直线的距离
+        line_distance1 = line_normal.dot(pos1) + c
+        line_distance2 = line_normal.dot(pos2) + c
+
+        loss = (dis_tmp - dis_desired) ** 2 + line_distance1 ** 2 + line_distance2 ** 2
+        grad1 = 2*(dis_tmp - dis_desired) * (pos1 - pos2) / dis_tmp + line_distance1 * line_normal
+        grad2 = 2*(dis_tmp - dis_desired) * (pos2 - pos1) / dis_tmp + line_distance2 * line_normal
+
+        self.dL_dq_contact[idx1*2] = grad1[0]
+        self.dL_dq_contact[idx1*2 + 1] = grad1[1]
+        self.dL_dq_contact[idx2*2] = grad2[0]
+        self.dL_dq_contact[idx2*2 + 1] = grad2[1]
+
+        return dis_tmp, loss
+        
+
+    def compute_dcontact(self, dot_sofa:npt.NDArray):
+        """ \partial L / \partial y with contact action, 计算关于contact的导数, 用于控制
+        """
+        dist_tmp, loss_tmp = self.construct_L_sofa(dot_sofa)
+        self.construct_g_hessian()
+        self.compute_z(10)
+
+        print(f"Distance: {dist_tmp}; Loss: {loss_tmp}")
+
+        z_np = self.z.to_numpy()
+        self.dy_contact = np.multiply(z_np, self.dx_const.to_numpy())
 
 
 def main():
+    contact_list = [77, 88, 109, 120]
+    marker_list = [93, 105]
+    fix = range(11)
+    gain = 5.e2
+
     root = Sofa.Core.Node('root')
-    createScene(root)
+    _, move_handle = createScene(root, contact_list)
 
     Sofa.Simulation.init(root)
-    Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
-    Sofa.Gui.GUIManager.createGUI(root, __file__)
-    Sofa.Gui.GUIManager.SetDimension(1080, 800)
+    # Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
+    # Sofa.Gui.GUIManager.createGUI(root, __file__)
+    # Sofa.Gui.GUIManager.SetDimension(1080, 800)
+
+    # Sofa.Gui.GUIManager.MainLoop(root)
+    # Sofa.Gui.GUIManager.closeGUI()
+
+    dt = root.dt.value
+    obj = root.getChild('object')
+    dofs = obj.getObject('dofs')
+
+    contact_pos_np = np.zeros((len(contact_list), 3))
+
+    params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
+    soft = MyObject([0.1, 0.1], fix, contact_list, marker_list, **params)
+    soft.precomputation()
+    lhs_np = soft.lhs.to_numpy()
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+    for step in range(100):
+        print(f"Time Step: {step} ======================================")
+        dots_pos_sofa_new = get_marker_pos(dofs, marker_list)
+        print(f'Detected marker position: {dots_pos_sofa_new.flatten()}')
+
+        sofa_pos_tmp = dofs.findData('position').value
+        save_vtu('Mesh/shape.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
+
+        soft.substep(step)
+        soft.compute_dcontact(dots_pos_sofa_new[:,:2])
+        soft.update_dot_pos()
+        print(f"Model marker position: {soft.dot_pos.to_numpy().flatten()}")
+
+        dy_dcontact = soft.dy_contact.reshape(-1, 2)        # reshape到与接触点个数相同
+        end_speed = -gain * dy_dcontact[soft.contact_particle_list]
+        end_speed_compress = compress_vectors(end_speed, 0.02)
+        soft.contact_vel.from_numpy(end_speed_compress)
+
+        print(f"End speed: {end_speed.flatten()}")
+        print(f"Deformation Energy: {soft.stretch_energy.to_numpy().sum():e}")
+
+        add_move(move_handle, dt, end_speed_compress * dt)
+        Sofa.Simulation.animate(root, dt)
+
+        # for i, q_idx in enumerate(contact_list):
+        #     contact_pos_np[i, :] = copy.deepcopy(dofs.findData('position').value[q_idx])
+        #     print(f'Contact position {q_idx}: {contact_pos_np[i, :]}')
 
 
-if __file__ == "__main__":
+if __name__ == "__main__":
     main()

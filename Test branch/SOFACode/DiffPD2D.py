@@ -25,7 +25,7 @@ from Utilize.GenMsh import mesh_obj_tri, write_obj, write_msh2_tri
 from Utilize.GuiTaichi import gui_set
 
 
-def read_msh(file:str): # 预留接口
+def read_msh(file:str):     # 预留接口
     pass
 
 
@@ -92,8 +92,8 @@ class SoftObject2D:
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
             np.savetxt("ele_np.csv", ele_np, fmt='%d', delimiter=",")
 
-        msh_file:str = "Mesh/shape.msh"
-        write_msh2_tri(msh_file, node_np, ele_np)
+            msh_file:str = "Mesh/shape.msh"
+            write_msh2_tri(msh_file, node_np, ele_np)
 
         self.solve_itr:int = 10
         self.E, self.nu, self.dt, self.density = E, nu, dt, density
@@ -155,7 +155,8 @@ class SoftObject2D:
         self.contact_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.CON_N)
         self.contact_vel.fill(0.)
 
-        self.marker_idx:int = 50
+        # 用于Sofa环境可能有问题
+        self.marker_idx:int = 0
         self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=(1))
         self.dL_dq_contact = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.dy_contact = None          # 用于控制, numpy array
@@ -465,16 +466,16 @@ class SoftObject2D:
         d_tmp = np.linalg.norm(pos1_np - pos2_np)
         d_desired = 0.018
 
-        a, b, c = line_from_points_2d(pos1_np, pos2_np)
-        line_param = np.array([a, b], dtype=np.float64)
+        a, b, c = line_from_points_2d(self.node_pos_init[idx1].to_numpy(), self.node_pos_init[idx2].to_numpy())
+        line_noraml = np.array([a, b], dtype=np.float64)
 
         # 两个点到直线的距离
-        line_distance1 = line_param.dot(pos1_np) + c
-        line_distance2 = line_param.dot(pos2_np) + c
+        line_distance1 = line_noraml.dot(pos1_np) + c
+        line_distance2 = line_noraml.dot(pos2_np) + c
 
         loss = (d_tmp - d_desired) ** 2 + line_distance1 ** 2 + line_distance2 ** 2
-        grad1 = 2*(d_tmp - d_desired) * (pos1_np - pos2_np) / d_tmp + line_distance1 * line_param
-        grad2 = 2*(d_tmp - d_desired) * (pos2_np - pos1_np) / d_tmp + line_distance2 * line_param
+        grad1 = 2*(d_tmp - d_desired) * (pos1_np - pos2_np) / d_tmp + line_distance1 * line_noraml
+        grad2 = 2*(d_tmp - d_desired) * (pos2_np - pos1_np) / d_tmp + line_distance2 * line_noraml
 
         self.dL_dq_contact[idx1*2] = grad1[0]
         self.dL_dq_contact[idx1*2 + 1] = grad1[1]
@@ -484,10 +485,12 @@ class SoftObject2D:
         return d_tmp, loss
 
 
-    def compute_z(self, itr_num:ti.i32):
+    def compute_z(self, itr_num:int):
         """diffpd中的z的迭代计算
         """
         dL_dq_contact_np = self.dL_dq_contact.to_numpy()        # 此处的z是关于param的导数
+        np.savetxt("dL_dq_contact_true.csv", dL_dq_contact_np, fmt='%e', delimiter=",")
+        np.savetxt("dA_true.csv", self.dA, fmt='%e', delimiter=",")
         z_np = self.z.to_numpy()
         for itr in range(itr_num):
             rhs_dA = self.dA @ z_np + dL_dq_contact_np
@@ -579,7 +582,7 @@ def main():
             super().__init__(shape, fix, contact, E, nu, dt, density, **kwargs)
 
     params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
-    soft = Soft([0.1, 0.1], range(11), [44, 120], **params)
+    soft = Soft([0.1, 0.1], range(11), [66, 120], **params)
     soft.preset_gui([0.05, 0.05, 0.2], [0.05, 0.05, 0.], [0., 1., 0.])
 
     soft.precomputation()
@@ -589,7 +592,7 @@ def main():
 
     # soft.init_vel()
 
-    for itr in range(200):
+    for itr in range(100):
         print(f"Time Step: {itr} ======================================")
         # time.sleep(0.1)
         soft.substep(itr)
