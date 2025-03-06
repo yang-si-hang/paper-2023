@@ -9,6 +9,7 @@ created at 2024-12-30 by hsy
 import os
 import sys
 import time
+from token import AT
 from typing import List, Dict, DefaultDict, Tuple
 import numpy as np
 import numpy.typing as npt
@@ -494,7 +495,8 @@ class SoftBend2D:
                 dBp_dF_i = ti.Matrix.zero(ti.f64, 2, 2)
                 for k, l in ti.ndrange(2, 2):
                     dBp_dF_i[k, l] = dBp_dF[2*m+k, 2*n+l]
-                AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ dBp_x / dF_x @ A
+                AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ (dBp_x / dF_x) @ A
+                AT_dBp_dq_i = AT_dBp_dq_i * self.stretch_weight[i]
 
                 row_idx_vec = ti.Vector([idx1*3+m, idx2*3+m, idx3*3+m])
                 col_idx_vec = ti.Vector([idx1*3+n, idx2*3+n, idx3*3+n])

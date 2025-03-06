@@ -1,6 +1,7 @@
-""" 用于SOFA仿真环境(2D场景)控制的DiffPD 2D模型
-created at 2025-03-02 by hsy
+""" 根据变形雅可比矩阵, 优化最优的接触点组合
+created at 2025-03-05 by hsy
 """
+from ast import main
 import os
 import sys
 import time
@@ -21,65 +22,16 @@ os.chdir(script_dir)  # 修改当前工作目录
 # 添加根目录到 sys.path（跨目录导入模块）
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from Utilize.GenMsh import mesh_obj_tri, write_obj, write_msh2_tri
-from Utilize.GuiTaichi import gui_set
+from Utilize.GenMsh import mesh_obj_tri, write_msh2_tri
 
 
 def read_msh(file:str):     # 预留接口
     pass
 
 
-def line_from_points_2d(p1, p2):
-    """
-    Given two distinct points p1=(x1, y1) and p2=(x2, y2),
-    returns the line parameters (a, b, c) for the line:
-        a*x + b*y + c = 0
-    with sqrt(a^2 + b^2) = 1.
-    """
-    p1 = np.array(p1, dtype=float)
-    p2 = np.array(p2, dtype=float)
-    
-    if np.allclose(p1, p2):
-        raise ValueError("Cannot form a line: the two points are identical.")
-    
-    # a*x + b*y + c = 0 through points p1, p2
-    a = p1[1] - p2[1]
-    b = p2[0] - p1[0]
-    c = p1[0]*p2[1] - p2[0]*p1[1]
-    
-    # Normalize so that sqrt(a^2 + b^2) = 1
-    norm = np.sqrt(a*a + b*b)
-    a /= norm
-    b /= norm
-    c /= norm
-    
-    return a, b, c
-
-
-def compress_vectors(vectors:npt.NDArray, threshold:float)->npt.NDArray:
-    """
-    Args:
-        vectors (np.ndarray): An N x 2 array of vectors.
-        threshold (float): The threshold value for the vector norms.
-
-    Returns:
-        np.ndarray: An N x 2 array of vectors after applying the compression.
-    """
-    # Compute the Euclidean norms for each row vector (shape: N x 1).
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    
-    # Compute the scaling factor for each vector: if norm > threshold, scale to threshold, else use 1.
-    scales = np.where(norms > threshold, threshold / norms, 1.0)
-    
-    # Apply the scaling factors to compress the vectors.
-    compressed_vectors = vectors * scales
-    
-    return compressed_vectors
-
-
 @ti.data_oriented
 class SoftObject2D:
-    def __init__(self, shape, fix:List[int], contact:List[int], 
+    def __init__(self, shape, fix:List[int], contact:List[int], marker:List[int],
                  E:float, nu:float, dt:float, density:float, **kwargs):
         self.shape = shape
         # 是否传入的是 .msh 文件(已划分网格)
@@ -92,8 +44,8 @@ class SoftObject2D:
             np.savetxt("edge_np.csv", edge_np, fmt='%d', delimiter=",")
             np.savetxt("ele_np.csv", ele_np, fmt='%d', delimiter=",")
 
-            msh_file:str = "Mesh/shape.msh"
-            write_msh2_tri(msh_file, node_np, ele_np)
+            # msh_file:str = "Mesh/shape.msh"
+            # write_msh2_tri(msh_file, node_np, ele_np)
 
         self.solve_itr:int = 10
         self.E, self.nu, self.dt, self.density = E, nu, dt, density
@@ -122,7 +74,6 @@ class SoftObject2D:
         self.ele.from_numpy(ele_np.astype(np.int32))
 
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
-        # self.stretch_lim_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.positional_weight = 0.         # define later
 
         self.Xg_inv = ti.Matrix.field(2, 2, dtype=ti.f64, shape=self.ELEMENT_N)         # rest configuration
@@ -155,13 +106,10 @@ class SoftObject2D:
         self.contact_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.CON_N)
         self.contact_vel.fill(0.)
 
-        # 用于Sofa环境可能有问题
-        self.marker_idx:int = 0
-        self.marker_pos_desired = ti.Vector.field(2, dtype=ti.f64, shape=(1))
+        self.marker_idx = marker
         self.dL_dq_contact = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.dy_contact = None          # 用于控制, numpy array
         self.z = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
-        self.marker_pos_desired[0] = self.node_pos_init[self.marker_idx] + ti.Vector([0., 0.01], dt=ti.f64)
         self.dL_dq_contact.fill(0.)
         self.z.fill(0.)
 
@@ -180,7 +128,6 @@ class SoftObject2D:
             ia, ib, ic = self.ele[f_i]
             qa, qb, qc = self.node_pos_init[ia], self.node_pos_init[ib], self.node_pos_init[ic]
             ele_volume_tmp = 0.5 * ti.abs(((qb - qa).cross(qc - qa)))
-            # print(f"Element {f_i}: {ele_volume_tmp}")
 
             self.node_voronoi[ia] += ele_volume_tmp / 3.
             self.node_voronoi[ib] += ele_volume_tmp / 3.
@@ -190,7 +137,6 @@ class SoftObject2D:
 
         for q_i in range(self.PARTICLE_N):
             self.node_mass[q_i] = self.density * self.node_voronoi[q_i]
-            # self.node_mass[q_i] = 0.
             self.node_mass_sum[None] += self.node_mass[q_i]
 
 
@@ -230,9 +176,7 @@ class SoftObject2D:
             idx1, idx2, idx3 = self.ele[f_i]
             q_idx_vec = ti.Vector([idx1, idx2, idx3])
             F_A = self.F_A[f_i]
-            # print("F_A:\n", F_A)
             ATA = F_A.transpose() @ F_A
-            # print("ATA:\n", ATA)
 
             stretch_weight = self.stretch_weight[f_i]
             for A_row_idx, A_col_idx in ti.ndrange(3, 3):
@@ -299,8 +243,6 @@ class SoftObject2D:
             # print(f"F_i:{F_i:e}")
 
             U, sig, V = ti.svd(F_i, ti.f64)
-            self.ele_u[f_i] = U
-            self.ele_v[f_i] = V
             self.stretch_stress[f_i] = ti.Vector([sig[0,0], sig[1,1]], dt=ti.f64)
             # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1]], ti.f64) @ V.transpose()
@@ -410,12 +352,9 @@ class SoftObject2D:
         """
         self.dBp_stretch.fill(0.)
         dim = self.dim
-        for f_i in range(self.ELEMENT_N):
-            F_Ai = self.F_A[f_i]
-            U, sig, V = self.ele_u[f_i], self.stretch_stress[f_i], self.ele_v[f_i]
-            # print(f"F: {self.F[f_i]}")
-            # print(f"U: {U}; sig: {sig}; V: {V}")
-            # print(f"reconstructed F: {U @ V.transpose()}")
+        for i in range(self.ELEMENT_N):
+            F_Ai = self.F_A[i]
+            U, sig, V = self.ele_u[i], self.stretch_stress[i], self.ele_v[i]
 
             dBp_dF = ti.Matrix.zero(ti.f64, 4, 4)
             for m in range(2):
@@ -426,13 +365,12 @@ class SoftObject2D:
                     dBp_df = U @ Omega_uv @ V.transpose()
                     dBp_dF[dim*m + n, :] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1]])
 
-            idx1, idx2, idx3 = self.ele[f_i]
-            for m, n in ti.ndrange(2, 2):                   # 2*2表示Bp*q的维数
+            idx1, idx2, idx3 = self.ele[i]
+            for m, n in ti.ndrange(2, 2):                   # 2*2表示维数
                 dBp_dF_i = ti.Matrix.zero(ti.f64, 2, 2)     # 2表示参数空间的维数
                 for k, l in ti.ndrange(2, 2):
                     dBp_dF_i[k, l] = dBp_dF[2*m+k, 2*n+l]
-                AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ (dBp_x / dF_x) @ A
-                AT_dBp_dq_i *= self.stretch_weight[f_i]
+                AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ dBp_x / dF_x @ A
 
                 row_idx_vec = ti.Vector([idx1*dim+m, idx2*dim+m, idx3*dim+m])
                 col_idx_vec = ti.Vector([idx1*dim+n, idx2*dim+n, idx3*dim+n])
@@ -449,54 +387,22 @@ class SoftObject2D:
         self.dA = self.dBp_stretch.to_numpy()
 
 
-    def construct_L(self):
-        """marker point的期望位置
-
-        Returns: Tuple[error (ti.Vector), L (ti.f64)]
+    def compute_jacobian(self):
+        """计算全局雅可比矩阵
         """
-        idx = self.marker_idx
-        desired_pos = self.marker_pos_desired[0]
-        current_pos = self.node_pos[idx]
-        error = current_pos - desired_pos
-        loss = error.norm() ** 2
-        self.dL_dq_contact[idx*2] = 2*(current_pos.x - desired_pos.x)
-        self.dL_dq_contact[idx*2 + 1] = 2*(current_pos.y - desired_pos.y)
-        return error, loss
+        
     
 
-    def construct_L_distance(self):
-        """将两个标记点拉伸到指定间距
-        """
-        idx1, idx2 = 93, 105
-        pos1_np, pos2_np = self.node_pos[idx1].to_numpy(), self.node_pos[idx2].to_numpy()
-        d_tmp = np.linalg.norm(pos1_np - pos2_np)
-        d_desired = 0.018
 
-        a, b, c = line_from_points_2d(self.node_pos_init[idx1].to_numpy(), self.node_pos_init[idx2].to_numpy())
-        line_noraml = np.array([a, b], dtype=np.float64)
-
-        # 两个点到直线的距离
-        line_distance1 = line_noraml.dot(pos1_np) + c
-        line_distance2 = line_noraml.dot(pos2_np) + c
-
-        loss = (d_tmp - d_desired) ** 2 + line_distance1 ** 2 + line_distance2 ** 2
-        grad1 = 2*(d_tmp - d_desired) * (pos1_np - pos2_np) / d_tmp + line_distance1 * line_noraml
-        grad2 = 2*(d_tmp - d_desired) * (pos2_np - pos1_np) / d_tmp + line_distance2 * line_noraml
-
-        self.dL_dq_contact[idx1*2] = grad1[0]
-        self.dL_dq_contact[idx1*2 + 1] = grad1[1]
-        self.dL_dq_contact[idx2*2] = grad2[0]
-        self.dL_dq_contact[idx2*2 + 1] = grad2[1]
-
-        return d_tmp, loss
 
 
     def compute_z(self, itr_num:int):
         """diffpd中的z的迭代计算
         """
-        dL_dq_contact_np = self.dL_dq_contact.to_numpy()
-        z_np_old = self.z.to_numpy()
-        z_np = np.zeros_like(z_np_old)
+        dL_dq_contact_np = self.dL_dq_contact.to_numpy()        # 此处的z是关于param的导数
+        np.savetxt("dL_dq_contact_true.csv", dL_dq_contact_np, fmt='%e', delimiter=",")
+        np.savetxt("dA_true.csv", self.dA, fmt='%e', delimiter=",")
+        z_np = self.z.to_numpy()
         for itr in range(itr_num):
             rhs_dA = self.dA @ z_np + dL_dq_contact_np
             rhs_dA_x = rhs_dA[0::2]
@@ -506,7 +412,6 @@ class SoftObject2D:
             z_new_y = self.pre_fact_lhs_solve(rhs_dA_y)
             z_np = np.ravel(np.column_stack((z_new_x, z_new_y)))
         self.z.from_numpy(z_np)
-        print(f"interative error: {np.linalg.norm(z_np - z_np_old)}")
 
 
     def compute_dcontact(self):
@@ -524,94 +429,8 @@ class SoftObject2D:
         self.dy_contact = np.multiply(z_np, self.dx_const.to_numpy())
 
 
-    def preset_gui(self, pos:List[float], target:List[float], up_orient:List[float]):
-        """Taichi GUI pre-setting
-        Args:
-            pos (List[float]): Camera position
-            target (List[float]): Camera visual target
-            up_orient (List[float]): Camera orientation
-        """
-        self.window, self.camera, self.scene = gui_set(pos, target, up_orient)
-        self.canvas = self.window.get_canvas()
-        self.show_preset()
-
-    
-    def show_preset(self):
-        self.node_show = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_N)
-        self.node_color = ti.Vector.field(3, dtype=ti.f32, shape=self.PARTICLE_N)
-        self.edge_show = ti.Vector.field(2, dtype=ti.i32, shape=self.EDGE_N)
-        self.edge_show.from_numpy(self.edge.to_numpy().astype(np.int32))
-        
-        for q_i in range(self.PARTICLE_N):
-            self.node_color[q_i] = ti.Vector([0., 0., 0.])
-        for q_i in self.fix_particle_list:
-            self.node_color[q_i] = ti.Vector([1., 0., 0.])
-        for q_i in self.contact_particle_list:
-            self.node_color[q_i] = ti.Vector([0., 0., 1.])
-        for q_i in [93, 105]:
-            self.node_color[q_i] = ti.Vector([0., 1., 0.])
-
-
-    def gui_show(self, SHOW_FLAG:bool=True, WRITE_FLAG:bool=False, itr_num:int=0):
-        if SHOW_FLAG is False:
-            return
-        self.scene.point_light(pos=(0.01, 1, 3), color=(1., 1., 1.))
-        self.scene.ambient_light((.8, .8, .8))
-
-        node_show_np = np.hstack((self.node_pos.to_numpy(), np.zeros((self.PARTICLE_N, 1))), dtype=np.float32)
-        self.node_show.from_numpy(node_show_np)
-        self.scene.particles(self.node_show, radius=0.001, per_vertex_color=self.node_color)
-        self.scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
-
-        self.canvas.scene(self.scene)
-        self.canvas.set_background_color((1., 1., 1.))
-
-        if WRITE_FLAG is True:
-            self.window.save_image(f"FigureWrite/{itr_num:05d}.png")
-        self.window.show()
-
-
-    @ti.kernel
-    def init_vel(self):
-        for q_i in range(self.PARTICLE_N):
-            if self.node_pos_init[q_i].y > self.shape[0] - 1.e-3:
-                self.node_vel[q_i].y = 30.
-            else:
-                self.node_vel[q_i].y = 0.
-
-
 def main():
-    gain = 5.e2
-    class Soft(SoftObject2D):
-        def __init__(self, shape, fix:List[int], contact:List[int], 
-                     E:float, nu:float, dt:float, density:float, **kwargs):
-            super().__init__(shape, fix, contact, E, nu, dt, density, **kwargs)
-
-    params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
-    soft = Soft([0.1, 0.1], range(11), [66, 120], **params)
-    soft.preset_gui([0.05, 0.05, 0.2], [0.05, 0.05, 0.], [0., 1., 0.])
-
-    soft.precomputation()
-    lhs_np = soft.lhs.to_numpy()
-    s_lhs_np = sparse.csc_matrix(lhs_np)
-    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
-
-    # soft.init_vel()
-
-    for itr in range(100):
-        print(f"Time Step: {itr} ======================================")
-        time.sleep(0.1)
-        soft.substep(itr)
-
-        soft.compute_dcontact()
-        dy_dcontact = soft.dy_contact.reshape(-1, 2)        # reshape到与接触点个数相同
-        end_speed = -gain * dy_dcontact[soft.contact_particle_list]
-        end_speed_compress = compress_vectors(end_speed, 0.04)
-        soft.contact_vel.from_numpy(end_speed_compress)
-        print(f"End speed: {end_speed.flatten()}")
-        print(f"Deformation Energy: {soft.stretch_energy.to_numpy().sum():e}")
-
-        soft.gui_show(True, False, itr)
+    soft = SoftObject2D()
 
 
 if __name__ == "__main__":
