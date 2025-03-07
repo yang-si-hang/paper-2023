@@ -11,7 +11,6 @@ import numpy.typing as npt
 from collections import defaultdict
 from scipy import sparse
 import taichi as ti
-from warp import pos
 # import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
@@ -414,12 +413,27 @@ class SoftObject2D:
         return contact_j
     
 
-    def construct_feature(self):
-        """feature is the control variable, construct the loss
+    def construct_feature(self, marker_contact_j):
+        """feature is the control variable, construct the loss and feature jacobian 
         """
-        feature_desired = np.array([1., 1.]) * 
-        desired_dir1 = np.array([1., 0.])
-        desired_dir2 = np.array([0., 1.])
+        idx1, idx2 = self.marker_list
+        pos1, pos2 = self.node_pos[idx1].to_numpy(), self.node_pos[idx2].to_numpy()
+        feature = np.linalg.norm(pos1 - pos2)
+        self.feature_desired = np.array([1., 1.]) / np.linalg.norm(np.array([1., 1.])) * 0.016
+
+        dfeature_dmarker1, dfeature_dmarker2 = np.eye(2), -np.eye(2)
+        feature_contact_j = np.zeros((4, 4))
+        feature_contact_j[0:2, 0:2] = dfeature_dmarker1 @ marker_contact_j[0:2, 0:2]
+        feature_contact_j[0:2, 2:4] = dfeature_dmarker1 @ marker_contact_j[0:2, 2:4]
+        feature_contact_j[2:4, 0:2] = dfeature_dmarker2 @ marker_contact_j[2:4, 0:2]
+        feature_contact_j[2:4, 2:4] = dfeature_dmarker2 @ marker_contact_j[2:4, 2:4]
+
+        return feature_contact_j
+
+    
+    def compute_manipulability(self):
+        J1 = 
+
 
 
 def main():
