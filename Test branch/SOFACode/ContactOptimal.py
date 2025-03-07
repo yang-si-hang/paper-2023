@@ -1,7 +1,6 @@
 """ 根据变形雅可比矩阵, 优化最优的接触点组合
 created at 2025-03-05 by hsy
 """
-from ast import main
 import os
 import sys
 import time
@@ -106,9 +105,10 @@ class SoftObject2D:
         self.contact_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.CON_N)
         self.contact_vel.fill(0.)
 
-        self.marker_idx = marker
+        self.marker_list = marker
         self.dL_dq_contact = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.dy_contact = None          # 用于控制, numpy array
+        self.dq_dy_np = None            # dq/dy, numpy array
         self.z = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.dL_dq_contact.fill(0.)
         self.z.fill(0.)
@@ -243,6 +243,7 @@ class SoftObject2D:
             # print(f"F_i:{F_i:e}")
 
             U, sig, V = ti.svd(F_i, ti.f64)
+            self.ele_u[f_i], self.ele_v[f_i] = U, V
             self.stretch_stress[f_i] = ti.Vector([sig[0,0], sig[1,1]], dt=ti.f64)
             # print(f"U:{U:e}; sig:{sig:e}; V:{V:e}")
             self.Bp_shear[f_i] = U @ ti.Matrix([[1., 0], [0., 1]], ti.f64) @ V.transpose()
@@ -352,9 +353,9 @@ class SoftObject2D:
         """
         self.dBp_stretch.fill(0.)
         dim = self.dim
-        for i in range(self.ELEMENT_N):
-            F_Ai = self.F_A[i]
-            U, sig, V = self.ele_u[i], self.stretch_stress[i], self.ele_v[i]
+        for f_i in range(self.ELEMENT_N):
+            F_Ai = self.F_A[f_i]
+            U, sig, V = self.ele_u[f_i], self.stretch_stress[f_i], self.ele_v[f_i]
 
             dBp_dF = ti.Matrix.zero(ti.f64, 4, 4)
             for m in range(2):
@@ -365,12 +366,13 @@ class SoftObject2D:
                     dBp_df = U @ Omega_uv @ V.transpose()
                     dBp_dF[dim*m + n, :] = ti.Vector([dBp_df[0, 0], dBp_df[0, 1], dBp_df[1, 0], dBp_df[1, 1]])
 
-            idx1, idx2, idx3 = self.ele[i]
+            idx1, idx2, idx3 = self.ele[f_i]
             for m, n in ti.ndrange(2, 2):                   # 2*2表示维数
                 dBp_dF_i = ti.Matrix.zero(ti.f64, 2, 2)     # 2表示参数空间的维数
                 for k, l in ti.ndrange(2, 2):
                     dBp_dF_i[k, l] = dBp_dF[2*m+k, 2*n+l]
                 AT_dBp_dq_i = F_Ai.transpose() @ dBp_dF_i @ F_Ai    # A.T @ dBp_x / dF_x @ A
+                AT_dBp_dq_i *= self.stretch_weight[f_i]
 
                 row_idx_vec = ti.Vector([idx1*dim+m, idx2*dim+m, idx3*dim+m])
                 col_idx_vec = ti.Vector([idx1*dim+n, idx2*dim+n, idx3*dim+n])
@@ -388,49 +390,55 @@ class SoftObject2D:
 
 
     def compute_jacobian(self):
-        """计算全局雅可比矩阵
+        """计算全局雅可比矩阵, 得到dq/dy(2n*2n)
         """
-        
+        A = self.lhs.to_numpy()
+        matrix_l = np.kron(A, np.eye(2)) - self.dA
+        matrix_r = np.diag(self.dx_const.to_numpy())
+        self.dq_dy_np = np.linalg.solve(matrix_l, matrix_r)
+        np.savetxt(f"dq_dy_np.csv", self.dq_dy_np, fmt='%e', delimiter=",")
+
+
+    def compute_contact_j(self):
+        """从dq/dy中提取contact的雅可比矩阵
+        """
+        self.construct_g_hessian()
+        self.compute_jacobian()
+
+        contact = np.asarray(self.contact_particle_list, dtype=np.int32)
+        marker = np.asarray(self.marker_list, dtype=np.int32)
+        contact_dims = np.column_stack((2 * contact, 2 * contact + 1)).ravel()
+        marker_dims = np.column_stack((2 * marker, 2 * marker + 1)).ravel()
+
+        contact_j = self.dq_dy_np[np.ix_(marker_dims, contact_dims)]
+        return contact_j
     
 
-
-
-
-    def compute_z(self, itr_num:int):
-        """diffpd中的z的迭代计算
+    def construct_feature(self):
+        """feature is the control variable, construct the loss
         """
-        dL_dq_contact_np = self.dL_dq_contact.to_numpy()        # 此处的z是关于param的导数
-        np.savetxt("dL_dq_contact_true.csv", dL_dq_contact_np, fmt='%e', delimiter=",")
-        np.savetxt("dA_true.csv", self.dA, fmt='%e', delimiter=",")
-        z_np = self.z.to_numpy()
-        for itr in range(itr_num):
-            rhs_dA = self.dA @ z_np + dL_dq_contact_np
-            rhs_dA_x = rhs_dA[0::2]
-            rhs_dA_y = rhs_dA[1::2]
-
-            z_new_x = self.pre_fact_lhs_solve(rhs_dA_x)
-            z_new_y = self.pre_fact_lhs_solve(rhs_dA_y)
-            z_np = np.ravel(np.column_stack((z_new_x, z_new_y)))
-        self.z.from_numpy(z_np)
-
-
-    def compute_dcontact(self):
-        """ \partial L / \partial y with contact action, 计算关于contact的导数, 用于控制
-        """
-        # error_tmp, loss_tmp = self.construct_L()
-        d_tmp, loss_tmp = self.construct_L_distance()
-        self.construct_g_hessian()
-        self.compute_z(10)
-
-        # print(f'Error items: {error_tmp}; Loss sum: {loss_tmp}')
-        print(f"Distance: {d_tmp}; Loss: {loss_tmp}")
-
-        z_np = self.z.to_numpy()
-        self.dy_contact = np.multiply(z_np, self.dx_const.to_numpy())
+        feature_desired = np.array([1., 1.]) * 
+        desired_dir1 = np.array([1., 0.])
+        desired_dir2 = np.array([0., 1.])
 
 
 def main():
-    soft = SoftObject2D()
+    fix = range(11)
+    contact = [110, 120]
+    marker = [115]
+
+    params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
+    soft = SoftObject2D([0.1, 0.1], fix, contact, marker, **params)
+
+    soft.precomputation()
+    lhs_np = soft.lhs.to_numpy()
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+    soft.substep(1)
+    contact_j = soft.compute_contact_j()
+    print(contact_j)
+
 
 
 if __name__ == "__main__":
