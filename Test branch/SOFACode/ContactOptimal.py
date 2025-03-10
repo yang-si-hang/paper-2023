@@ -4,15 +4,19 @@ created at 2025-03-05 by hsy
 import os
 import sys
 import time
+import yaml
 from typing import List, Dict, DefaultDict, Tuple
 from cv2 import line
 import numpy as np
 import numpy.typing as npt
+import itertools
 from collections import defaultdict
 from scipy import sparse
 import taichi as ti
 # import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
+
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = os.path.join(os.environ['CONDA_PREFIX'], 'lib/python3.8/site-packages/PyQt5/Qt5/plugins')
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)  # 修改当前工作目录
@@ -21,6 +25,15 @@ os.chdir(script_dir)  # 修改当前工作目录
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from Utilize.GenMsh import mesh_obj_tri, write_msh2_tri
+from MinkowskiAdd import generate_polygon, minkowski_sum, project_polygon
+
+
+contact_angle = {11:90, 22:90, 33:90, 44:90, 55:90, 66:90, 77:90, 88:90, 99:90, 110:90,
+                 21:-90, 32:-90, 43:-90, 54:-90, 65:-90, 76:-90, 87:-90, 98:-90, 109:-90, 120:-90,
+                 111:0, 112:0, 113:0, 114:0, 115:0, 116:0, 117:0, 118:0, 119:0, 120:0}
+
+with open("Mesh/shape_contact_angle.yaml", "w") as f:
+    yaml.dump(contact_angle, f)
 
 
 def read_msh(file:str):     # 预留接口
@@ -418,41 +431,81 @@ class SoftObject2D:
         """
         idx1, idx2 = self.marker_list
         pos1, pos2 = self.node_pos[idx1].to_numpy(), self.node_pos[idx2].to_numpy()
-        feature = np.linalg.norm(pos1 - pos2)
-        self.feature_desired = np.array([1., 1.]) / np.linalg.norm(np.array([1., 1.])) * 0.016
+        distance_tmp = pos1 - pos2
 
-        dfeature_dmarker1, dfeature_dmarker2 = np.eye(2), -np.eye(2)
-        feature_contact_j = np.zeros((4, 4))
-        feature_contact_j[0:2, 0:2] = dfeature_dmarker1 @ marker_contact_j[0:2, 0:2]
-        feature_contact_j[0:2, 2:4] = dfeature_dmarker1 @ marker_contact_j[0:2, 2:4]
-        feature_contact_j[2:4, 0:2] = dfeature_dmarker2 @ marker_contact_j[2:4, 0:2]
-        feature_contact_j[2:4, 2:4] = dfeature_dmarker2 @ marker_contact_j[2:4, 2:4]
+        feature = np.linalg.norm(distance_tmp)
+        feature_desired = self.node_pos_init[idx1].to_numpy() - self.node_pos_init[idx2].to_numpy()
+        feature_desired *= 1.15                                  # 定义预拉伸比例为1.15
+        desired_direction = -2*(feature - feature_desired)       # loss对feature的一阶导数
 
-        return feature_contact_j
+        dfeature_dmarker = [np.eye(2), -np.eye(2)]               # 对marker的偏导数
+
+        # feature相对于每个contact的雅可比矩阵
+        feature_contact_j = [np.zeros((2,2)) for i in range(len(self.contact_particle_list))]
+        for c_i in range(len(self.contact_particle_list)):
+            for m_i in range(len(self.marker_list)):
+                feature_contact_j[c_i] += dfeature_dmarker[m_i] @ marker_contact_j[m_i*2:m_i*2+2, c_i*2:c_i*2+2]
+
+        return feature_contact_j, desired_direction
 
     
-    def compute_manipulability(self):
-        J1 = 
+    def compute_mani_set(self, feature_contact_j):
+        # 用list存每个contact通过jacobian变换后的manipulability set
+        contact_set = []
+        for i in range(len(self.contact_particle_list)):
+            idx = self.contact_particle_list[i]
+            start_angle = contact_angle.get(idx, None)
+            if start_angle is None:
+                raise ValueError(f"Contact angle for {idx} not found.")
+            j_tmp = feature_contact_j[i]
+            contact_set.append(generate_polygon(j_tmp, start_angle, 20))
 
+        # 暂时只考虑两个接触点的情况
+        feature_set = minkowski_sum(contact_set[0], contact_set[1])
+
+        return feature_set
+    
+
+    def compute_manipulability(self, contact_j):
+        feature_contact_j, desired_direction = self.construct_feature(contact_j)
+        addition_set = self.compute_mani_set(feature_contact_j)
+        mani_value = project_polygon(addition_set, desired_direction)
+
+        return mani_value
 
 
 def main():
-    fix = range(11)
-    contact = [110, 120]
-    marker = [115]
-
     params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
-    soft = SoftObject2D([0.1, 0.1], fix, contact, marker, **params)
+    fix = range(11)
+    marker = [103, 104]
 
-    soft.precomputation()
-    lhs_np = soft.lhs.to_numpy()
-    s_lhs_np = sparse.csc_matrix(lhs_np)
-    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    manipulability = {}
 
-    soft.substep(1)
-    contact_j = soft.compute_contact_j()
-    print(contact_j)
+    contact_all = list(contact_angle.keys())
+    contact_combs = list(itertools.combinations(contact_all, 2))
+    for contact in contact_combs:
+        print(f"Contact combination: {contact}")
+        contact = list(contact)
 
+        soft = SoftObject2D([0.1, 0.1], fix, contact, marker, **params)
+
+        soft.precomputation()
+        lhs_np = soft.lhs.to_numpy()
+        s_lhs_np = sparse.csc_matrix(lhs_np)
+        soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+
+        soft.substep(1)
+        contact_j = soft.compute_contact_j()
+        print(contact_j)
+
+        mani = soft.compute_manipulability(contact_j)
+        print(f"manipulability: {mani}")
+
+        manipulability[tuple(contact)] = mani
+
+    # 保存结果到文件
+    with open("manipulability.yaml", "w") as f:
+        yaml.dump(manipulability, f)
 
 
 if __name__ == "__main__":

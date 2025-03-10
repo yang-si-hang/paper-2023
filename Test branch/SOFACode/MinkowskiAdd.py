@@ -131,11 +131,13 @@ def project_polygon(poly, direction):
     
     Args:
         poly: A numpy array of shape (n,2) containing vertices of the convex polygon.
-        direction: A numpy array of shape (2,) representing the unit vector direction.
+        direction: A numpy array of shape (2,) representing the vector direction.
          
     Returns:
         float: The maximum dot product of the polygon's vertices with the direction.
     """
+    direction_unit = direction / np.linalg.norm(direction)
+
     # Compute the convex hull
     hull = ConvexHull(poly)
     hull_points = poly[hull.vertices]
@@ -144,7 +146,7 @@ def project_polygon(poly, direction):
     for i in range(len(hull_points)):
         p = hull_points[i]
         q = hull_points[(i + 1) % len(hull_points)]
-        result = intersect_ray_segment(direction, p, q)
+        result = intersect_ray_segment(direction_unit, p, q)
         if result is not None:
             t, inter_point = result
             intersections.append(inter_point)
