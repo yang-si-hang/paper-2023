@@ -1,13 +1,15 @@
-""" 用于为Contact Selection的2D模拟, 场景是切割前的预拉伸, 使用两个接触点
-Sofa 环境似乎不能承受大拉伸, 难以变形到期望距离
-created at 2025-03-02 by hsy
+"""使用Sofa环境,控制变形到期望角度
+created at 2025-03-10 by hsy
 """
+
+
+from ast import Raise
+from re import L
 import Sofa
 import SofaRuntime
 import Sofa.Gui
 import Sofa.SofaGL
 import os, sys
-from typing import List, Dict, DefaultDict, Tuple
 import numpy as np
 import numpy.typing as npt
 from scipy import sparse
@@ -21,31 +23,11 @@ os.chdir(script_dir)                                            # 改变当前�
 
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from SOFACode.DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
+from SOFACode.DiffPD2D import SoftObject2D, compress_vectors
 from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
 
 
-def convert_node_indice(old_node_num, domain_length=0.1, old_res=0.01, new_res=0.005):
-    # Compute the number of nodes in one row for each grid.
-    # We add 1 because the grid goes from 0 to domain_length inclusive.
-    old_n = int(domain_length / old_res) + 1  # e.g., 11
-    new_n = int(domain_length / new_res) + 1  # e.g., 21
-
-    # Find the x (column) and y (row) indices in the original grid.
-    i_old = old_node_num % old_n
-    j_old = old_node_num // old_n
-
-    # Compute the corresponding indices in the new grid.
-    # Since the new resolution is twice as fine, each old index multiplies by factor 2.
-    i_new = i_old * int(old_res / new_res)  # or simply 2 * i_old
-    j_new = j_old * int(old_res / new_res)  # or simply 2 * j_old
-
-    # Compute the new serial number (using X-first order)
-    new_node_num = i_new + j_new * new_n
-    return int(new_node_num)
-
-
-def createScene(root, contact:List[int]):
+def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
                                                  'Sofa.Component.Collision',
                                                  'Sofa.Component.Constraint.Projective',
@@ -96,6 +78,10 @@ def createScene(root, contact:List[int]):
     # obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e2', poissonRatio='0.3', method='large')
     obj.addObject('TriangleCollisionModel')
     # obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
+
+    # Need change the indices to be equal with manipualtion index ######################################################
+    # obj.addObject('LinearMovementConstraint', name='cnt1', template="Vec3", indices=[10])
+    # obj.addObject('LinearMovementConstraint', name='cnt2', template="Vec3", indices=[11])
 
     obj_move_list = []
     for q_i in contact:
@@ -165,17 +151,12 @@ class MyObject(SoftObject2D):
 
         print(f"Marker index: {self.dots_idx}")
 
-        self.line_params = self.construct_line()
+        self.construct_dot_pos()
 
     
-    def construct_line(self):
+    def construct_dot_pos(self):
         for i, idx in enumerate(self.dots_idx):
             self.dot_pos_init[i] = self.node_pos_init[idx]
-
-        pos1, pos2 = self.dot_pos_init[0].to_numpy(), self.dot_pos_init[1].to_numpy()
-        line_params = line_from_points_2d(pos1, pos2)
-
-        return line_params
     
 
     def update_dot_pos(self):
@@ -183,51 +164,76 @@ class MyObject(SoftObject2D):
             self.dot_pos[i] = self.node_pos[idx]
 
         
-    def construct_L_sofa(self, dot_sofa:npt.NDArray, factor:float):
-        """将两个标记点拉伸到指定间距
+    def construct_L_sofa(self, dot_sofa:npt.NDArray, angle_desired:float):
+        """将指定角度变形到期望角度
         """
-        if len(self.dots_idx) != 2:
-            raise ValueError("The number of marker is not 2")
+        # work here!
+        if len(self.dots_idx) != 3:
+            raise ValueError("The number of marker is not 3")
         else:
-            idx1, idx2 = self.dots_idx
-        pos1, pos2 = dot_sofa[:,:2]         # sofa中是三维坐标
-        dis_tmp = np.linalg.norm(pos1 - pos2)
-        dis_desired = np.linalg.norm(
-            self.node_pos_init[idx1].to_numpy() - self.node_pos_init[idx2].to_numpy()
-            ) * factor
+            idx1, idx2, idx3 = self.dots_idx
+        pos1, pos2, pos3 = dot_sofa[:,:2]         # sofa中是三维坐标
 
-        a, b, c = self.line_params
-        line_normal = np.array([a, b], dtype=np.float64)
+        v1, v2 = pos2 - pos1, pos3 - pos1
+        angle_tmp = v1.dot(v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
-        # 两个点到直线的距离
-        line_distance1 = line_normal.dot(pos1) + c
-        line_distance2 = line_normal.dot(pos2) + c
+        loss = (angle_tmp - angle_desired) ** 2
+        dloss = 2 * (angle_tmp - angle_desired)
 
-        loss = (dis_tmp - dis_desired) ** 2 + line_distance1 ** 2 + line_distance2 ** 2
-        grad1 = 2*(dis_tmp - dis_desired) * (pos1 - pos2) / dis_tmp + line_distance1 * line_normal
-        grad2 = 2*(dis_tmp - dis_desired) * (pos2 - pos1) / dis_tmp + line_distance2 * line_normal
+        A, B, C = v1.dot(v2), np.linalg.norm(v1), np.linalg.norm(v2)
+        dv1 = v2 / (B*C) - v1 * A / (B**3 * C)
+        dv2 = v1 / (B*C) - v2 * A / (B * C**3)
+        dv1 *= dloss
+        dv2 *= dloss
 
-        self.dL_dq_contact[idx1*2] = grad1[0]
-        self.dL_dq_contact[idx1*2 + 1] = grad1[1]
-        self.dL_dq_contact[idx2*2] = grad2[0]
-        self.dL_dq_contact[idx2*2 + 1] = grad2[1]
+        dpos2 = dv1 @ np.eye(2)
+        dpos3 = dv2 @ np.eye(2)
+        dpos1 = dv1 @ (-np.eye(2)) + dv2 @ (-np.eye(2))
 
-        return dis_tmp, loss
+        self.dL_dq_contact[idx1*2]     = dpos1[0]
+        self.dL_dq_contact[idx1*2 + 1] = dpos1[1]
+        self.dL_dq_contact[idx2*2]     = dpos2[0]
+        self.dL_dq_contact[idx2*2 + 1] = dpos2[1]
+        self.dL_dq_contact[idx3*2]     = dpos3[0]
+        self.dL_dq_contact[idx3*2 + 1] = dpos3[1]
+
+        # Vector norm constraint
+        v1_norm_init = np.linalg.norm(self.dot_pos_init[1] - self.dot_pos_init[0])
+        v2_norm_init = np.linalg.norm(self.dot_pos_init[2] - self.dot_pos_init[0])
+
+        loss_norm = (B - v1_norm_init) ** 2 + (C - v2_norm_init) ** 2
+        print(f"Distance constraint: {loss_norm}")
+
+        dv1norm = 2 * (B - v1_norm_init) * v1 / B
+        dv2norm = 2 * (C - v2_norm_init) * v2 / C
+        dv1norm *= 1.e3                 # 用于增加Distance constraint的权重, 需要根据情况调整
+        dv2norm *= 1.e3                 
+        
+        dpos2norm = dv1norm @ np.eye(2)
+        dpos3norm = dv2norm @ np.eye(2)
+        dpos1norm = dv1norm @ (-np.eye(2)) + dv2norm @ (-np.eye(2))
+
+        self.dL_dq_contact[idx1*2]     += dpos1norm[0]
+        self.dL_dq_contact[idx1*2 + 1] += dpos1norm[1]
+        self.dL_dq_contact[idx2*2]     += dpos2norm[0]
+        self.dL_dq_contact[idx2*2 + 1] += dpos2norm[1]
+        self.dL_dq_contact[idx3*2]     += dpos3norm[0]
+        self.dL_dq_contact[idx3*2 + 1] += dpos3norm[1]
+
+        return angle_tmp, loss + loss_norm
         
 
     def compute_dcontact(self, dot_sofa:npt.NDArray):
         """ \partial L / \partial y with contact action, 计算关于contact的导数, 用于控制
         """
-        dist_tmp, loss_tmp = self.construct_L_sofa(dot_sofa, 1.15)
+        angle_tmp, loss_tmp = self.construct_L_sofa(dot_sofa, 0.78)
         self.construct_g_hessian()
         self.compute_z(10)
 
-        print(f"Distance: {dist_tmp}; Loss: {loss_tmp}")
+        print(f"Angle Cosine: {angle_tmp}; Loss: {loss_tmp}")
 
         z_np = self.z.to_numpy()
         self.dy_contact = np.multiply(z_np, self.dx_const.to_numpy())
-
-        return loss_tmp
 
 
 @ti.data_oriented
@@ -282,53 +288,30 @@ class SofaObject:
             self.stretch_energy[f_i] = 0.5 * self.triange_area[f_i] * ((sig[0,0]-1.)**2 + (sig[1,1]-1.)**2)
 
 
-def main(contact_list:List[int], marker_list:List[int]):
-    # contact_sofa = [399, 420, 421, 439, 440, 419]
-    # contact_sofa = [231, 252, 273, 439, 440, 419]
-    # contact_list = [66, 120]
-    # marker_sofa = [346, 390]
-    # marker_list = [93, 105]
-
-    contact_angle = {11:90, 22:90, 33:90, 44:90, 55:90, 66:90, 77:90, 88:90, 99:90,
-                    21:-90, 32:-90, 43:-90, 54:-90, 65:-90, 76:-90, 87:-90, 98:-90, 109:-90,
-                    111:0, 112:0, 113:0, 114:0, 115:0, 116:0, 117:0, 118:0, 119:0}
-
+def main():
     shape = [0.1, 0.1]
+    contact_sofa = [231, 252, 273, 427, 428, 429]
+    contact_list = [66, 115]
+    marker_sofa = [100, 254, 386]
+    marker_list = [30, 67, 103]               # 角度的顶点是第一个
+    # marker_sofa = [100, 380, 394]           # sofa中marker的序号
+    # marker_list = [30, 100, 107]            # markder在模型中的序号
     fix = range(11)
-    gain = 5.e2
-    contact_sofa, marker_sofa = [], []
-
-    for contact in contact_list:
-        contact_sofa2 = convert_node_indice(contact)
-        if contact_angle[contact] == 90 or contact_angle[contact] == -90:
-            contact_sofa1, contact_sofa3 = contact_sofa2 - 21, contact_sofa2 + 21
-        elif contact_angle[contact] == 0:
-            contact_sofa1, contact_sofa3 = contact_sofa2 - 1, contact_sofa2 + 1
-        else:
-            print("Error of contact indice.")
-        contact_sofa += [contact_sofa1, contact_sofa2, contact_sofa3]
-
-    for marker in marker_list:
-        marker_sofa.append(convert_node_indice(marker))
-    contact_sofa = [int(x) for x in contact_sofa]
-    marker_sofa = [int(x) for x in marker_sofa]
-    # print(contact_sofa, marker_sofa)
+    gain = 2.e-1
 
     node_np, _, ele_np = mesh_obj_tri(shape, 0.01/2)
-    msh_file:str = "Mesh/shape_split.msh"
+    msh_file:str = "Mesh/shape_split.msh"                   # sofa使用更细分的网格模型
     write_msh2_tri(msh_file, node_np, ele_np)
 
     root = Sofa.Core.Node('root')
     _, move_handle = createScene(root, contact_sofa)
     Sofa.Simulation.init(root)
 
-    soft_sofa = SofaObject(node_np, ele_np)
+    soft_sofa = SofaObject(node_np, ele_np)                 # 计算deformation
 
     dt = root.dt.value
     obj = root.getChild('object')
     dofs = obj.getObject('dofs')
-
-    contact_pos_np = np.zeros((len(contact_list), 3))
 
     params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
     soft = MyObject(shape, fix, contact_list, marker_list, **params)
@@ -337,21 +320,17 @@ def main(contact_list:List[int], marker_list:List[int]):
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    for step in range(200):
+    for step in range(80):
         print(f"Time Step: {step} ======================================")
         dots_pos_sofa_new = get_marker_pos(dofs, marker_sofa)
         print(f'Detected marker position: {dots_pos_sofa_new.flatten()}')
 
         sofa_pos_tmp = dofs.findData('position').value
         soft_sofa.node_pos.from_numpy(sofa_pos_tmp[:,:2])
-        soft_sofa.construct_rhs_stretch()
         save_vtu('Mesh/shape_split.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
 
         soft.substep(step)
-        loss_tmp = soft.compute_dcontact(dots_pos_sofa_new[:,:2])
-        if loss_tmp < 1.e-7:
-            break
-
+        soft.compute_dcontact(dots_pos_sofa_new[:,:2])
         soft.update_dot_pos()
         print(f"Model marker position: {soft.dot_pos.to_numpy().flatten()}")
 
@@ -361,12 +340,11 @@ def main(contact_list:List[int], marker_list:List[int]):
         soft.contact_vel.from_numpy(end_speed_compress)
 
         print(f"End speed: {end_speed.flatten()}")
-        print(f"Model Deformation Strain: {soft.stretch_energy.to_numpy().sum():e}")
-        print(f"Sofa Defomation Strain: {soft_sofa.stretch_energy.to_numpy().sum():e}")
 
         add_move(move_handle, dt, np.repeat(end_speed_compress * dt, 3, axis=0))
         Sofa.Simulation.animate(root, dt)
 
 
+
 if __name__ == "__main__":
-    main([66, 109], [93, 105])
+    main()

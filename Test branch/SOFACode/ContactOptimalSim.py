@@ -1,12 +1,14 @@
 """ 用于为Contact Selection的2D模拟, 场景是切割前的预拉伸, 使用两个接触点
+用于检验contact selection是否最优
 Sofa 环境似乎不能承受大拉伸, 难以变形到期望距离
-created at 2025-03-02 by hsy
+created at 2025-03-11 by hsy
 """
 import Sofa
 import SofaRuntime
 import Sofa.Gui
 import Sofa.SofaGL
-import os, sys
+import os, sys, glob
+import argparse
 from typing import List, Dict, DefaultDict, Tuple
 import numpy as np
 import numpy.typing as npt
@@ -23,6 +25,86 @@ root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from SOFACode.DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
 from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
+
+
+def delete_shape_files(folder):
+    # Construct a pattern that matches files like "shape_0000.vtu", "shape_0001.vtu", etc.
+    pattern = os.path.join(folder, "shape_[0-9][0-9][0-9][0-9].vtu")
+    
+    # Find all files in the folder that match the pattern
+    files_to_delete = glob.glob(pattern)
+    
+    for file_path in files_to_delete:
+        try:
+            os.remove(file_path)
+            print(f"Deleted: {file_path}")
+        except Exception as e:
+            print(f"Failed to delete {file_path}: {e}")
+
+
+def in_semi(angle, base_angle, end_angle):
+    # Function to check if angle is in the semicircle [base_angle, end_angle]
+    # When the interval does not wrap around 2π
+    if base_angle <= end_angle:
+        return base_angle <= angle <= end_angle
+    # When the interval wraps around (e.g., base_angle=5.5, end_angle=2.64)
+    else:
+        return angle >= base_angle or angle <= end_angle
+
+
+def angle_diff(a, b):
+    # Compute the minimal angular difference to each boundary.
+    diff = (a - b) % (2*np.pi)
+    return min(diff, 2*np.pi - diff)
+
+
+def project_vector(vec:npt.NDArray, base_angle:float):
+    """
+    Project a single vector if its angle is outside the semicircle 
+    starting at base_angle and spanning π radians.
+    """
+    x, y = vec
+    norm = np.linalg.norm(vec)
+    # Handle zero-length vector: leave it unchanged.
+    if norm == 0:
+        return vec
+
+    # Compute the vector's angle in [0, 2π)
+    angle = np.arctan2(y, x) % (2*np.pi)
+
+    # Normalize base_angle to [0, 2π)
+    base_angle = base_angle % (2*np.pi)
+    # Compute the end of the semicircle
+    end_angle = (base_angle + np.pi) % (2*np.pi)
+
+    # If the vector's angle is within the semicircle, return the original vector.
+    if in_semi(angle, base_angle, end_angle):
+        return vec
+    else:
+        diff_to_base = angle_diff(angle, base_angle)
+        diff_to_end = angle_diff(angle, end_angle)
+        
+        # Select the boundary that is closest in angular distance.
+        proj_angle = base_angle if diff_to_base < diff_to_end else end_angle
+        # Return the projected vector with original norm.
+        proj_vec = np.array([np.cos(proj_angle), np.sin(proj_angle)])
+
+        return proj_vec.dot(vec) * proj_vec
+
+
+def truncate_vec(arr:npt.NDArray, base_angle:list):
+    """
+    Given an Nx2 array `arr` of 2D vectors and a base angle (rad),
+    project any vector not within the semicircle [base_angle, base_angle+π]
+    onto the closest boundary of that semicircle.
+    """
+    projected = np.empty_like(arr)
+    # Process each row individually.
+    for i in range(arr.shape[0]):
+        # Compute the angle of the vector.
+        vec_angle = base_angle[i] * np.pi / 180.
+        projected[i, :] = project_vector(arr[i,:], vec_angle)
+    return projected
 
 
 def convert_node_indice(old_node_num, domain_length=0.1, old_res=0.01, new_res=0.005):
@@ -42,10 +124,10 @@ def convert_node_indice(old_node_num, domain_length=0.1, old_res=0.01, new_res=0
 
     # Compute the new serial number (using X-first order)
     new_node_num = i_new + j_new * new_n
-    return int(new_node_num)
+    return new_node_num
 
 
-def createScene(root, contact:List[int]):
+def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
                                                  'Sofa.Component.Collision',
                                                  'Sofa.Component.Constraint.Projective',
@@ -96,6 +178,10 @@ def createScene(root, contact:List[int]):
     # obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e2', poissonRatio='0.3', method='large')
     obj.addObject('TriangleCollisionModel')
     # obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
+
+    # Need change the indices to be equal with manipualtion index ######################################################
+    # obj.addObject('LinearMovementConstraint', name='cnt1', template="Vec3", indices=[10])
+    # obj.addObject('LinearMovementConstraint', name='cnt2', template="Vec3", indices=[11])
 
     obj_move_list = []
     for q_i in contact:
@@ -195,7 +281,7 @@ class MyObject(SoftObject2D):
         dis_desired = np.linalg.norm(
             self.node_pos_init[idx1].to_numpy() - self.node_pos_init[idx2].to_numpy()
             ) * factor
-
+        
         a, b, c = self.line_params
         line_normal = np.array([a, b], dtype=np.float64)
 
@@ -218,7 +304,7 @@ class MyObject(SoftObject2D):
     def compute_dcontact(self, dot_sofa:npt.NDArray):
         """ \partial L / \partial y with contact action, 计算关于contact的导数, 用于控制
         """
-        dist_tmp, loss_tmp = self.construct_L_sofa(dot_sofa, 1.15)
+        dist_tmp, loss_tmp = self.construct_L_sofa(dot_sofa, 1.05)
         self.construct_g_hessian()
         self.compute_z(10)
 
@@ -226,7 +312,6 @@ class MyObject(SoftObject2D):
 
         z_np = self.z.to_numpy()
         self.dy_contact = np.multiply(z_np, self.dx_const.to_numpy())
-
         return loss_tmp
 
 
@@ -292,13 +377,15 @@ def main(contact_list:List[int], marker_list:List[int]):
     contact_angle = {11:90, 22:90, 33:90, 44:90, 55:90, 66:90, 77:90, 88:90, 99:90,
                     21:-90, 32:-90, 43:-90, 54:-90, 65:-90, 76:-90, 87:-90, 98:-90, 109:-90,
                     111:0, 112:0, 113:0, 114:0, 115:0, 116:0, 117:0, 118:0, 119:0}
-
+    
     shape = [0.1, 0.1]
     fix = range(11)
     gain = 5.e2
-    contact_sofa, marker_sofa = [], []
 
+    # 生成sofa中对应的网格节点序号
+    contact_sofa_list, marker_sofa_list, angle_list = [], [], []
     for contact in contact_list:
+        angle_list.append(contact_angle[contact])
         contact_sofa2 = convert_node_indice(contact)
         if contact_angle[contact] == 90 or contact_angle[contact] == -90:
             contact_sofa1, contact_sofa3 = contact_sofa2 - 21, contact_sofa2 + 21
@@ -306,20 +393,17 @@ def main(contact_list:List[int], marker_list:List[int]):
             contact_sofa1, contact_sofa3 = contact_sofa2 - 1, contact_sofa2 + 1
         else:
             print("Error of contact indice.")
-        contact_sofa += [contact_sofa1, contact_sofa2, contact_sofa3]
+        contact_sofa_list += [contact_sofa1, contact_sofa2, contact_sofa3]
 
     for marker in marker_list:
-        marker_sofa.append(convert_node_indice(marker))
-    contact_sofa = [int(x) for x in contact_sofa]
-    marker_sofa = [int(x) for x in marker_sofa]
+        marker_sofa_list.append(convert_node_indice(marker))
     # print(contact_sofa, marker_sofa)
 
     node_np, _, ele_np = mesh_obj_tri(shape, 0.01/2)
-    msh_file:str = "Mesh/shape_split.msh"
-    write_msh2_tri(msh_file, node_np, ele_np)
+    write_msh2_tri("Mesh/shape_split.msh", node_np, ele_np)
 
     root = Sofa.Core.Node('root')
-    _, move_handle = createScene(root, contact_sofa)
+    _, move_handle = createScene(root, contact_sofa_list)
     Sofa.Simulation.init(root)
 
     soft_sofa = SofaObject(node_np, ele_np)
@@ -328,8 +412,6 @@ def main(contact_list:List[int], marker_list:List[int]):
     obj = root.getChild('object')
     dofs = obj.getObject('dofs')
 
-    contact_pos_np = np.zeros((len(contact_list), 3))
-
     params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
     soft = MyObject(shape, fix, contact_list, marker_list, **params)
     soft.precomputation()
@@ -337,10 +419,19 @@ def main(contact_list:List[int], marker_list:List[int]):
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
+    # 两个接触点不能太近
+    contact_pos_init = soft.node_pos_init.to_numpy()[contact_list, :]
+    contact_distance = np.linalg.norm(contact_pos_init[0] - contact_pos_init[1])
+    if contact_distance <= 0.02 + 0.001:
+        print("Contact distance is too small, please check the contact points.")
+        return
+    
+    delete_shape_files('data')
+
     for step in range(200):
         print(f"Time Step: {step} ======================================")
-        dots_pos_sofa_new = get_marker_pos(dofs, marker_sofa)
-        print(f'Detected marker position: {dots_pos_sofa_new.flatten()}')
+        dots_pos_sofa_new = get_marker_pos(dofs, marker_sofa_list)
+        # print(f'Detected marker position: {dots_pos_sofa_new.flatten()}')
 
         sofa_pos_tmp = dofs.findData('position').value
         soft_sofa.node_pos.from_numpy(sofa_pos_tmp[:,:2])
@@ -349,24 +440,35 @@ def main(contact_list:List[int], marker_list:List[int]):
 
         soft.substep(step)
         loss_tmp = soft.compute_dcontact(dots_pos_sofa_new[:,:2])
-        if loss_tmp < 1.e-7:
+        if loss_tmp < 2.e-7:
             break
 
         soft.update_dot_pos()
-        print(f"Model marker position: {soft.dot_pos.to_numpy().flatten()}")
+        # print(f"Model marker position: {soft.dot_pos.to_numpy().flatten()}")
 
         dy_dcontact = soft.dy_contact.reshape(-1, 2)        # reshape到与接触点个数相同
         end_speed = -gain * dy_dcontact[soft.contact_particle_list]
         end_speed_compress = compress_vectors(end_speed, 0.02)
-        soft.contact_vel.from_numpy(end_speed_compress)
+        trunc_vec = truncate_vec(end_speed_compress, [angle/180*np.pi for angle in angle_list])
+        soft.contact_vel.from_numpy(trunc_vec)
 
-        print(f"End speed: {end_speed.flatten()}")
-        print(f"Model Deformation Strain: {soft.stretch_energy.to_numpy().sum():e}")
-        print(f"Sofa Defomation Strain: {soft_sofa.stretch_energy.to_numpy().sum():e}")
+        print(f"End speed: {trunc_vec.flatten()}")
+        # print(f"Model Deformation Strain: {soft.stretch_energy.to_numpy().sum():e}")
+        # print(f"Sofa Defomation Strain: {soft_sofa.stretch_energy.to_numpy().sum():e}")
 
-        add_move(move_handle, dt, np.repeat(end_speed_compress * dt, 3, axis=0))
+        add_move(move_handle, dt, np.repeat(trunc_vec * dt, 3, axis=0))
         Sofa.Simulation.animate(root, dt)
+    
+    print(f"Last loss: {loss_tmp}")
+    print(f"Final Model deform strain: {soft.stretch_energy.to_numpy().sum():e}")
+    print(f"Final deform strain: {soft_sofa.stretch_energy.to_numpy().sum():e}")
 
 
 if __name__ == "__main__":
-    main([66, 109], [93, 105])
+    parser = argparse.ArgumentParser(description="Run Contact Optimal Selection")
+    parser.add_argument("--contact", type=int, nargs='+', required=True, help="Contact points")
+    parser.add_argument("--marker", type=int, nargs='+', required=True, help="Marker points")
+    args = parser.parse_args()
+
+    main(args.contact, args.marker)
+    # main([99, 117], [103, 104])

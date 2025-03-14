@@ -4,6 +4,21 @@ created at 2025-03-07 by hsy
 import numpy as np
 from scipy.spatial import ConvexHull
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+rcParams['font.family'] = 'serif'
+rcParams['font.serif'] = 'Times New Roman'
+
+
+def min_index(poly):
+    idx = 0
+    for i in range(1, len(poly)):
+        if poly[i][0] < poly[idx][0] or (poly[i][0] == poly[idx][0] and poly[i][1] < poly[idx][1]):
+            idx = i
+    return idx
+
+
+def cross(a, b):
+    return a[0] * b[1] - a[1] * b[0]
 
 
 def intersect_ray_segment(d, p, q, eps=1e-10):
@@ -35,7 +50,7 @@ def intersect_ray_segment(d, p, q, eps=1e-10):
     return None
 
 
-def generate_polygon(J, theta_start_deg, n_points):
+def generate_polygon(J, theta_start_deg, n_points, rect_width=0.1):
     """Generate a convex polygon by transforming points on a unit semicircle.
     
     Args:
@@ -52,31 +67,69 @@ def generate_polygon(J, theta_start_deg, n_points):
     angles_deg = np.linspace(theta_start_deg, theta_start_deg + 180, n_points)
     angles_rad = np.deg2rad(angles_deg)
     
-    # Points on the unit semicircle (arc): (cos(theta), sin(theta))
     # These points lie on the arc from theta_start to theta_start+180
-    circle_points = np.column_stack((np.cos(angles_rad), np.sin(angles_rad)))
-    circle_points = np.vstack((circle_points, np.zeros(2)))
+    arc_points = np.column_stack((np.cos(angles_rad), np.sin(angles_rad)))
+    # Close the semicircle by including the center (this gives a convex polygon).
+    semicircle = np.vstack((arc_points, np.array([0, 0])))
+
+    # Generate the rectangle polygon.
+    # The chord (straight edge) of the semicircle is given by the endpoints:
+    theta0 = np.deg2rad(theta_start_deg)
+    theta1 = np.deg2rad(theta_start_deg + 180)
+    p0 = np.array([np.cos(theta0), np.sin(theta0)])
+    p1 = np.array([np.cos(theta1), np.sin(theta1)])
+
+    # Compute the chord vector and its midpoint.
+    chord_vec = p1 - p0
+    chord_mid = (p0 + p1) / 2
+    # The semicircular arc’s “middle” (the apex of the arc) lies at angle theta_start_deg + 90.
+    arc_mid = np.array([np.cos(np.deg2rad(theta_start_deg + 90)), np.sin(np.deg2rad(theta_start_deg + 90))])
     
-    # Transform the points using the Jacobian matrix.
-    # Here we use the transformation: new_point = J * point.
-    transformed_points = circle_points @ J.T  # using the transpose to match multiplication
+    # Get a unit normal to the chord.
+    n = np.array([-chord_vec[1], chord_vec[0]])
+    n = n / np.linalg.norm(n)
+    # Flip the normal if it points toward the semicircular arc.
+    if np.dot(n, arc_mid - chord_mid) > 0:
+        n = -n
+
+    # Define the rectangle so that one of its long sides is the chord (from p0 to p1)
+    # and it extends in the n direction by rect_width.
+    rectangle = np.array([
+        p0,
+        p1,
+        p1 + rect_width * n,
+        p0 + rect_width * n
+    ])
+
+    # Apply the Jacobian transformation to both polygons.
+    T_semicircle = semicircle @ J.T
+    T_rectangle = rectangle @ J.T
+
+    poly_points = np.row_stack((T_semicircle[:-1], T_rectangle[2:4]))
     
-    return transformed_points
+    return poly_points
 
 
 def minkowski_sum(poly1, poly2):
-    import numpy as np
-
-    def min_index(poly):
-        idx = 0
-        for i in range(1, len(poly)):
-            if poly[i][0] < poly[idx][0] or (poly[i][0] == poly[idx][0] and poly[i][1] < poly[idx][1]):
-                idx = i
-        return idx
-
-    def cross(a, b):
-        return a[0] * b[1] - a[1] * b[0]
-
+    # plot the manipulability set of the two polygons
+    # poly1_plot = np.vstack([poly1, poly1[0]])
+    # poly2_plot = np.vstack([poly2, poly2[0]])
+    # plt.figure(figsize=(8, 6))
+    # plt.scatter(poly1[:,0], poly1[:,1], color='blue', label='Manipulability Set 1')
+    # plt.scatter(poly2[:,0], poly2[:,1], color='green', label='Manipulability Set 2')
+    # plt.plot(poly1_plot[:, 0], poly1_plot[:, 1], 'b-', lw=2, label='Manipulability Set 1')
+    # plt.plot(poly2_plot[:, 0], poly2_plot[:, 1], 'g-', lw=2, label='Manipulability Set 2')
+    # plt.fill(poly1_plot[:, 0], poly1_plot[:, 1], 'b', alpha=0.3)
+    # plt.fill(poly2_plot[:, 0], poly2_plot[:, 1], 'g', alpha=0.3)
+    # plt.xlim(-0.2, 0.2)
+    # plt.ylim(-0.2, 0.2)
+    # plt.xlabel("X")
+    # plt.ylabel("Y")
+    # plt.legend()
+    # # plt.axis('equal')
+    # plt.grid(True)
+    # plt.show()
+    
     n1 = len(poly1)
     n2 = len(poly2)
 
@@ -108,9 +161,9 @@ def minkowski_sum(poly1, poly2):
 
     sum_points = np.array(res)
 
-    # hull = ConvexHull(sum_points)
-    # hull_points = sum_points[hull.vertices]
-    # hull_points = np.vstack([hull_points, hull_points[0]])
+    hull = ConvexHull(sum_points)
+    hull_points = sum_points[hull.vertices]
+    hull_points = np.vstack([hull_points, hull_points[0]])
 
     # plt.figure(figsize=(8, 6))
     # plt.scatter(sum_points[:,0], sum_points[:,1], color='blue', label='Sum Points')
@@ -182,15 +235,15 @@ def project_polygon(poly, direction):
 def main():
     # ----- Step 1: Define parameters and create two semi-ellipses -----
     # Parameters for the first semi-ellipse:
-    J1 = np.array([[2, 0],   # Stretch x by 2
-                   [0, 1]])  # y remains the same
-    theta1_start = 0      # Starting at 0 degrees
-    n_points1 = 20        # Number of discretization points
+    J1 = np.array([[0.15323373, 0.07527931],
+                   [0.00805035, 0.06296659]])
+    theta1_start = 90
+    n_points1 = 20                          # Number of discretization points
     
     # Parameters for the second semi-ellipse:
-    J2 = np.array([[1, 0.5],  # A shear/stretch transformation
-                   [0, 1]])
-    theta2_start = 45     # Starting at 45 degrees
+    J2 = np.array([[0.11386716, -0.02124374],
+                   [0.06940202,  0.05995755]])
+    theta2_start = 0
     n_points2 = 20
     
     # Generate the two convex polygons (each approximates a semi-ellipse).

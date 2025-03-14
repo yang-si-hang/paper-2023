@@ -3,18 +3,19 @@ created at 2025-03-05 by hsy
 """
 import os
 import sys
+import argparse
 import time
 import yaml
 from typing import List, Dict, DefaultDict, Tuple
 from cv2 import line
 import numpy as np
 import numpy.typing as npt
-import itertools
+
 from collections import defaultdict
 from scipy import sparse
 import taichi as ti
 # import meshtaichi_patcher as Patcher
-ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
+ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64, log_level=ti.ERROR)
 
 os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = os.path.join(os.environ['CONDA_PREFIX'], 'lib/python3.8/site-packages/PyQt5/Qt5/plugins')
 
@@ -130,8 +131,8 @@ class SoftObject2D:
         self.positional_weight = 1.e3 * self.node_mass_sum[None] / self.PARTICLE_N / self.dt**2
         self.construct_dx_const()
 
-        print(f"Particle numer: {self.PARTICLE_N}; Edge number: {self.EDGE_N}; Element number: {self.ELEMENT_N}")
-        print(f"Positional weight: {self.positional_weight}")
+        # print(f"Particle numer: {self.PARTICLE_N}; Edge number: {self.EDGE_N}; Element number: {self.ELEMENT_N}")
+        # print(f"Positional weight: {self.positional_weight}")
 
 
     @ti.kernel
@@ -408,7 +409,7 @@ class SoftObject2D:
         matrix_l = np.kron(A, np.eye(2)) - self.dA
         matrix_r = np.diag(self.dx_const.to_numpy())
         self.dq_dy_np = np.linalg.solve(matrix_l, matrix_r)
-        np.savetxt(f"dq_dy_np.csv", self.dq_dy_np, fmt='%e', delimiter=",")
+        # np.savetxt(f"dq_dy_np.csv", self.dq_dy_np, fmt='%e', delimiter=",")
 
 
     def compute_contact_j(self):
@@ -474,39 +475,41 @@ class SoftObject2D:
         return mani_value
 
 
-def main():
-    params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
+def main(contact:List[int], marker:List[int]):
+    params = {"E": 1.e5, "nu": 0.4, "dt": 0.01, "density": 10.e2}
     fix = range(11)
-    marker = [103, 104]
+    # marker = [103, 104]
 
-    manipulability = {}
+    # print(f"Contact combination: {contact}")
 
-    contact_all = list(contact_angle.keys())
-    contact_combs = list(itertools.combinations(contact_all, 2))
-    for contact in contact_combs:
-        print(f"Contact combination: {contact}")
-        contact = list(contact)
+    soft = SoftObject2D([0.1, 0.1], fix, contact, marker, **params)
+    contact_pos_init = soft.node_pos_init.to_numpy()[contact, :]
+    contact_distance = np.linalg.norm(contact_pos_init[0] - contact_pos_init[1])
+    if contact_distance <= 0.02 + 0.001:
+        print("Contact distance is too small, please check the contact points.")
+        return
 
-        soft = SoftObject2D([0.1, 0.1], fix, contact, marker, **params)
+    soft.precomputation()
+    lhs_np = soft.lhs.to_numpy()
+    s_lhs_np = sparse.csc_matrix(lhs_np)
+    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-        soft.precomputation()
-        lhs_np = soft.lhs.to_numpy()
-        s_lhs_np = sparse.csc_matrix(lhs_np)
-        soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    soft.substep(1)
+    contact_j = soft.compute_contact_j()
+    # print(contact_j)
 
-        soft.substep(1)
-        contact_j = soft.compute_contact_j()
-        print(contact_j)
+    mani = soft.compute_manipulability(contact_j)
+    print(f"Manipulability: {mani}")
 
-        mani = soft.compute_manipulability(contact_j)
-        print(f"manipulability: {mani}")
-
-        manipulability[tuple(contact)] = mani
-
-    # 保存结果到文件
-    with open("manipulability.yaml", "w") as f:
-        yaml.dump(manipulability, f)
+    return mani
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run Contact Optimal Selection")
+    parser.add_argument("--contact", type=int, nargs='+', required=True, help="Contact points")
+    parser.add_argument("--marker", type=int, nargs='+', required=True, help="Marker points")
+    args = parser.parse_args()
+
+    print("Contact:", args.contact)  # This will output: [11, 33]
+    print("Marker:", args.marker)    # This will output: [103, 104]
+    mani = main(args.contact, args.marker)
