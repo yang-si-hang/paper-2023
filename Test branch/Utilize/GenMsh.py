@@ -10,6 +10,7 @@ import pygmsh
 import numpy as np
 from typing import Tuple, List
 import numpy.typing as npt
+import yaml
 # import pyvista as pv
 from scipy.spatial import Delaunay
 import random
@@ -149,8 +150,6 @@ def generate_cube_msh(file_path:str, cube_shape:list, axis_seed:list):
 
     write_msh2(file_path, points, cells_np[:,1:])
 
-
-import numpy as np
 
 def read_mshv2_triangle(filename:str):
     """读取 Gmsh v2 格式的 .msh 文件，并返回:
@@ -298,6 +297,17 @@ def generate_edges_and_surfaces(elements:npt.NDArray)->Tuple[list, list]:
             faces.add(tuple(sorted(face)))
 
     return list(edges), list(faces)
+
+
+def write_yaml(file_path:str, data:dict):
+    """将数据写入yaml文件
+    Args:
+        file_path (str): yaml文件路径
+        data (dict): 要写入的数据
+    """
+    with open(file_path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False, encoding='utf-8', allow_unicode=True)
+    print(f"YAML data has been written to {file_path}")
 
 
 def write_msh2(file_path:str, points:npt.NDArray, cells:npt.NDArray):

@@ -65,6 +65,14 @@ class URROb:
         joint_end = [joint_start[i] + joint_add[i] for i in range(6)]
         self.rtde_c.moveJ(joint_end, 0.5, 0.5, False)
 
+    
+    def move_add_movel_async(self, pose_add, a=0.5, v=0.5):
+        pose_start = self.rtde_r.getActualTCPPose()
+        pose_end = copy.deepcopy(pose_start)
+        pose_end = [pose_end[i] + pose_add[i] for i in range(6)]
+        # True是非阻塞，False是阻塞
+        self.rtde_c.moveL(pose_end, a, v, True)
+
 
     def move_add_movel(self, pose_add, a=0.5, v=0.5):
         pose_start = self.rtde_r.getActualTCPPose()

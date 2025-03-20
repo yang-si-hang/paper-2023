@@ -50,64 +50,50 @@ def intersect_ray_segment(d, p, q, eps=1e-10):
     return None
 
 
-def generate_polygon(J, theta_start_deg, n_points, rect_width=0.1):
-    """Generate a convex polygon by transforming points on a unit semicircle.
-    
-    Args:
-        J (np.ndarray): Jacobian (linear transformation) matrix of shape (2,2).
-        theta_start_deg (float): Starting angle in degrees for the semicircle.
-            The semicircle is taken as the arc from theta_start_deg to theta_start_deg + 180.
-        n_points (int): Number of discretization points along the arc.
-         
-    Returns:
-        np.ndarray: Points array of shape (n_points, 2) containing the vertices
-            (in order) of the transformed semicircle (semi-ellipse).
+def generate_polygon(J, theta_start_deg, n_points, sector_angle_deg=80):
     """
-    # Generate angles uniformly in degrees from start to start+180 (inclusive)
-    angles_deg = np.linspace(theta_start_deg, theta_start_deg + 180, n_points)
-    angles_rad = np.deg2rad(angles_deg)
+    Generate a polygon representing a circular segment (a circle divided by a chord)
+    via a linear transformation.
+
+    The polygon is defined by:
+      1. A large circular arc spanning from (theta_start_deg - sector_angle_deg) 
+         to (theta_start_deg + 180 + sector_angle_deg) degrees, discretized into n_points
+         evenly spaced angles.
+      2. A chord connecting the two endpoints of the arc. This chord is not discretized
+         further—it is defined solely by the arc endpoints.
+
+    Args:
+        J (np.ndarray): 2x2 Jacobian matrix for a linear transformation.
+        theta_start_deg (float): Base starting angle (in degrees). The arc will begin at
+            theta_start_deg - sector_angle_deg.
+        n_points (int): Number of points to discretize the entire arc.
+        sector_angle_deg (float): Additional angle (in degrees) appended to each end of the
+            semicircular arc.
+
+    Returns:
+        np.ndarray: An array of shape (n_points, 2) containing the vertices of the polygon.
+            The polygon is assumed to be closed by connecting the last vertex to the first.
+    """
+    # Define the overall angular range of the arc.
+    start_angle = theta_start_deg - sector_angle_deg
+    end_angle = theta_start_deg + 180 + sector_angle_deg
     
-    # These points lie on the arc from theta_start to theta_start+180
-    arc_points = np.column_stack((np.cos(angles_rad), np.sin(angles_rad)))
-    # Close the semicircle by including the center (this gives a convex polygon).
-    semicircle = np.vstack((arc_points, np.array([0, 0])))
-
-    # Generate the rectangle polygon.
-    # The chord (straight edge) of the semicircle is given by the endpoints:
-    theta0 = np.deg2rad(theta_start_deg)
-    theta1 = np.deg2rad(theta_start_deg + 180)
-    p0 = np.array([np.cos(theta0), np.sin(theta0)])
-    p1 = np.array([np.cos(theta1), np.sin(theta1)])
-
-    # Compute the chord vector and its midpoint.
-    chord_vec = p1 - p0
-    chord_mid = (p0 + p1) / 2
-    # The semicircular arc’s “middle” (the apex of the arc) lies at angle theta_start_deg + 90.
-    arc_mid = np.array([np.cos(np.deg2rad(theta_start_deg + 90)), np.sin(np.deg2rad(theta_start_deg + 90))])
+    # Discretize the entire arc with evenly spaced angles.
+    angles = np.linspace(start_angle, end_angle, n_points)
     
-    # Get a unit normal to the chord.
-    n = np.array([-chord_vec[1], chord_vec[0]])
-    n = n / np.linalg.norm(n)
-    # Flip the normal if it points toward the semicircular arc.
-    if np.dot(n, arc_mid - chord_mid) > 0:
-        n = -n
-
-    # Define the rectangle so that one of its long sides is the chord (from p0 to p1)
-    # and it extends in the n direction by rect_width.
-    rectangle = np.array([
-        p0,
-        p1,
-        p1 + rect_width * n,
-        p0 + rect_width * n
-    ])
-
-    # Apply the Jacobian transformation to both polygons.
-    T_semicircle = semicircle @ J.T
-    T_rectangle = rectangle @ J.T
-
-    poly_points = np.row_stack((T_semicircle[:-1], T_rectangle[2:4]))
+    # Compute the corresponding points on the unit circle.
+    arc_points = np.column_stack((np.cos(np.deg2rad(angles)),
+                                   np.sin(np.deg2rad(angles))))
     
-    return poly_points
+    # The chord is defined by the two endpoints of the arc (arc_points[0] and arc_points[-1]).
+    # If a closed polygon with an explicit chord is desired, one might append arc_points[0]
+    # at the end of the vertex list. Here we assume the chord is implicit.
+    polygon = arc_points
+    
+    # Apply the Jacobian (linear transformation) to all vertices.
+    T_polygon = polygon @ J.T
+
+    return T_polygon
 
 
 def minkowski_sum(poly1, poly2):

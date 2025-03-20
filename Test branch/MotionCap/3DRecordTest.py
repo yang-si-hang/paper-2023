@@ -17,7 +17,7 @@ POINTS_NUM = 4
 points_pos = np.zeros((POINTS_NUM, 3))
 
 file_name = os.path.dirname(__file__) + '/data/qualisys_rigids_record.csv'
-qualysis_ip = '192.168.253.1'
+qualysis_ip = '192.168.253.17'
 qualysis_password = ''
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")

@@ -2,7 +2,6 @@
 实物实验,使用多接触点进行控制,使用Qualisys进行实时跟踪,基于Strain Constraint & Volume Constraint的DiffPD
 created at 2024-10-09 by hsy
 """
-
 import time
 import os
 import cv2

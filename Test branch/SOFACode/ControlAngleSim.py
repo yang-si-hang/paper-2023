@@ -23,7 +23,7 @@ os.chdir(script_dir)                                            # 改变当前�
 
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from SOFACode.DiffPD2D import SoftObject2D, compress_vectors
+from SOFACode._DiffPD2D import SoftObject2D, compress_vectors
 from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
 
 
@@ -167,7 +167,7 @@ class MyObject(SoftObject2D):
     def construct_L_sofa(self, dot_sofa:npt.NDArray, angle_desired:float):
         """将指定角度变形到期望角度
         """
-        # work here!
+        self.dL_dq_contact.fill(0.)
         if len(self.dots_idx) != 3:
             raise ValueError("The number of marker is not 3")
         else:

@@ -104,12 +104,12 @@ class SoftObject2D:
         self.EDGE_N = edge_np.shape[0]
         self.ELEMENT_N = ele_np.shape[0]
 
-        self.node_pos = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)
+        self.node_pos      = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)
         self.node_pos_init = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)
-        self.node_pos_new = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)     # local solver
-        self.node_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)
-        self.node_voronoi = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
-        self.node_mass = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
+        self.node_pos_new  = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)     # local solver
+        self.node_vel      = ti.Vector.field(2, dtype=ti.f64, shape=self.PARTICLE_N)
+        self.node_voronoi  = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
+        self.node_mass     = ti.field(dtype=ti.f64, shape=self.PARTICLE_N)
         self.node_mass_sum = ti.field(dtype=ti.f64, shape=())
         self.node_pos_init.from_numpy(node_np.astype(np.float64))
         self.node_pos.from_numpy(node_np.astype(np.float64))
@@ -134,7 +134,7 @@ class SoftObject2D:
         self.stretch_stress = ti.Vector.field(2, dtype=ti.f64, shape=self.ELEMENT_N)
         self.stretch_energy = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
 
-        self.sn = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
+        self.sn  = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.lhs = ti.field(dtype=ti.f64, shape=(self.PARTICLE_N, self.PARTICLE_N))
         self.rhs = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
         self.rhs_stretch = ti.field(dtype=ti.f64, shape=self.PARTICLE_N*2)
@@ -148,9 +148,9 @@ class SoftObject2D:
         self.contact_particle_list = contact
         self.FIX_N = len(self.fix_particle_list)
         self.CON_N = len(self.contact_particle_list)
-        self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
-        self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
+        self.fix_particle_ti     = ti.field(dtype=ti.i32, shape=self.FIX_N)
         self.contact_particle_ti = ti.field(dtype=ti.i32, shape=self.CON_N)
+        self.fix_particle_ti.from_numpy(np.array(self.fix_particle_list).astype(np.int32))
         self.contact_particle_ti.from_numpy(np.array(self.contact_particle_list).astype(np.int32))
         self.contact_vel = ti.Vector.field(2, dtype=ti.f64, shape=self.CON_N)
         self.contact_vel.fill(0.)
@@ -454,12 +454,13 @@ class SoftObject2D:
 
         Returns: Tuple[error (ti.Vector), L (ti.f64)]
         """
+        self.dL_dq_contact.fill(0.)
         idx = self.marker_idx
         desired_pos = self.marker_pos_desired[0]
         current_pos = self.node_pos[idx]
         error = current_pos - desired_pos
         loss = error.norm() ** 2
-        self.dL_dq_contact[idx*2] = 2*(current_pos.x - desired_pos.x)
+        self.dL_dq_contact[idx*2]     = 2*(current_pos.x - desired_pos.x)
         self.dL_dq_contact[idx*2 + 1] = 2*(current_pos.y - desired_pos.y)
         return error, loss
     
@@ -467,6 +468,7 @@ class SoftObject2D:
     def construct_L_distance(self):
         """将两个标记点拉伸到指定间距
         """
+        self.dL_dq_contact.fill(0.)
         idx1, idx2 = 93, 105
         pos1_np, pos2_np = self.node_pos[idx1].to_numpy(), self.node_pos[idx2].to_numpy()
         d_tmp = np.linalg.norm(pos1_np - pos2_np)
@@ -483,9 +485,9 @@ class SoftObject2D:
         grad1 = 2*(d_tmp - d_desired) * (pos1_np - pos2_np) / d_tmp + line_distance1 * line_noraml
         grad2 = 2*(d_tmp - d_desired) * (pos2_np - pos1_np) / d_tmp + line_distance2 * line_noraml
 
-        self.dL_dq_contact[idx1*2] = grad1[0]
+        self.dL_dq_contact[idx1*2]     = grad1[0]
         self.dL_dq_contact[idx1*2 + 1] = grad1[1]
-        self.dL_dq_contact[idx2*2] = grad2[0]
+        self.dL_dq_contact[idx2*2]     = grad2[0]
         self.dL_dq_contact[idx2*2 + 1] = grad2[1]
 
         return d_tmp, loss

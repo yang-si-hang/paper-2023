@@ -23,7 +23,7 @@ os.chdir(script_dir)                                            # 改变当前�
 
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from SOFACode.DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
+from SOFACode._DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
 from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
 
 
@@ -272,6 +272,7 @@ class MyObject(SoftObject2D):
     def construct_L_sofa(self, dot_sofa:npt.NDArray, factor:float):
         """将两个标记点拉伸到指定间距
         """
+        self.dL_dq_contact.fill(0.)
         if len(self.dots_idx) != 2:
             raise ValueError("The number of marker is not 2")
         else:
@@ -293,9 +294,9 @@ class MyObject(SoftObject2D):
         grad1 = 2*(dis_tmp - dis_desired) * (pos1 - pos2) / dis_tmp + line_distance1 * line_normal
         grad2 = 2*(dis_tmp - dis_desired) * (pos2 - pos1) / dis_tmp + line_distance2 * line_normal
 
-        self.dL_dq_contact[idx1*2] = grad1[0]
+        self.dL_dq_contact[idx1*2]     = grad1[0]
         self.dL_dq_contact[idx1*2 + 1] = grad1[1]
-        self.dL_dq_contact[idx2*2] = grad2[0]
+        self.dL_dq_contact[idx2*2]     = grad2[0]
         self.dL_dq_contact[idx2*2 + 1] = grad2[1]
 
         return dis_tmp, loss

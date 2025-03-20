@@ -1,5 +1,5 @@
 """
-Minimize the loss with multi contact points by DiffPD.
+Minimize the loss with multi contact points by DiffPD in PD environments.
 created at 2024-10-09 by hsy
 """
 

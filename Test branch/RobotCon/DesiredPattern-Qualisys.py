@@ -16,10 +16,12 @@ from sklearn.cluster import KMeans
 from scipy.stats import zscore
 from collections import defaultdict
 from ZedUtilize import *
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
+os.chdir(script_dir)  # 修改当前工作目录
 
 QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
-qualysis_ip = '192.168.253.1'
+qualysis_ip = '192.168.253.17'
 qualysis_password = ''
 
 POINTS_NUM:int = 4
@@ -66,14 +68,14 @@ async def receive_qualysis(connection)->list:
 
 async def genereate_transform():
     # 用来生成软体坐标系相对于世界坐标系的变换矩阵
-    origin_pos = np.array([109.2, -81.0, 94.7]) * 1.e-3
-    x_deviation = np.array([108.4, 45.8, 95.4]) * 1.e-3
-    y_deviation = np.array([248.0, -80.6, 97.4]) * 1.e-3
+    origin_pos  = np.array([199.6, -414.7, 173.2]) * 1.e-3
+    x_deviation = np.array([299.5, -416.3, 176.4]) * 1.e-3
+    y_deviation = np.array([199.8, -340.1, 173.2]) * 1.e-3
 
-    camera_id, image = init_camera(1080, 30)
-    window_name = 'CAPTURE DESIRED SHAPE'
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1080, 720)
+    # camera_id, image = init_camera(1080, 30)
+    # window_name = 'CAPTURE DESIRED SHAPE'
+    # cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow(window_name, 1080, 720)
 
     x_axis = x_deviation - origin_pos
     y_axis = y_deviation - origin_pos
@@ -86,7 +88,8 @@ async def genereate_transform():
 
     transformation_matrix = np.eye(4)
     transformation_matrix[:3, :3] = rotation_matrix
-    transformation_matrix[:3, 3] = origin_pos + 0.0048 * z_axis - 0.015 / 2 * x_axis
+    transformation_matrix[:3, 3]  = origin_pos - 0.01 / 2 * x_axis - 0.01 / 2 * y_axis # + 0.0048 * z_axis 
+    print(f"Transformation matrix:\n{transformation_matrix}")
     np.savetxt('data/transformation_matrix.csv', transformation_matrix, fmt='%.10f', delimiter=',')
     exit(0)
 
