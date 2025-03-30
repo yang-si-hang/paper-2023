@@ -400,7 +400,7 @@ class SoftObject2D:
         matrix_l = np.kron(A, np.eye(2)) - self.dA
         matrix_r = np.diag(self.dx_const.to_numpy())
         self.dq_dy_np = np.linalg.solve(matrix_l, matrix_r)
-        np.savetxt(f"dq_dy_np.csv", self.dq_dy_np, fmt='%e', delimiter=",")
+        # np.savetxt(f"dq_dy_np.csv", self.dq_dy_np, fmt='%e', delimiter=",")
 
 
     def compute_contact_j(self):
@@ -446,9 +446,13 @@ def main(contact:List[int], marker:List[int]):
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    soft.substep(1)
-    contact_j = soft.compute_contact_j()
-    print(f"Jacobian:\n{contact_j}")
+    for step in range(100):
+        start_time = time.time()
+        soft.substep(1)
+        contact_j = soft.compute_contact_j()
+        print(f"Time for step {step}: {time.time()-start_time:.4f}s")
+    
+    # print(f"Jacobian:\n{contact_j}")
 
 
 if __name__ == "__main__":
