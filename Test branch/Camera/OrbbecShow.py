@@ -28,7 +28,7 @@ def main():
     try:
         profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
         try:
-            color_profile: VideoStreamProfile = profile_list.get_video_stream_profile(1280, 0, OBFormat.RGB, 30)
+            color_profile: VideoStreamProfile = profile_list.get_video_stream_profile(2560, 0, OBFormat.RGB, 25)
         except OBError as e:
             print(e)
             color_profile = profile_list.get_default_video_stream_profile()
@@ -38,6 +38,8 @@ def main():
         print(e)
         return
     pipeline.start(config)
+    cv2.namedWindow("Color Viewer", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Color Viewer", 800, 600)
     while True:
         try:
             frames: FrameSet = pipeline.wait_for_frames(100)

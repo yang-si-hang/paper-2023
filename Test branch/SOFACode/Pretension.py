@@ -10,7 +10,7 @@ import Sofa.SofaGL
 import os, sys
 from typing import List, Dict, DefaultDict, Tuple
 import numpy as np
-import numpy.typing as npt
+import numpy.typing as npt 
 from scipy import sparse
 import casadi as ca
 import copy
@@ -244,61 +244,58 @@ class MyObject(SoftObject2D):
 
 
     def compute_contact_j(self):
-        """从dq/dy中提取contact的雅可比矩阵
+        """从dq/dy中提取全局节点关于contact的雅可比矩阵
         """
         self.construct_g_hessian()
         self.compute_jacobian()
 
         contact = np.asarray(self.contact_particle_list, dtype=np.int32)
-        marker = np.asarray(self.marker_list, dtype=np.int32)
+        marker = np.asarray(self.dots_idx, dtype=np.int32)
         contact_dims = np.column_stack((2 * contact, 2 * contact + 1)).ravel()
         marker_dims = np.column_stack((2 * marker, 2 * marker + 1)).ravel()
 
-        contact_j = self.dq_dy_np[np.ix_(marker_dims, contact_dims)]
+        contact_j = self.dq_dy_np[:, contact_dims]
         self.contact_j = contact_j.copy()
         return contact_j
     
 
-    def build_mpc(self, H:int, dots_sofa:npt.NDArray, factor:float):
+    # def build_mpc(self, H:int, dots_sofa:npt.NDArray, factor:float):
         """构建NLP问题
         """
-        U = ca.MX.sym("U", self.CON_N * H)
+        U = ca.MX.sym("U", 2 * self.CON_N * H)
         total_loss = ca.MX(0.0)  # 初始化为 ca.MX 对象
-        decrease_w = ca.MX(0.5)
-        u_max = 0.02
-        g = []
-        lbg = []
-        ubg = []
+        decrease_w = ca.MX(1.)
+        u_max = 0.02 * self.dt
         node_pos = ca.MX(self.node_pos.to_numpy())         # dim:N*2
+        contact_j_casadi = ca.MX(self.contact_j)
 
         dis_desired = ca.MX(np.linalg.norm(
             self.node_pos_init[self.dots_idx[0]] - self.node_pos_init[self.dots_idx[1]]) * factor)
 
         a, b, c = self.line_params
+        g = []
+        lbg = []
+        ubg = []
 
-        pos1 = ca.MX(dots_sofa[0, :2])
-        pos2 = ca.MX(dots_sofa[1, :2])
+        pos1 = ca.MX(dots_sofa[0, :2].reshape(1, 2))
+        pos2 = ca.MX(dots_sofa[1, :2].reshape(1, 2))
         # 不加此刻的loss, 是因为是定值, 无需交给nlp优化
-        # dist_loss0 = (np.linalg.norm(pos1 - pos2) - dis_desired)**2
-        # line1 = a * pos1[0] + b * pos1[1] + c
-        # line2 = a * pos2[0] + b * pos2[1] + c
-        # line_loss0 = line1**2 + line2**2
-        # loss0 = dist_loss0 + line_loss0
 
         for t in range(H):
-            u_t = U[t * self.CON_N: (t + 1) * self.CON_N]
+            u_t = U[2 * self.CON_N * t: 2 * self.CON_N * (t + 1)]
 
             # Action norm constraint
-            g.append(ca.norm_2(u_t[0:2]))
+            g.append(ca.sumsqr(u_t[0:2]))
             lbg.append(0)
             ubg.append(u_max)
 
-            g.append(ca.norm_2(u_t[2:4]))
+            g.append(ca.sumsqr(u_t[2:4]))
             lbg.append(0)
             ubg.append(u_max)
 
-            dnode_pos = self.contact_j @ u_t
-            node_pos += dnode_pos.reshape(-1, 2)
+            dnode_pos = contact_j_casadi @ u_t
+            dnode_pos = ca.reshape(dnode_pos, self.PARTICLE_N, 2)
+            node_pos += dnode_pos
 
             pos1 += dnode_pos[self.dots_idx[0], :]
             pos2 += dnode_pos[self.dots_idx[1], :]
@@ -312,14 +309,6 @@ class MyObject(SoftObject2D):
 
             total_loss += np.power(decrease_w, t) * (dist_loss + line_loss)
 
-            # deformation strain constraint
-            for e_i in range(self.ELEMENT_N):
-                idx1, idx2, idx3 = self.ele[e_i]
-                q1, q2, q3 = node_pos[idx1], node_pos[idx2], node_pos[idx3]
-                X_f = ca.MX(ca.Matrix.cols([q2 - q1, q3 - q1]))
-
-                
-
         # Set up NLP
         nlp = {
             'x': U,
@@ -330,14 +319,112 @@ class MyObject(SoftObject2D):
         solver = ca.nlpsol("solver", "ipopt", nlp, {
             'ipopt.print_level': 0,
             'print_time': 0,
-            'ipopt.tol': 1e-6
+            'ipopt.tol': 1e-10
         })
 
-        U_init = np.zeros(self.CON_N * H)
+        U_init = np.zeros(2 * self.CON_N * H)
         sol = solver(x0=U_init, lbg=lbg, ubg=ubg)
         U_opt = np.array(sol['x']).flatten()
+        print(f"MPC Calculation Loss: {sol['f']}")
 
-        return U_opt[:self.CON_N]
+        return U_opt[:2*self.CON_N]
+
+
+            # deformation strain constraint
+            # for e_i in range(self.ELEMENT_N):
+            #     idx1, idx2, idx3 = self.ele[e_i]
+            #     q1, q2, q3 = node_pos[idx1], node_pos[idx2], node_pos[idx3]
+            #     X_f = ca.MX(ca.Matrix.cols([q2 - q1, q3 - q1]))
+
+
+    def build_mpc(self, H: int, contact_j:npt.NDArray, dots_sofa: npt.NDArray, factor: float):
+        """构建NLP问题
+        """
+        opti = ca.Opti()  # 创建Opti实例
+
+        # 定义决策变量
+        U = opti.variable(2 * self.CON_N * H)
+
+        # 初始化损失函数
+        total_loss = ca.MX(0.0)
+        decrease_w = 1.0
+        u_max = 0.02 * self.dt
+        node_pos_np = np.asarray(self.node_pos.to_numpy(), dtype=np.float64)  # dim:N*2
+        node_pos = ca.MX(node_pos_np.flatten())  # dim:2N
+        contact_j_casadi = ca.MX(contact_j)
+        ele_Xg_inv = self.Xg_inv.to_numpy()
+
+        # 计算期望距离
+        dis_desired = np.linalg.norm(
+            self.node_pos_init[self.dots_idx[0]] - self.node_pos_init[self.dots_idx[1]]) * factor
+
+        a, b, c = self.line_params
+
+        # 初始化位置
+        pos1 = ca.MX(dots_sofa[0, :2].reshape(1, 2))
+        pos2 = ca.MX(dots_sofa[1, :2].reshape(1, 2))
+
+        F_i_det_con = ca.MX(np.zeros(self.ELEMENT_N * H))
+
+        for t in range(H):
+            u_t = U[2 * self.CON_N * t: 2 * self.CON_N * (t + 1)]
+
+            # Action norm constraint
+            opti.subject_to(ca.sumsqr(u_t[0:2]) <= u_max**2)
+            opti.subject_to(ca.sumsqr(u_t[2:4]) <= u_max**2)
+
+            # 更新节点位置
+            dnode_pos = contact_j_casadi @ u_t
+            node_pos += dnode_pos
+
+            # deformation strain constraint
+            for f_i in range(self.ELEMENT_N):
+                idx1, idx2, idx3 = self.ele[f_i]
+                q1, q2, q3 = node_pos[2*idx1:2*idx1 + 2], node_pos[2*idx2:2*idx2 + 2], node_pos[2*idx3:2*idx3 + 2]
+                X_f = ca.horzcat((q2 - q1), (q3 - q1))
+                F_i = X_f @ ele_Xg_inv[f_i]
+                F_i_det = F_i[0, 0] * F_i[1, 1] - F_i[0, 1] * F_i[1, 0]
+                F_i_det_con[f_i + t * self.ELEMENT_N] = F_i_det
+                opti.subject_to(F_i_det <= 1.4)
+
+            # 更新位置
+            pos1 += dnode_pos[2*self.dots_idx[0]: 2*self.dots_idx[0] + 2].T
+            pos2 += dnode_pos[2*self.dots_idx[1]: 2*self.dots_idx[1] + 2].T
+
+            # 计算当前距离
+            dis_now = ca.norm_2(pos1 - pos2)
+
+            # 计算距离损失
+            dist_loss = (dis_now - dis_desired)**2
+
+            # 计算线损失
+            line1 = a * pos1[0] + b * pos1[1] + c
+            line2 = a * pos2[0] + b * pos2[1] + c
+            line_loss = line1**2 + line2**2
+
+            # 更新总损失
+            total_loss += np.power(decrease_w, t) * (dist_loss + line_loss)
+
+        # 定义目标函数
+        opti.minimize(total_loss)
+
+        # 设置求解器选项
+        opti.solver('ipopt', {'ipopt.print_level': 0, 'print_time': 0, 'ipopt.tol': 1e-8})
+
+        # 初始猜测
+        opti.set_initial(U, np.zeros(2 * self.CON_N * H))
+
+        # 求解问题
+        sol = opti.solve()
+
+        # 获取优化结果
+        U_opt = sol.value(U)
+        max_strain = sol.value(F_i_det_con).max()
+        print(f"MPC Calculation Loss: {sol.value(total_loss)}")
+
+        print(f"Max strain: {max_strain}")
+
+        return U_opt[:2*self.CON_N], max_strain
 
 
 @ti.data_oriented
@@ -406,7 +493,7 @@ def main(contact_list:List[int], marker_list:List[int]):
     shape = [0.1, 0.1]
     fix = range(11)
     H:int = 3           # MPC的Horizon
-    gain = 5.e2
+    # gain = 5.e2
     contact_sofa, marker_sofa = [], []
 
     for contact in contact_list:
@@ -450,7 +537,10 @@ def main(contact_list:List[int], marker_list:List[int]):
     s_lhs_np = sparse.csc_matrix(lhs_np)
     soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
 
-    for step in range(200):
+    loss_list = []
+    max_strain_list = []
+
+    for step in range(100):
         print(f"Time Step: {step} ======================================")
         dots_pos_sofa_new = get_marker_pos(dofs, marker_sofa)
         print(f'Detected marker position: {dots_pos_sofa_new.flatten()}')
@@ -461,27 +551,36 @@ def main(contact_list:List[int], marker_list:List[int]):
         # save_vtu('Mesh/shape_split.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
 
         soft.substep(step)
-        cantact_j = soft.compute_contact_j()        # 以此作为MPC的线性模型
-        action = soft.build_mpc(H, dots_pos_sofa_new[:,:2], 1.15)
-        loss_tmp = soft.compute_dcontact(dots_pos_sofa_new[:,:2])
-        if loss_tmp < 1.e-7:
-            break
+        contact_j = soft.compute_contact_j()        # 以此作为MPC的线性模型
+        # np.savetxt(f"contact.csv", cantact_j, fmt="%.6f", delimiter=",")
+        vel_flatten, max_strain = soft.build_mpc(1, contact_j, dots_pos_sofa_new[:,:2], 1.1)
+        _, loss_tmp = soft.construct_L_sofa(dots_pos_sofa_new[:,:2], 1.1)
 
         soft.update_dot_pos()
         print(f"Model marker position: {soft.dot_pos.to_numpy().flatten()}")
 
-        dy_dcontact = soft.dy_contact.reshape(-1, 2)        # reshape到与接触点个数相同
-        end_speed = -gain * dy_dcontact[soft.contact_particle_list]
-        end_speed_compress = compress_vectors(end_speed, 0.02)
-        soft.contact_vel.from_numpy(end_speed_compress)
+        end_speed = vel_flatten.reshape(-1, 2) / soft.dt
+        soft.contact_vel.from_numpy(end_speed)
 
+        # dy_dcontact = soft.dy_contact.reshape(-1, 2)        # reshape到与接触点个数相同
+        # end_speed = -gain * dy_dcontact[soft.contact_particle_list]
+        # end_speed_compress = compress_vectors(end_speed, 0.02)
+        # soft.contact_vel.from_numpy(end_speed_compress)
+        
+        print(f"Loss: {loss_tmp}")
         print(f"End speed: {end_speed.flatten()}")
         print(f"Model Deformation Strain: {soft.stretch_energy.to_numpy().sum():e}")
         print(f"Sofa Defomation Strain: {soft_sofa.stretch_energy.to_numpy().sum():e}")
 
-        add_move(move_handle, dt, np.repeat(end_speed_compress * dt, 3, axis=0))
+        add_move(move_handle, dt, np.repeat(end_speed * dt, 3, axis=0))
         Sofa.Simulation.animate(root, dt)
 
+        loss_list.append(loss_tmp)
+        max_strain_list.append(max_strain)
+
+    np.savetxt("loss_list.csv", loss_list, fmt="%e", delimiter=",")
+    np.savetxt("max_strain_list.csv", max_strain_list, fmt="%e", delimiter=",")
 
 if __name__ == "__main__":
-    main([66, 109], [93, 105])
+    # main([55, 98], [93, 105])
+    main([77, 118], [93, 105])
