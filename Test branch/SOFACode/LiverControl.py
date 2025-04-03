@@ -1,6 +1,7 @@
 """
 使用liver.msh作为几何网格文件,控制其中某个节点的运动,以到达期望位置,并记录该节点的位置
 created at 2024-09-15 by hsy
+edited at 20250-03-13 by hsy
 """
 import Sofa
 import SofaRuntime
