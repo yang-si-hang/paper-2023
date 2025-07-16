@@ -192,16 +192,5 @@ def svd_3x2_new(A):
     return U, sigma, V
 
 
-@ti.kernel
-def test():
-    a = ti.Matrix([[1.0, 2.0], [2.0, 1.0]])
-    b = ti.Matrix.identity(ti.f32, 2)
-
-    c = kronecker_product(a, b)
-    print(c)
-
-
 if __name__ == '__main__':
     ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
-
-    test()

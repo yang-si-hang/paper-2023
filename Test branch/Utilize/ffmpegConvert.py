@@ -10,7 +10,8 @@ sys.path.append(root_path)
 print(os.getcwd())
 
 # Path to your image sequence. This example assumes images are named in a sequential format like img001.png, img002.png, etc.
-file_path = "RobotCon/captured_frames/frame_%04d.png"        # Adjust the pattern as needed
+# file_path = "RobotCon/captured_frames/frame_%04d.png"        # Adjust the pattern as needed
+file_path = "PD/Figure/%05d.png"  # Adjust the pattern as needed
 image_pattern = os.path.join(root_path, file_path)
 print(image_pattern)
 
@@ -26,7 +27,8 @@ command = [
     "-i", image_pattern,        # Input file pattern
     # "-vf", "split=2[bg][fg];[bg]drawbox=color=white@1:t=fill:replace=1[bg];[bg][fg]overlay",    "-c:v", "libx264",          # Use the H.264 codec
     "-profile:v", "high",       # Set the profile
-    "-crf", "18",               # Set quality (lower values mean higher quality)
+    "-crf", "15", #"18",               # Set quality (lower values mean higher quality)
+    "-c:v", "libx264",          # Use the H.264 codec
     "-pix_fmt", "yuv420p",      # Set pixel format for better compatibility
     output_video
 ]
