@@ -14,6 +14,7 @@ import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
 from scipy import sparse
+from scipy.sparse import linalg as spla
 import taichi as ti
 import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
@@ -570,7 +571,8 @@ def main():
     soft.precomputation()
     lhs_np = soft.lhs.to_numpy()
     s_lhs_np = sparse.csc_matrix(lhs_np)
-    soft.pre_fact_lhs_solve = sparse.linalg.factorized(s_lhs_np)
+    soft.pre_fact_lhs_solve = spla.factorized(s_lhs_np)
+    np.savetxt("Data/_lhs.csv", lhs_np, fmt='%f', delimiter=",")
 
     # soft.init_vel()
     # contact_vel_np = np.array([[0., -0.01, 0.00]] * len(soft.contact_particle_list))
