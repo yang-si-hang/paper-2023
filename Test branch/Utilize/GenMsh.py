@@ -448,7 +448,7 @@ def write_obj(file_path:str, points:npt.NDArray, cells:npt.NDArray):
     """
     with open(file_path, 'w') as f:
         for point in points:
-            f.write(f'v {point[0]:.10f} {point[1]:.10f} {point[2]:.10f}\n')
+            f.write(f'v {point[0]:.10e} {point[1]:.10e} {point[2]:.10e}\n')
         for cell in cells:
             # 从1开始索引
             f.write(f'f {cell[0]+1:d} {cell[1]+1:d} {cell[2]+1:d}\n')

@@ -119,7 +119,7 @@ class SoftBend2D:
         self.ele_volume = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.ele.from_numpy(ele_np.astype(np.int32))
 
-        self.bend_weight = 1.e0 #1. - 0.01
+        self.bend_weight = 0.e0 #1. - 0.01
         self.stretch_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.stretch_lim_weight = ti.field(dtype=ti.f64, shape=self.ELEMENT_N)
         self.positional_weight = 0.         # define later
@@ -585,11 +585,11 @@ class SoftBend2D:
 
         dq_dy_np = np.linalg.solve(nabla_g, Mh2)
 
-        # np.savetxt("Data/lhs.csv", lhs_np, delimiter=",", fmt="%.8e")
+        np.savetxt("Data/lhs.csv", lhs_np, delimiter=",", fmt="%.8e")
         # np.savetxt("Data/lhs_stretch.csv", self.lhs_stretch.to_numpy(), delimiter=",", fmt="%.8e")
         # np.savetxt("Data/dA.csv", self.dA, delimiter=",", fmt="%.8e")
         # np.savetxt("Data/dq_const.csv", dx_const_np, delimiter=",", fmt="%.8e")
-        # np.savetxt("Data/dq_dy.csv", dq_dy_np, delimiter=",", fmt="%.5f")
+        np.savetxt("Data/dq_dy.csv", dq_dy_np, delimiter=",", fmt="%.5f")
 
     def compute_tangent_stiffness(self):
         """ Compute the tangent stiffness matrix K = \partial^2 E / \partial q^2.
@@ -838,7 +838,7 @@ def main():
     # soft.contact_vel.from_numpy(contact_vel_np)
 
     # print(f"vfs: {soft.mesh.edges.v_g.to_numpy()}")
-    # np.savetxt("lhs.csv", lhs_np, fmt='%f', delimiter=",")
+    # np.savetxt("Data/lhs.csv", lhs_np, fmt='%.8e', delimiter=",")
     # np.savetxt("lhs_bend.csv", soft.lhs_bend_ti.to_numpy(), fmt='%f', delimiter=",")
 
     e_border = soft.mesh.edges.border.to_numpy()
@@ -864,6 +864,8 @@ def main():
 
     soft.substep(1)
     soft.compute_tangent_stiffness()
+
+    exit()
 
     for itr in range(100):
         print(f"Time Step: {itr} ======================================")
