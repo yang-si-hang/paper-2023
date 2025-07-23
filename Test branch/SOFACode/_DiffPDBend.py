@@ -1,5 +1,5 @@
-""" 实现2d曲面的diffpd
-created by hsy on 2025-07-20
+""" 实现2d曲面的diffpd, 用于Sofa仿真环境
+created by hsy on 2025-07-22
 """
 import os
 import sys
@@ -20,18 +20,26 @@ os.chdir(script_dir)  # 修改当前工作目录
 
 root_path = os.path.abspath(os.path.join(script_dir, '..')) # 添加根目录到 sys.path（跨目录导入模块）
 sys.path.append(root_path)
-from Utilize.GenMsh import mesh_obj_tri, write_obj
+from Utilize.GenMsh import mesh_obj_tri, write_obj, read_mshv2_triangle
 from Utilize.GuiTaichi import gui_set
 from Utilize.MathTaichi import svd_3x2_new, cotangent_ti
 from Utilize.MathNp import compress_vectors
 
 def read_msh(file_path):
-    # 考虑从外部导入
-    pass
+    nodes, faces = read_mshv2_triangle(file_path)
+    edges = np.vstack((faces[:, [0, 1]],
+                       faces[:, [1, 2]],
+                       faces[:, [2, 0]]))
+
+    # 对每条边的顶点索引进行排序，以确保唯一性
+    edges.sort(axis=1)
+    unique_edges = np.unique(edges, axis=0) # 使用 np.unique 找到唯一的边
+
+    return nodes, unique_edges, faces
 
 @ti.data_oriented
 class SoftBend2D:
-    def __init__(self, shape, E:float, nu:float, dt:float, density:float, g=-9.8):
+    def __init__(self, shape, fix, contact, E:float, nu:float, dt:float, density:float, g=-9.8):
         self.shape = shape
         # 是否传入的是 .msh 文件(已划分网格)
         if isinstance(self.shape, str):
@@ -133,8 +141,10 @@ class SoftBend2D:
 
         self.pre_fact_lhs_solve = None
 
-        self.fix_particle_list = list(range(6)) # + [30]
-        self.contact_particle_list = [30] + [35]
+        # self.fix_particle_list = list(range(6)) # + [30]
+        # self.contact_particle_list = [30] + [35]
+        self.fix_particle_list = fix
+        self.contact_particle_list = contact
         self.FIX_N = len(self.fix_particle_list)
         self.CON_N = len(self.contact_particle_list)
         self.fix_particle_ti = ti.field(dtype=ti.i32, shape=self.FIX_N)
@@ -610,14 +620,6 @@ class SoftBend2D:
 
             loss += self.error[i].norm_sqr()
 
-        # idx = self.marker_list[0]
-        # desired_pos = self.marker_pos_desired[0]
-        # current_pos = self.mesh.verts.pos[idx]
-        # error = current_pos - desired_pos
-        # loss = error.norm_sqr()
-        # self.dL_dq_y[idx*3]     = 2 * error.x
-        # self.dL_dq_y[idx*3 + 1] = 2 * error.y
-        # self.dL_dq_y[idx*3 + 2] = 2 * error.z
         return loss
 
     def compute_z_act(self, itr_num:int):

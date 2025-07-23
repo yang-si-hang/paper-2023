@@ -21,7 +21,7 @@ os.chdir(script_dir)  # 修改当前工作目录
 # 添加根目录到 sys.path（跨目录导入模块）
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from Utilize.GenMsh import mesh_obj_tri, write_obj, write_msh2_tri
+from Utilize.GenMsh import mesh_obj_tri, write_obj, write_mshv2_tri
 from Utilize.GuiTaichi import gui_set
 
 
@@ -93,7 +93,7 @@ class SoftObject2D:
             np.savetxt("ele_np.csv", ele_np, fmt='%d', delimiter=",")
 
             msh_file:str = "Mesh/shape.msh"
-            write_msh2_tri(msh_file, node_np, ele_np)
+            write_mshv2_tri(msh_file, node_np, ele_np)
 
         self.solve_itr:int = 10
         self.E, self.nu, self.dt, self.density = E, nu, dt, density

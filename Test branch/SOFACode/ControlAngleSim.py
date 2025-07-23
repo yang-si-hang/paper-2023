@@ -4,7 +4,7 @@ created at 2025-03-10 by hsy
 
 
 from ast import Raise
-from re import L
+# from re import L
 import Sofa
 import SofaRuntime
 import Sofa.Gui
@@ -24,7 +24,7 @@ os.chdir(script_dir)                                            # 改变当前�
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from SOFACode._DiffPD2D import SoftObject2D, compress_vectors
-from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
+from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_mshv2_tri
 
 
 def createScene(root, contact:list):
@@ -131,7 +131,7 @@ def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
     Args:
         mesh_file (str): The initial mesh file name
         pos (npt.NDArray): The node position
-        write_name (istrnt): The write file name
+        write_name (str): The write file name
     """
     _, triangles = read_mshv2_triangle(mesh_file)
 
@@ -301,7 +301,7 @@ def main():
 
     node_np, _, ele_np = mesh_obj_tri(shape, 0.01/2)
     msh_file:str = "Mesh/shape_split.msh"                   # sofa使用更细分的网格模型
-    write_msh2_tri(msh_file, node_np, ele_np)
+    write_mshv2_tri(msh_file, node_np, ele_np)
 
     root = Sofa.Core.Node('root')
     _, move_handle = createScene(root, contact_sofa)

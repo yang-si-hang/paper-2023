@@ -6,7 +6,7 @@ from shapely.geometry import LineString, Polygon
 script_dir = os.path.dirname(os.path.abspath(__file__))
 root_path = os.path.abspath(os.path.join(script_dir, '..', ".."))
 sys.path.append(root_path)
-from Utilize.GenMsh import write_msh2_tri
+from Utilize.GenMsh import write_mshv2_tri
 os.chdir(script_dir)  # 修改当前工作目录
 
 def read_yaml(file_path:str):
@@ -89,4 +89,4 @@ if __name__ == "__main__":
         yaml.dump(data, f)
     print("Mesh updated successfully.")
 
-    write_msh2_tri("shape_cut4.msh", np.array(data["node"]), np.array(data["ele"]))
+    write_mshv2_tri("shape_cut4.msh", np.array(data["node"]), np.array(data["ele"]))

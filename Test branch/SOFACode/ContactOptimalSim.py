@@ -24,7 +24,7 @@ os.chdir(script_dir)                                            # 改变当前�
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
 from SOFACode._DiffPD2D import SoftObject2D, line_from_points_2d, compress_vectors
-from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_msh2_tri
+from Utilize.GenMsh import read_mshv2_triangle, mesh_obj_tri, write_mshv2_tri
 
 
 def delete_shape_files(folder):
@@ -401,7 +401,7 @@ def main(contact_list:List[int], marker_list:List[int]):
     # print(contact_sofa, marker_sofa)
 
     node_np, _, ele_np = mesh_obj_tri(shape, 0.01/2)
-    write_msh2_tri("Mesh/shape_split.msh", node_np, ele_np)
+    write_mshv2_tri("Mesh/shape_split.msh", node_np, ele_np)
 
     root = Sofa.Core.Node('root')
     _, move_handle = createScene(root, contact_sofa_list)

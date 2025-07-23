@@ -152,9 +152,11 @@ def generate_cube_msh(file_path:str, cube_shape:list, axis_seed:list):
 
 
 def read_mshv2_triangle(filename:str):
-    """读取 Gmsh v2 格式的 .msh 文件，并返回:
-    - nodes: 大小为 (N, 3) 的 NumPy 数组，存储节点坐标
-    - triangles: 大小为 (T, 3) 的 NumPy 数组，存储三角形单元的节点索引(0-based)
+    """ read Gmsh file with version 2.2 and return
+
+    Returns:
+        nodes (npt.Ndarray): (N, 3)，存储节点坐标
+        triangles (npt.Ndarray): (T, 3)，存储三角形单元的节点索引(0-based)
     """
     with open(filename, 'r') as f:
         lines = f.readlines()
@@ -338,8 +340,9 @@ def write_msh2(file_path:str, points:npt.NDArray, cells:npt.NDArray):
     print(f"Mesh data has been written to {file_path}")
 
 
-def write_msh2_tri(filename:str, nodes:npt.NDArray, triangles:npt.NDArray):
-    """写入版本为2的三角形网格的.msh文件
+def write_mshv2_tri(filename:str, nodes:npt.NDArray, triangles:npt.NDArray):
+    """ 写入版本为2的三角形网格的.msh文件
+    
     Args:
         nodes (npt.NDArray): 节点列表，每个元素为 (x, y) 或 (x, y, z)
         triangles (npt.NDArray): 三角形面片列表，每个元素为 (i, j, k), 假定索引从0开始
@@ -375,41 +378,7 @@ def write_msh2_tri(filename:str, nodes:npt.NDArray, triangles:npt.NDArray):
             n1, n2, n3 = tri
             f.write("{} 2 0 {} {} {}\n".format(i, n1+1, n2+1, n3+1))
         f.write("$EndElements\n")
-
-
-def write_new_msh(file_path, nodes, edges, faces, elements):
-    """
-    将节点、线和面信息写入新的 .msh 文件
-    """
-    with open(file_path, 'w') as f:
-        # 写入节点
-        f.write("$NOD\n")
-        f.write(f"{len(nodes)}\n")
-        for node_id, x, y, z in nodes:
-            f.write(f'{node_id} {x:.5f} {y:.5f} {z:.5f}\n')
-        f.write("$ENDNOD\n")
-
-        # 写入线
-        f.write("$ELM\n")
-        # f.write(f"{len(edges) + len(elements)}\n")
-        f.write(f"{len(edges) + len(faces) + len(elements)}\n")
-
-        for element_id, (n1, n2) in enumerate(edges, 1):
-            f.write(f'{element_id} 1 1 1 2 {n1} {n2}\n')  # 1 表示线元素 2 似乎表示线的节点数
-            
-        # 写入面
-        start_face_id = len(edges) + 1
-        for element_id, (n1, n2, n3) in enumerate(faces, start_face_id):
-            f.write(f'{element_id} 2 1 1 3 {n1} {n2} {n3}\n')  # 2 表示面元素 3 似乎表示面的节点数
-
-        start_tet_id = len(edges) + len(faces)
-        for element_id, (n1, n2, n3, n4) in elements:
-            f.write(f'{element_id+start_tet_id} 4 1 1 4 {n1} {n2} {n3} {n4}\n') # 4 表示四面体元素 4 似乎表示四面体的节点数
-
-        f.write("$ENDELM\n")
-
-    print(f"New mesh with lines and surfaces written to {file_path}")
-
+        
 
 def write_msh4(file_path:str, points, cells):
     """将节点、单元信息写入格式4.1版本的 .msh 文件

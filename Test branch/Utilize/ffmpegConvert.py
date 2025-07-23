@@ -16,8 +16,8 @@ image_pattern = os.path.join(root_path, file_path)
 print(image_pattern)
 
 # Define output video file and frame rate
-output_video = "output.mp4"
-fps = "20"
+output_video = "surface-control-multipoint.mp4"
+fps = "100"
 
 # Build the ffmpeg command
 command = [
@@ -27,7 +27,7 @@ command = [
     "-i", image_pattern,        # Input file pattern
     # "-vf", "split=2[bg][fg];[bg]drawbox=color=white@1:t=fill:replace=1[bg];[bg][fg]overlay",    "-c:v", "libx264",          # Use the H.264 codec
     "-profile:v", "high",       # Set the profile
-    "-crf", "15", #"18",               # Set quality (lower values mean higher quality)
+    "-crf", "10", #"18",               # Set quality (lower values mean higher quality)
     "-c:v", "libx264",          # Use the H.264 codec
     "-pix_fmt", "yuv420p",      # Set pixel format for better compatibility
     output_video
