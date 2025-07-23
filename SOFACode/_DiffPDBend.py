@@ -11,7 +11,7 @@ from scipy import sparse
 from scipy.sparse import linalg as spla
 import taichi as ti
 import meshtaichi_patcher as Patcher
-ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
+
 
 from Utilize.GenMsh import mesh_obj_tri, write_obj, read_mshv2_triangle
 from Utilize.GuiTaichi import gui_set
@@ -771,4 +771,5 @@ def main():
 
 
 if __name__ == "__main__":
+    ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
     main()

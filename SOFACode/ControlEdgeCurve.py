@@ -21,6 +21,7 @@ from Utilize.GenMsh import mesh_obj_tri, write_mshv2_tri
 from Utilize.MathNp import compress_vectors
 from Utilize.sofa_utilize import add_move, save_vtu, get_marker_pos, save_pos
 dir_path = Path(__file__).parent
+print(f"Current directory: {dir_path}")
 
 def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
@@ -58,7 +59,7 @@ def createScene(root, contact:list):
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
 
     # obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
-    obj.addObject('MeshGmshLoader', name='loader', filename='Mesh/shape_split.msh', scale='1', flipNormals='0')
+    obj.addObject('MeshGmshLoader', name='loader', filename=f'{dir_path}/Mesh/plane_dense.msh', scale='1', flipNormals='0')
     obj.addObject('MechanicalObject', src='@loader', name='dofs', template='Vec3', translation2=[0., 0., 0.], scale3d=[1.]*3)
     obj.addObject('TriangleSetTopologyContainer', src='@loader', name='container')
     obj.addObject('TriangleSetTopologyModifier', name='modifier')
@@ -152,18 +153,19 @@ def main():
 
     root = Sofa.Core.Node('root')
     _, move_handle = createScene(root, contact_sofa)
-    Sofa.Simulation.initRoot(root)
+    Sofa.Simulation.init(root)
 
     for step in range(100):
         Sofa.Simulation.animate(root, root.dt.value)
 
-    save_vtu(f'{dir_path}/Mesh/plane_dense.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
-
-    exit()
-
     dt = root.dt.value
     obj = root.getChild('object')
     dofs = obj.getObject('dofs')
+
+    sofa_pos_tmp = dofs.findData('position').value
+    save_vtu(f'{dir_path}/Mesh/plane_dense.msh', sofa_pos_tmp, f'{dir_path}/Data/shape_stable.vtu')
+
+    exit()
 
     params = {"E": 1.e4, "nu": 0.4, "dt": 0.01, "density": 10.e2}
     soft = SoftBend(shape, fix, contact, dots_list, **params)

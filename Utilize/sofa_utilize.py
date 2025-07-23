@@ -10,7 +10,7 @@ import meshio
 # script_dir = os.path.dirname(os.path.abspath(__file__))
 # root_path = os.path.abspath(os.path.join(script_dir, '..'))
 # sys.path.append(root_path)
-from GenMsh import read_mshv2_triangle
+from .GenMsh import read_mshv2_triangle
 
 def add_move(handle, dt, movement):
     """ Use `LinearMovementConstraint` to add a simulation step-wise movement
@@ -51,7 +51,7 @@ def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
 
     cells_write = [("triangle", triangles)]
     mesh = meshio.Mesh(points=pos, cells=cells_write)
-    mesh.write(f"Data/{write_name}")
+    mesh.write(f"{write_name}")
 
 def save_pos(handle, path):
     node_pos = handle.findData('position').value
