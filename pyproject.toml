@@ -3,4 +3,5 @@ name = "deformable-control"
 version = "0.1.0"
 
 [tool.setuptools]
+packages = ["Utilize", "SOFACode", "PD", "RobotCon"]
 py-modules = []

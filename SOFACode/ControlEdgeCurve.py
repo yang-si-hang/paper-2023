@@ -7,7 +7,7 @@ import SofaRuntime
 SofaRuntime.importPlugin("Sofa.Component")
 import Sofa.Simulation
 import Sofa.Gui
-import os, sys
+from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 from scipy import sparse
@@ -17,16 +17,10 @@ import taichi as ti
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
 from _DiffPDBend import SoftBend2D
-
-# 设置工作目录为当前脚本所在目录
-script_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(script_dir)  # 修改当前工作目录
-
-root_path = os.path.abspath(os.path.join(script_dir, '..')) # 添加根目录到 sys.path（跨目录导入模块）
-sys.path.append(root_path)
 from Utilize.GenMsh import mesh_obj_tri, write_mshv2_tri
 from Utilize.MathNp import compress_vectors
 from Utilize.sofa_utilize import add_move, save_vtu, get_marker_pos, save_pos
+dir_path = Path(__file__).parent
 
 def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
@@ -153,7 +147,7 @@ def main():
     dots_sofa = [32, 54, 76, 98]
 
     node_np, _, ele_np = mesh_obj_tri(shape, 0.01)
-    msh_file:str = "Mesh/plane_dense.msh"                   # sofa使用更细分的网格模型
+    msh_file:str = f"{dir_path}/Mesh/plane_dense.msh"                   # sofa使用更细分的网格模型
     write_mshv2_tri(msh_file, node_np, ele_np)
 
     root = Sofa.Core.Node('root')
@@ -163,7 +157,7 @@ def main():
     for step in range(100):
         Sofa.Simulation.animate(root, root.dt.value)
 
-    save_vtu('Mesh/plane_dense.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
+    save_vtu(f'{dir_path}/Mesh/plane_dense.msh', sofa_pos_tmp, f'shape_{step:04d}.vtu')
 
     exit()
 

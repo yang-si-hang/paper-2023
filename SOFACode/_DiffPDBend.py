@@ -1,8 +1,7 @@
 """ 实现2d曲面的diffpd, 用于Sofa仿真环境
 created by hsy on 2025-07-22
 """
-import os
-import sys
+from pathlib import Path
 import time
 from typing import List, Dict, DefaultDict, Tuple
 import numpy as np
@@ -14,16 +13,11 @@ import taichi as ti
 import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
-# 设置工作目录为当前脚本所在目录
-script_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(script_dir)  # 修改当前工作目录
-
-root_path = os.path.abspath(os.path.join(script_dir, '..')) # 添加根目录到 sys.path（跨目录导入模块）
-sys.path.append(root_path)
 from Utilize.GenMsh import mesh_obj_tri, write_obj, read_mshv2_triangle
 from Utilize.GuiTaichi import gui_set
 from Utilize.MathTaichi import svd_3x2_new, cotangent_ti
 from Utilize.MathNp import compress_vectors
+dir_path = Path(__file__).parent    # 设置工作目录为当前脚本所在目录
 
 def read_msh(file_path):
     nodes, faces = read_mshv2_triangle(file_path)
@@ -47,11 +41,11 @@ class SoftBend2D:
         else:
             node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.02)
             node_np = np.hstack((node_np, np.zeros((node_np.shape[0], 1))))         # di: N*3
-            np.savetxt("Data/node_np.csv", node_np, fmt='%f', delimiter=",")
-            np.savetxt("Data/edge_np.csv", edge_np, fmt='%d', delimiter=",")
-            np.savetxt("Data/ele_np.csv", ele_np, fmt='%d', delimiter=",")
+            np.savetxt(f"{dir_path}/Data/node_np.csv", node_np, fmt='%f', delimiter=",")
+            np.savetxt(f"{dir_path}/Data/edge_np.csv", edge_np, fmt='%d', delimiter=",")
+            np.savetxt(f"{dir_path}/Data/ele_np.csv", ele_np, fmt='%d', delimiter=",")
 
-        obj_file:str = "Mesh/shape.obj"
+        obj_file:str = f"{dir_path}/Mesh/shape.obj"
         write_obj(obj_file, node_np, ele_np)
         
         self.damp_alpha2 = 3.e-3  # Laplacian Damping for Projective Dynamics
@@ -686,7 +680,7 @@ class SoftBend2D:
         self.scene.ambient_light((.8, .8, .8))
 
         self.node_show.from_numpy(self.mesh.verts.pos.to_numpy().astype(np.float32))
-        self.scene.particles(self.node_desired, radius=0.002, color=(0., 0.4, 0.))
+        # self.scene.particles(self.node_desired, radius=0.002, color=(0., 0.4, 0.))
         self.scene.particles(self.node_show, radius=0.001, per_vertex_color=self.node_color)
         self.scene.lines(self.node_show, width=1., indices=self.edge_show, color=(0., 0., 0.), vertex_count=0)
 
@@ -723,10 +717,10 @@ def main():
     gain = 8.e1
 
     class Soft(SoftBend2D):
-        def __init__(self, shape:list, E:float, nu:float, dt:float, density:float, g=-9.8):
-            super().__init__(shape, E, nu, dt, density, g)
-    
-    soft = Soft([0.1, 0.1], 1.e4, 0.4, 0.01, 10e2)
+        def __init__(self, shape:list, fix, contact, E:float, nu:float, dt:float, density:float, g=-9.8):
+            super().__init__(shape, fix, contact, E, nu, dt, density, g)
+
+    soft = Soft([0.1, 0.1], range(6), [30, 35], 1.e4, 0.4, 0.01, 10e2)
     soft.preset_gui([-0.2, 0.05, 0.15], [0.05, 0.1, 0.], [0., 0., 1.])
 
     soft.precomputation()
