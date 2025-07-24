@@ -1,4 +1,5 @@
 """ Construct 2d surface simulation in 3d
+sofa simulation algorithm is MSM
 created by hsy on 2025-07-22
 """
 import time
@@ -21,7 +22,6 @@ from Utilize.GenMsh import mesh_obj_tri, write_mshv2_tri
 from Utilize.MathNp import compress_vectors
 from Utilize.sofa_utilize import add_move, save_vtu, get_marker_pos, save_pos
 dir_path = Path(__file__).parent
-print(f"Current directory: {dir_path}")
 
 def createScene(root, contact:list):
     root.addObject('RequiredPlugin', pluginName=['Sofa.Component',
@@ -34,8 +34,9 @@ def createScene(root, contact:list):
     root.dt = 0.01
     root.bbox = [[-0.1, -0.1, 0.], [0.2, 0.2, 0.1]]
     root.gravity = [0., 0., -9.8]
-    root.addObject('VisualStyle', displayFlags='showBehaviorModels showVisual showForceFields showInteractionForceFields showWireframe')
 
+    root.addObject('VisualStyle', displayFlags='showBehaviorModels showVisual showForceFields showInteractionForceFields showWireframe')
+    root.addObject('DefaultVisualManagerLoop')
     root.addObject('DefaultAnimationLoop', )
     root.addObject('CollisionPipeline', depth="6", verbose="0", draw="0")
     root.addObject('BruteForceBroadPhase', )
@@ -43,20 +44,10 @@ def createScene(root, contact:list):
     root.addObject('NewProximityIntersection', name="Proximity", alarmDistance="0.5", contactDistance="0.2")
     root.addObject('CollisionResponse', name="Response", response="PenalityContactForceField")
 
-    # FEM的设置
-    # root.addObject('FreeMotionAnimationLoop')
-    # root.addObject('GenericConstraintSolver', tolerance=1e-9, maxIterations=200)
-
-    # root.addObject('CollisionPipeline', name='Pipeline', verbose='0')
-    # root.addObject('BruteForceBroadPhase', name='BroadPhase')
-    # root.addObject('BVHNarrowPhase', name='NarrowPhase')
-    # root.addObject('CollisionResponse', name='Response', response='PenalityContactResponse')
-    # root.addObject('MinProximityIntersection', name='Proximity', alarmDistance=0.8, contactDistance=0.5)
-
     obj = root.addChild('object')
     # Rayleigh阻尼影响了软体振动
     obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
-    obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
+    obj.addObject('CGLinearSolver', name='linearsolver', iterations='100', tolerance='1.e-9', threshold='1.e-9')
 
     # obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
     obj.addObject('MeshGmshLoader', name='loader', filename=f'{dir_path}/Mesh/plane_dense.msh', scale='1', flipNormals='0')
@@ -70,7 +61,7 @@ def createScene(root, contact:list):
     obj.addObject('BoxROI', name='box', box=f"-0.1 {-X_EPS} -0.1 0.11 {X_EPS} 0.1")
     obj_fixed = obj.addObject('FixedConstraint', name='fixed', indices='@box.indices')
 
-    obj.addObject('MeshSpringForceField', name="springs", trianglesStiffness=90, trianglesDamping=0.3)
+    obj.addObject('MeshSpringForceField', name="springs", trianglesStiffness=60, trianglesDamping=0.1)
     # obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='5.e2', poissonRatio='0.3', method='large')
     obj.addObject('TriangleCollisionModel')
     # obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
@@ -81,7 +72,7 @@ def createScene(root, contact:list):
 
     obj_move_list = []
     for q_i in contact:
-        obj_move_list.append(obj.addObject('LinearMovementConstraint', name='cnt'+str(q_i), template="Vec3", indices=[q_i]))
+        obj_move_list.append(obj.addObject('LinearMovementConstraint', name='cnt'+str(q_i), template="Vec3", indices=[q_i], relativeMovements="1"))
 
     # 输出Sofa设置信息
     # Sofa.msg_info("Scene", f"Contact indices: {obj_linear_move.indices.value}")
@@ -155,12 +146,22 @@ def main():
     _, move_handle = createScene(root, contact_sofa)
     Sofa.Simulation.init(root)
 
-    for step in range(100):
-        Sofa.Simulation.animate(root, root.dt.value)
+    # Sofa.Gui.GUIManager.Init("myscene", "qglviewer")
+    # Sofa.Gui.GUIManager.createGUI(root, __file__)
+    # Sofa.Gui.GUIManager.SetDimension(1080, 800)
+
+    # Sofa.Gui.GUIManager.MainLoop(root)
+    # Sofa.Gui.GUIManager.closeGUI()
+    # print("End of simulation.")
+    # exit()
 
     dt = root.dt.value
     obj = root.getChild('object')
     dofs = obj.getObject('dofs')
+
+    for step in range(200):
+        add_move(move_handle, dt, np.zeros((len(move_handle), 3)))
+        Sofa.Simulation.animate(root, dt)   # 一定要放在循环最后
 
     sofa_pos_tmp = dofs.findData('position').value
     save_vtu(f'{dir_path}/Mesh/plane_dense.msh', sofa_pos_tmp, f'{dir_path}/Data/shape_stable.vtu')

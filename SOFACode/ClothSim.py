@@ -35,9 +35,10 @@ def createScene(root):
 
     root.dt = 0.01
     root.bbox = [[-0.1, -0.1, 0.], [0.2, 0.2, 0.1]]
-    root.gravity = [0., 0., 0.]
+    root.gravity = [0., 0., -9.8]
 
     root.addObject('VisualStyle', displayFlags="showBehaviorModels showForceFields")
+    root.addObject('DefaultVisualManagerLoop')
     root.addObject('DefaultAnimationLoop')
     root.addObject('GenericConstraintSolver', tolerance=1e-6, maxIterations=100)
 
@@ -49,7 +50,7 @@ def createScene(root):
 
     obj = root.addChild('object')
     obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
-    obj.addObject('CGLinearSolver', name='linearsolver', iterations='200', tolerance='1.e-9', threshold='1.e-9')
+    obj.addObject('CGLinearSolver', name='linearsolver', iterations='100', tolerance='1.e-6', threshold='1.e-6')
 
     obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
     obj.addObject('MechanicalObject', src='@loader', name='dofs', template='Vec3', translation2=[0., 0., 0.], scale3d=[1.]*3)
@@ -58,6 +59,7 @@ def createScene(root):
     obj.addObject('TriangleSetGeometryAlgorithms', name='geomalgo', template='Vec3')
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')
     obj.addObject('FixedConstraint', indices="0 1 2 3 4 5 6 7 8 9 10")
+    # obj.addObject('TriangularFEMForceFieldOptim', name="FEM", youngModulus="600", poissonRatio="0.3", method="large", template="Vec3")
     obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='1000', poissonRatio='0.4', method='large')
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")

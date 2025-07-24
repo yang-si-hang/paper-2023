@@ -1,0 +1,1 @@
+export SOFA_ROOT=/home/ubuntu/miniconda3/envs/sofa
