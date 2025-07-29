@@ -11,6 +11,7 @@ import numpy as np
 from typing import Tuple, List
 import numpy.typing as npt
 import yaml
+import meshio
 # import pyvista as pv
 from scipy.spatial import Delaunay
 import random
@@ -424,7 +425,19 @@ def write_obj(file_path:str, points:npt.NDArray, cells:npt.NDArray):
 
     print(f"Mesh data has been written to {file_path}")
 
+def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
+    """Save the node position to a .vtu file
 
+    Args:
+        mesh_file (str): The initial mesh file name
+        pos (npt.NDArray): The node position
+        write_name (str): The write file name
+    """
+    _, triangles = read_mshv2_triangle(mesh_file)
+
+    cells_write = [("triangle", triangles)]
+    mesh = meshio.Mesh(points=pos, cells=cells_write)
+    mesh.write(f"{write_name}")
 
 if __name__ == '__main__':
     os.chdir(os.path.dirname(os.path.abspath(__file__)))

@@ -171,7 +171,7 @@ def find_triangle(points, nodes, triangles):
         nodes: (M, 2) NumPy 数组，包含所有节点坐标。
         triangles: (T, 3) NumPy 数组，包含三角形顶点索引。
 
-    返回:
+    Returns:
         (N,) NumPy 数组，包含每个点所在的三角形索引，如果点不在任何三角形内部，则返回 -1。
         (N, 3) NumPy 数组，包含每个点的重心坐标，如果点不在任何三角形内部，则返回 NaN。
     """

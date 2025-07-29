@@ -96,11 +96,9 @@ def feature_barycentric_coordinates_tet(p: npt.NDArray[float], mesh_nodes: npt.N
     """
     Compute the barycentric coordinates of a point p with respect to the tetrahedron p0, p1, p2, p3.
 
-    Parameters:
-    p : ndarray of shape (3,)
-        The point for which the barycentric coordinates are to be calculated.
-    mesh_nodes : ndarray of shape (4, 3)
-        The vertices of the tetrahedron.
+    Args:
+        p (3,): The point for which the barycentric coordinates are to be calculated.
+        mesh_nodes (4, 3): The vertices of the tetrahedron.
 
     Returns:
     ndarray of shape (4,)
@@ -135,9 +133,10 @@ def feature_barycentric_coordinates_tet(p: npt.NDArray[float], mesh_nodes: npt.N
 def find_element(tri:Delaunay, dot_pos):
     """
     Find the element which contains the dot
-    :param tri:
-    :param dot_pos:
-    :return: element node index
+    Args:
+        tri:
+        dot_pos:
+    Return: element node index
     """
     # 查找包含点的三角形
     simplex = tri.find_simplex(dot_pos)

@@ -1,5 +1,5 @@
 """
-
+使用Sofa进行布料模拟的脚本, based on `TriangularFEMForceFieldOptim`
 created at 2025-01-03 by hsy
 """
 
@@ -40,7 +40,7 @@ def createScene(root):
     root.addObject('VisualStyle', displayFlags="showBehaviorModels showForceFields")
     root.addObject('DefaultVisualManagerLoop')
     root.addObject('DefaultAnimationLoop')
-    root.addObject('GenericConstraintSolver', tolerance=1e-6, maxIterations=100)
+    root.addObject('GenericConstraintSolver', tolerance=1e-9, maxIterations=100)
 
     root.addObject('BruteForceBroadPhase')
     root.addObject('BVHNarrowPhase')
@@ -49,7 +49,7 @@ def createScene(root):
     root.addObject('MinProximityIntersection', name='Proximity', alarmDistance=0.8, contactDistance=0.5)
 
     obj = root.addChild('object')
-    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1')
+    obj.addObject('EulerImplicitSolver', name='odesolver', rayleighStiffness='0.1', rayleighMass='0.1', vdamping=0)
     obj.addObject('CGLinearSolver', name='linearsolver', iterations='100', tolerance='1.e-6', threshold='1.e-6')
 
     obj.addObject('MeshVTKLoader', name='loader', filename='trian.vtk', scale='1', flipNormals='0')
@@ -58,9 +58,12 @@ def createScene(root):
     obj.addObject('TriangleSetTopologyModifier', name='modifier')
     obj.addObject('TriangleSetGeometryAlgorithms', name='geomalgo', template='Vec3')
     obj.addObject('DiagonalMass', name='mass', totalMass='0.01')
-    obj.addObject('FixedConstraint', indices="0 1 2 3 4 5 6 7 8 9 10")
+    obj.addObject('FixedConstraint', indices="0 1 2 3 4 5 6 7 8 9 10 110 120")
     # obj.addObject('TriangularFEMForceFieldOptim', name="FEM", youngModulus="600", poissonRatio="0.3", method="large", template="Vec3")
-    obj.addObject('TriangularFEMForceField', name='FEM', youngModulus='1000', poissonRatio='0.4', method='large')
+    obj.addObject('TriangularFEMForceFieldOptim', name='FEM', 
+                  youngModulus='5.e2', poissonRatio='0.4', method='small')
+    obj.addObject('TriangularBendingSprings', name="BS", stiffness=3, damping=0.1)
+    obj.addObject('DiagonalVelocityDampingForceField', rayleighStiffness=0.5, dampingCoefficient=0.8)
     obj.addObject('TriangleCollisionModel')
     obj.addObject('UncoupledConstraintCorrection', defaultCompliance="0.001")
 
@@ -74,7 +77,7 @@ def createScene(root):
 
 
 def add_move(handle, dt, movement):
-    """Use `LinearMovemetConstraint` to add a simulation step-wise movement
+    """Use `LinearMovementConstraint` to add a simulation step-wise movement
 
     :param handle: The node of the object
     :param dt:

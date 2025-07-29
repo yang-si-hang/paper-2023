@@ -1,15 +1,12 @@
 """ Sofa中的一些通用函数
 created by hsy on 2025-07-22
 """
-import os, sys
 import numpy as np
 import numpy.typing as npt
 import copy
 import meshio
+import Sofa
 
-# script_dir = os.path.dirname(os.path.abspath(__file__))
-# root_path = os.path.abspath(os.path.join(script_dir, '..'))
-# sys.path.append(root_path)
 from .GenMsh import read_mshv2_triangle
 
 def add_move(handle_list:list, dt:float, movement:npt.NDArray):
@@ -31,6 +28,21 @@ def add_move(handle_list:list, dt:float, movement:npt.NDArray):
 
         handle.findData('keyTimes').value = np.append(times_array, last_time + dt)
         handle.findData('movements').value = np.append(movements_array, [movement[i,:] + last_movement], axis=0)
+
+def move_desire(root, handle_list:list, time:float, desire:npt.NDArray):
+    """ Use `LinearMovementConstraint` to add a simulation step-wise desired movement
+
+    Args:
+        root: The root node of the Sofa scene
+        handle_list: The list of nodes to be moved
+        time: total time
+        desire: The desired movement
+    """
+    dt = root.dt.value
+    for step in range(int(time/dt)):
+        mov_step = desire * dt / time   # 线性插值
+        add_move(handle_list, dt, mov_step)
+        Sofa.Simulation.animate(root, dt)   # 一定要放在循环最后
 
 def get_marker_pos(handle, marker_idx:list)->npt.NDArray:
     """从sofa中获取指定节点的位置
@@ -55,6 +67,9 @@ def save_vtu(mesh_file:str, pos:npt.NDArray, write_name:str):
     cells_write = [("triangle", triangles)]
     mesh = meshio.Mesh(points=pos, cells=cells_write)
     mesh.write(f"{write_name}")
+
+def save_msh(mesh_file:str, pos:npt.NDArray, write_name:str):
+    pass
 
 def save_pos(handle, path):
     node_pos = handle.findData('position').value
