@@ -26,15 +26,15 @@ QTM_FILE = pkg_resources.resource_filename("qtm_rt", "data/Demo.qtm")
 qualysis_ip:str = '192.168.253.17'
 qualysis_password:str = ''
 
-selected_index = [79, 80, 82, 81]  # 选择的标记点索引
+selected_index = [145, 149, 148, 140]  # 选择的标记点索引
 POINTS_NUM = len(selected_index)
 
 # ----- 获取期望形状 -----
-async def genereate_transform():
+def genereate_transform():
     # 用来生成软体坐标系相对于世界坐标系的变换矩阵
-    origin_pos  = np.array([76.2, 171.9, 175.4]) * 1.e-3
-    x_deviation = np.array([75.4, 39.3, 175.8]) * 1.e-3
-    y_deviation = np.array([189.7, 172.4, 178.9]) * 1.e-3
+    origin_pos  = np.array([73.8, 223.6, 174.1]) * 1.e-3
+    x_deviation = np.array([73.5, 91.9, 174.6]) * 1.e-3
+    y_deviation = np.array([195.8, 223.4, 177.9]) * 1.e-3
 
     x_axis = x_deviation - origin_pos
     y_axis = y_deviation - origin_pos
@@ -51,7 +51,7 @@ async def genereate_transform():
     print(f"Transformation matrix:\n{transformation_matrix}")
     np.savetxt(f'{dir_path}/Data/transformation_matrix.csv', transformation_matrix, fmt='%.10f', delimiter=',')
 
-# asyncio.run(genereate_transform())
+# genereate_transform()
 # exit()
 
 # 实验之前需要标定软体坐标系，确定Qualisys到软体坐标系的变换矩阵
@@ -179,7 +179,7 @@ async def main():
     for step in range(int(mov_time / soft.dt)):
         soft.substep(step)
 
-    save_vtu(f"{dir_path}/Mesh/plane.msh", soft.mesh.verts.pos.to_numpy(), f"{dir_path}/Mesh/plane_init.vtu")
+    # save_vtu(f"{dir_path}/Mesh/plane.msh", soft.mesh.verts.pos.to_numpy(), f"{dir_path}/Mesh/plane_init.vtu")
     # exit()
 
     # ----- 设置机器人参数 -----
@@ -231,7 +231,7 @@ async def main():
         await connection.stream_frames_stop()
         print("Stop streaming...")
 
-        np.savetxt('loss_list.csv', np.array(loss_list), fmt='%e', delimiter=',')
+        np.savetxt(f'{dir_path}/Data/loss_list.csv', np.array(loss_list), fmt='%e', delimiter=',')
 
 
 if __name__ == '__main__':
