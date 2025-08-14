@@ -338,7 +338,7 @@ class MyObject(SoftObject2D):
 
 
     def build_mpc(self, H: int, contact_j:npt.NDArray, dots_sofa: npt.NDArray, factor: float):
-        """构建NLP问题
+        """ 构建NLP问题
         """
         opti = ca.Opti()  # 创建Opti实例
 

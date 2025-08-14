@@ -6,12 +6,12 @@ import sys
 import time
 from typing import List, Dict, DefaultDict, Tuple
 from cv2 import line
+from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
 from scipy import sparse
 import taichi as ti
-from warp import pos
 # import meshtaichi_patcher as Patcher
 ti.init(arch=ti.cpu, debug=True, default_fp=ti.f64)
 
@@ -21,12 +21,35 @@ os.chdir(script_dir)  # 修改当前工作目录
 # 添加根目录到 sys.path（跨目录导入模块）
 root_path = os.path.abspath(os.path.join(script_dir, '..'))
 sys.path.append(root_path)
-from Utilize.GenMsh import mesh_obj_tri, write_obj, write_mshv2_tri
+from Utilize.GenMsh import mesh_obj_tri, write_obj, write_mshv2_tri, read_mshv2_triangle
 from Utilize.GuiTaichi import gui_set
 
 
-def read_msh(file:str):     # 预留接口
-    pass
+def read_msh(file:str):
+    nodes, faces = read_mshv2_triangle(file)
+
+    edges = []
+    for face in faces:
+        edge1 = sorted([face[0], face[1]])
+        edge2 = sorted([face[1], face[2]])
+        edge3 = sorted([face[2], face[0]])
+        
+        edges.append(edge1)
+        edges.append(edge2)
+        edges.append(edge3)
+    
+    # Remove duplicate edges by converting to tuples, using a set, then back to list
+    unique_edges = []
+    edge_set = set()
+    for edge in edges:
+        edge_tuple = tuple(edge)
+        if edge_tuple not in edge_set:
+            edge_set.add(edge_tuple)
+            unique_edges.append(edge)
+    
+    edges = np.array(unique_edges, dtype=int)
+
+    return nodes, edges, faces
 
 
 def line_from_points_2d(p1, p2):
@@ -83,7 +106,7 @@ class SoftObject2D:
                  E:float, nu:float, dt:float, density:float, **kwargs):
         self.shape = shape
         # 是否传入的是 .msh 文件(已划分网格)
-        if isinstance(self.shape, str):
+        if isinstance(self.shape, Path):
             node_np, edge_np, ele_np = read_msh(self.shape)
         else:
             node_np, edge_np, ele_np = mesh_obj_tri(self.shape, 0.01)

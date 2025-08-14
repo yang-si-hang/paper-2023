@@ -156,7 +156,7 @@ def read_mshv2_triangle(filename:str):
     """ read Gmsh file with version 2.2 and return
 
     Returns:
-        nodes (npt.Ndarray): (N, 3)，存储节点坐标
+        nodes (npt.Ndarray): (N, 3)，存储节点坐标 \\
         triangles (npt.Ndarray): (T, 3)，存储三角形单元的节点索引(0-based)
     """
     with open(filename, 'r') as f:

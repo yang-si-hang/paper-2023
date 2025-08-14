@@ -80,3 +80,29 @@ def point_in_triangle(points:npt.NDArray, triangle_nodes:npt.NDArray):
     barycentric_coords = np.stack((u, v, w), axis=-1)
 
     return is_inside, barycentric_coords
+
+def line_from_points_2d(p1, p2):
+    """
+    Given two distinct points p1=(x1, y1) and p2=(x2, y2),
+    returns the line parameters (a, b, c) for the line:
+        a*x + b*y + c = 0
+    with sqrt(a^2 + b^2) = 1.
+    """
+    p1 = np.array(p1, dtype=float)
+    p2 = np.array(p2, dtype=float)
+    
+    if np.allclose(p1, p2):
+        raise ValueError("Cannot form a line: the two points are identical.")
+    
+    # a*x + b*y + c = 0 through points p1, p2
+    a = p1[1] - p2[1]
+    b = p2[0] - p1[0]
+    c = p1[0]*p2[1] - p2[0]*p1[1]
+    
+    # Normalize so that sqrt(a^2 + b^2) = 1
+    norm = np.sqrt(a*a + b*b)
+    a /= norm
+    b /= norm
+    c /= norm
+    
+    return a, b, c
